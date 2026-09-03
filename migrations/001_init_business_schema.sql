@@ -133,6 +133,18 @@ ON requirement_source(submitted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_created
 ON outbox_event(status, created_at ASC);
 
+CREATE TABLE IF NOT EXISTS requirement_embedding (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    requirement_id BIGINT NOT NULL UNIQUE REFERENCES requirement_master(id) ON DELETE CASCADE,
+    embedding vector(1536) NOT NULL,
+    source_text TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_requirement_embedding_similarity
+ON requirement_embedding USING hnsw (embedding vector_cosine_ops);
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN

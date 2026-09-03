@@ -6,16 +6,19 @@ from mcp.server.fastmcp import FastMCP
 
 from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
+from src.infrastructure.db.repositories import RequirementMasterRepository
 
 mcp = FastMCP("requirement-agent")
 retrieval_service = RetrievalService()
 review_service = ReviewService()
+master_repo = RequirementMasterRepository()
 
 
 @mcp.tool()
 def search_requirements(query: str, limit: int = 10) -> dict[str, object]:
-    """Semantic or exact search for requirements."""
-    return {"query": query, "limit": limit, "results": retrieval_service.search(query, limit=limit)}
+    """Semantic or exact search for requirements backed by the actual requirement_master table."""
+    rows = master_repo.search(query, limit=limit)
+    return {"query": query, "limit": limit, "results": rows}
 
 
 @mcp.tool()

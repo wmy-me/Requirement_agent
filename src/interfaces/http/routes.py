@@ -4,6 +4,8 @@ from src.application.requirement_service import RequirementService
 from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
 from src.domain.requirement import RequirementSource
+from src.infrastructure.db.session import check_database_connection
+from src.infrastructure.llm.openai_provider import LLMProvider
 from src.interfaces.http.schemas import RequirementSubmitRequest, RequirementSubmitResponse
 
 router = APIRouter(tags=["requirements"])
@@ -21,6 +23,18 @@ async def root() -> dict[str, str]:
 @router.get("/health")
 async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/api/v1/health/db")
+async def database_health() -> dict[str, object]:
+    ok, message = check_database_connection()
+    return {"database": ok, "status": "ok" if ok else "unavailable", "message": message}
+
+
+@router.get("/api/v1/health/llm")
+async def llm_health() -> dict[str, object]:
+    provider = LLMProvider()
+    return {"configured": provider.is_configured(), "provider": provider.provider_name, "model": provider.model}
 
 
 @router.get("/api/v1/requirements")
