@@ -1,0 +1,3120 @@
+app:
+  description: 用于企业需求的采集、标准化、相似需求检索、风险分析、人工审核、版本管理和审计。
+  icon: kissing_heart
+  icon_background: '#ECE9FE'
+  icon_type: emoji
+  mode: advanced-chat
+  name: WMY的需求管理Agent
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/deepseek:0.0.20@850efe73fb62bbe7ab2229116086596596297a77174fb86f73e1363b99a24116
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openai:1.0.4@3b49ff900a77c9b2cfba21e3cd1180fbfd7edf5ec008bc20564541c7a3914295
+    version: null
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload: {}
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: list-operator
+      id: 1788316764314-source-1788317983026-target
+      selected: false
+      source: '1788316764314'
+      sourceHandle: source
+      target: '1788317983026'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: list-operator
+      id: 1788316764314-source-1788317986995-target
+      selected: false
+      source: '1788316764314'
+      sourceHandle: source
+      target: '1788317986995'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: tool
+      id: 1788316764314-source-1788318566070-target
+      selected: false
+      source: '1788316764314'
+      sourceHandle: source
+      target: '1788318566070'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: list-operator
+        targetType: llm
+      id: 1788317983026-source-1788318005590-target
+      selected: false
+      source: '1788317983026'
+      sourceHandle: source
+      target: '1788318005590'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: list-operator
+        targetType: document-extractor
+      id: 1788317986995-source-1788317996538-target
+      selected: false
+      source: '1788317986995'
+      sourceHandle: source
+      target: '1788317996538'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: document-extractor
+        targetType: template-transform
+      id: 1788317996538-source-1788318894350-target
+      selected: false
+      source: '1788317996538'
+      sourceHandle: source
+      target: '1788318894350'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: template-transform
+      id: 1788318005590-source-1788318894350-target
+      selected: false
+      source: '1788318005590'
+      sourceHandle: source
+      target: '1788318894350'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: if-else
+      id: 1788318566070-source-1788318766358-target
+      selected: false
+      source: '1788318566070'
+      sourceHandle: source
+      target: '1788318766358'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: answer
+      id: 1788318766358-false-1788320251818-target
+      selected: false
+      source: '1788318766358'
+      sourceHandle: 'false'
+      target: '1788320251818'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: 1788318766358-true-1788318796771-target
+      selected: false
+      source: '1788318766358'
+      sourceHandle: 'true'
+      target: '1788318796771'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788318796771-source-1788318825511-target
+      selected: false
+      source: '1788318796771'
+      sourceHandle: source
+      target: '1788318825511'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788318825511-source-1788318876231-target
+      selected: false
+      source: '1788318825511'
+      sourceHandle: source
+      target: '1788318876231'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: template-transform
+      id: 1788318876231-source-1788318894350-target
+      selected: false
+      source: '1788318876231'
+      sourceHandle: source
+      target: '1788318894350'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: llm
+      id: 1788318894350-source-1788319001279-target
+      selected: false
+      source: '1788318894350'
+      sourceHandle: source
+      target: '1788319001279'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: human-input
+      id: 1788319001279-source-1788319037594-target
+      selected: false
+      source: '1788319001279'
+      sourceHandle: source
+      target: '1788319037594'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: human-input
+        targetType: tool
+      id: 1788319037594-approved-1788323001001-target
+      selected: false
+      source: '1788319037594'
+      sourceHandle: approved
+      target: '1788323001001'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: human-input
+        targetType: tool
+      id: 1788319037594-rejected-1788319640384-target
+      selected: false
+      source: '1788319037594'
+      sourceHandle: rejected
+      target: '1788319640384'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: if-else
+      id: 1788319083766-false-1788322002001-target
+      source: '1788319083766'
+      sourceHandle: 'false'
+      target: '1788322002001'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: 1788319083766-true-1788324001001-target
+      selected: false
+      source: '1788319083766'
+      sourceHandle: 'true'
+      target: '1788319447452'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788319447452-source-1788319477268-target
+      source: '1788319447452'
+      sourceHandle: source
+      target: '1788319477268'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788319477268-source-1788323001002-target
+      source: '1788319477268'
+      sourceHandle: source
+      target: '1788323001002'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788319579995-source-1788323001004-target
+      source: '1788319579995'
+      sourceHandle: source
+      target: '1788323001004'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: answer
+      id: 1788319610143-source-1788319695670-target
+      source: '1788319610143'
+      sourceHandle: source
+      target: '1788319695670'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: answer
+      id: 1788319640384-source-1788320222246-target
+      selected: false
+      source: '1788319640384'
+      sourceHandle: source
+      target: '1788320222246'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: template-transform
+        targetType: if-else
+      id: 1788322001001-source-1788319083766-target
+      selected: false
+      source: '1788322001001'
+      sourceHandle: source
+      target: '1788319083766'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: 1788322002001-false-1788322103001-target
+      source: '1788322002001'
+      sourceHandle: 'false'
+      target: '1788322103001'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: answer
+      id: 1788322103001-source-1788322103002-target
+      source: '1788322103001'
+      sourceHandle: source
+      target: '1788322103002'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: 1788322002001-true-1788325001001-target
+      source: '1788322002001'
+      sourceHandle: 'true'
+      target: '1788325001001'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: template-transform
+      id: 1788323001001-source-1788322001001-target
+      selected: false
+      source: '1788323001001'
+      sourceHandle: source
+      target: '1788322001001'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788323001002-source-1788319610143-target
+      source: '1788323001002'
+      sourceHandle: source
+      target: '1788319610143'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788323001003-source-1788319579995-target
+      source: '1788323001003'
+      sourceHandle: source
+      target: '1788319579995'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788323001004-source-1788319610143-target
+      source: '1788323001004'
+      sourceHandle: source
+      target: '1788319610143'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1788325001001-source-1788323001003-target
+      source: '1788325001001'
+      sourceHandle: source
+      target: '1788323001003'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 这个节点负责收集全部原始信息。后面所有节点都只消费这个入口变量，不要在中途再改动原始字段。
+        selected: false
+        title: 开始：需求输入
+        type: start
+        variables:
+        - default: 希望在车机桌面增加天气卡片，显示当前城市、天气和温度。
+          hint: ''
+          label: 用户原始需求
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: requirement_text
+        - default: web
+          hint: ''
+          label: 输入渠道
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: source_channel
+        - default: anonymous
+          hint: ''
+          label: 输入人
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: requester
+        - allowed_file_extensions: []
+          allowed_file_types:
+          - image
+          - document
+          allowed_file_upload_methods:
+          - local_file
+          - remote_url
+          default: ''
+          hide: false
+          hint: ''
+          label: original_file
+          max_length: 5
+          options: []
+          placeholder: ''
+          required: false
+          type: file-list
+          variable: original_file
+      height: 247
+      id: '1788316764314'
+      position:
+        x: 28.44189302533829
+        y: 253
+      positionAbsolute:
+        x: 28.44189302533829
+        y: 253
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: Filter_Image
+        extract_by:
+          enabled: false
+          serial: '1'
+        filter_by:
+          conditions:
+          - comparison_operator: in
+            key: type
+            value:
+            - image
+          enabled: true
+        item_var_type: file
+        limit:
+          enabled: false
+          size: 10
+        order_by:
+          enabled: false
+          key: name
+          value: asc
+        selected: false
+        title: 图片文件筛选
+        type: list-operator
+        var_type: array[file]
+        variable:
+        - '1788316764314'
+        - original_file
+      height: 121
+      id: '1788317983026'
+      position:
+        x: 529.8476844979477
+        y: -75.92305815876267
+      positionAbsolute:
+        x: 529.8476844979477
+        y: -75.92305815876267
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: Filter_Document
+        extract_by:
+          enabled: false
+          serial: '1'
+        filter_by:
+          conditions:
+          - comparison_operator: in
+            key: type
+            value:
+            - document
+          enabled: true
+        item_var_type: file
+        limit:
+          enabled: false
+          size: 10
+        order_by:
+          enabled: false
+          key: ''
+          value: asc
+        selected: false
+        title: 文档文件筛选
+        type: list-operator
+        var_type: array[file]
+        variable:
+        - '1788316764314'
+        - original_file
+      height: 121
+      id: '1788317986995'
+      position:
+        x: 523.181032126017
+        y: 774.9061484437153
+      positionAbsolute:
+        x: 523.181032126017
+        y: 774.9061484437153
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: Extract_Document
+        is_array_file: false
+        selected: false
+        title: 文档内容提取
+        type: document-extractor
+        variable_selector:
+        - '1788317986995'
+        - result
+      height: 133
+      id: '1788317996538'
+      position:
+        x: 1082.751721371303
+        y: 737.1284516694424
+      positionAbsolute:
+        x: 1082.751721371303
+        y: 737.1284516694424
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - '1788317983026'
+          - result
+        model:
+          completion_params: {}
+          mode: chat
+          name: gpt-5.5
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: f4106e66-e0b0-47ed-b16f-92c9e5db9c2f
+          role: system
+          text: '你是需求资料解析助手。请只提取与产品需求有关的信息，输出纯文本。
+
+
+            提取目标：
+
+            1. 页面中的文案、按钮、字段、提示信息
+
+            2. 界面结构和关键交互流程
+
+            3. 与用户需求明显冲突的点
+
+            4. 无法确认的信息，标记为“待确认”
+
+
+            输出格式：
+
+            - 页面要素：
+
+            - 交互流程：
+
+            - 风险与冲突：
+
+            - 待确认：'
+        - role: user
+          text: '请解析本次上传图片中的需求信息；如果没有可解析图片，也请按既定格式返回“未提供图片内容，待确认”。\n\n用户原始需求：{{#1788316764314.requirement_text#}}'
+        selected: false
+        title: 图片内容理解
+        type: llm
+        vision:
+          configs:
+            detail: high
+            variable_selector:
+            - '1788317983026'
+            - result
+          enabled: true
+      height: 88
+      id: '1788318005590'
+      position:
+        x: 1051.2984327284034
+        y: -67.03418832952195
+      positionAbsolute:
+        x: 1051.2984327284034
+        y: -67.03418832952195
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params: {}
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: MCP健康检查
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: health_check
+        tool_name: health_check
+        tool_node_version: '2'
+        tool_parameters: {}
+        type: tool
+      height: 84
+      id: '1788318566070'
+      position:
+        x: 449.862465735319
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 449.862465735319
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: health_ok
+            value: ok
+            varType: string
+            variable_selector:
+            - '1788318566070'
+            - status
+          id: 'true'
+          logical_operator: and
+        selected: false
+        title: 健康检查判断
+        type: if-else
+      height: 124
+      id: '1788318766358'
+      position:
+        x: 733.6753777337216
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 733.6753777337216
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: limit
+            ja_JP: limit
+            pt_BR: limit
+            zh_Hans: limit
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: limit
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: status
+            ja_JP: status
+            pt_BR: status
+            zh_Hans: status
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: status
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        params:
+          limit: 50
+          status: active
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 查询主需求
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: get_master_requirements
+        tool_name: get_master_requirements
+        tool_node_version: '2'
+        tool_parameters:
+          limit:
+            type: constant
+            value: 50
+          status:
+            type: constant
+            value: active
+        type: tool
+      height: 84
+      id: '1788318796771'
+      position:
+        x: 1010.4195990784099
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 1010.4195990784099
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: limit
+            ja_JP: limit
+            pt_BR: limit
+            zh_Hans: limit
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: limit
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: number
+        params:
+          limit: 20
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 查询历史需求
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: get_history_requirements
+        tool_name: get_history_requirements
+        tool_node_version: '2'
+        tool_parameters:
+          limit:
+            type: constant
+            value: 20
+        type: tool
+      height: 84
+      id: '1788318825511'
+      position:
+        x: 1289.1638998837846
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 1289.1638998837846
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: top_k
+            ja_JP: top_k
+            pt_BR: top_k
+            zh_Hans: top_k
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: top_k
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: query_text
+            ja_JP: query_text
+            pt_BR: query_text
+            zh_Hans: query_text
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: query_text
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          query_text: '{{#1788316764314.requirement_text#}}'
+          top_k: 5
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 查询相似需求
+        tool_configurations: {}
+        tool_description: Search similar requirements from plain text. Dify can call
+          this directly.
+        tool_label: search_similar_requirements_by_text
+        tool_name: search_similar_requirements_by_text
+        tool_node_version: '2'
+        tool_parameters:
+          query_text:
+            type: mixed
+            value: '{{#1788316764314.requirement_text#}}'
+          top_k:
+            type: constant
+            value: 5
+        type: tool
+      height: 84
+      id: '1788318876231'
+      position:
+        x: 1543.832390864581
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 1543.832390864581
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: 汇总多渠道输入、相似需求、历史版本和提取结果，供需求治理与人工审核使用
+        selected: false
+        template: '用户原始需求：
+
+          {{requirement_text}}
+
+
+          图片解析：
+
+          {{image_extract}}
+
+
+          文档解析：
+
+          {{document_extract}}
+
+
+          输入渠道：
+
+          {{source_channel}}
+
+
+          提出人：
+
+          {{requester}}
+
+
+          主需求列表：
+
+          {{master_requirements}}
+
+
+          历史需求：
+
+          {{history_requirements}}
+
+
+          相似需求候选：
+
+          {{similar_requirements}}'
+        title: 需求上下文汇总
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1788316764314'
+          - requirement_text
+          variable: requirement_text
+        - value_selector:
+          - '1788316764314'
+          - source_channel
+          variable: source_channel
+        - value_selector:
+          - '1788316764314'
+          - requester
+          variable: requester
+        - value_selector:
+          - '1788318005590'
+          - text
+          variable: image_extract
+        - value_selector:
+          - '1788317996538'
+          - text
+          variable: document_extract
+        - value_selector:
+          - '1788318796771'
+          - json
+          variable: master_requirements
+        - value_selector:
+          - '1788318825511'
+          - json
+          variable: history_requirements
+        - value_selector:
+          - '1788318876231'
+          - json
+          variable: similar_requirements
+      height: 112
+      id: '1788318894350'
+      position:
+        x: 2047.6706110945884
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 2047.6706110945884
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - '1788318894350'
+          - output
+        model:
+          completion_params:
+            temperature: 0.2
+          mode: chat
+          name: deepseek-v4-flash
+          provider: langgenius/deepseek/deepseek
+        prompt_template:
+        - role: system
+          text: '你是企业级需求治理助手。你将收到统一上下文（用户原始需求、图片提取、文档提取、历史需求、主需求、相似需求）。
+
+
+            只输出合法 JSON，不要输出 Markdown，不要输出解释文字。
+
+
+            任务：
+
+            1. 生成 requirement_name、requirement_summary 与 final_requirement
+
+            2. 判断 action：create_new / update_existing / reject
+
+            3. 若 update_existing，输出 target_requirement_id（必须是历史/主需求中真实存在的 id）
+
+            4. 输出 version_title、change_type(create/update/reject)、change_summary
+
+            5. 输出 risk_level(low/medium/high)、risk_reason、relation_type(conflict/related/independent)
+
+            6. 输出 functional_modules（字符串数组）
+
+            7. human_review_required 固定 true
+
+
+            当图片/文档与文本冲突时，必须在 risk_reason 中说明。'
+        - role: user
+          text: '{{#1788318894350.output#}}'
+        selected: false
+        structured_output:
+          schema:
+            additionalProperties: false
+            properties:
+              action:
+                enum:
+                - create_new
+                - update_existing
+                - reject
+                type: string
+              change_summary:
+                type: string
+              change_type:
+                enum:
+                - create
+                - update
+                - reject
+                type: string
+              final_requirement:
+                type: string
+              functional_modules:
+                items:
+                  type: string
+                type: array
+              human_review_required:
+                type: boolean
+              relation_type:
+                enum:
+                - conflict
+                - related
+                - independent
+                type: string
+              requirement_name:
+                type: string
+              requirement_summary:
+                type: string
+              risk_level:
+                enum:
+                - low
+                - medium
+                - high
+                type: string
+              risk_reason:
+                type: string
+              target_requirement_id:
+                type: number
+              version_title:
+                type: string
+            required:
+            - requirement_name
+            - requirement_summary
+            - final_requirement
+            - action
+            - target_requirement_id
+            - version_title
+            - change_type
+            - change_summary
+            - risk_level
+            - risk_reason
+            - relation_type
+            - human_review_required
+            type: object
+        structured_output_enabled: true
+        title: 需求分析与治理判断
+        type: llm
+        vision:
+          enabled: false
+      height: 88
+      id: '1788319001279'
+      position:
+        x: 2367.193961525007
+        y: 316.9317678376867
+      positionAbsolute:
+        x: 2367.193961525007
+        y: 316.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        delivery_methods:
+        - enabled: true
+          id: 9f2a7c12-3e42-4a72-9d44-4c3dbdbd9c61
+          type: webapp
+        form_content: |-
+          ## 待审核需求治理结论
+
+          请对本次写库清单做一次总审核。
+
+          AI 摘要：
+          - 需求名称：{{#1788319001279.structured_output.requirement_name#}}
+          - 需求简述：{{#1788319001279.structured_output.requirement_summary#}}
+          - 最终需求：{{#1788319001279.structured_output.final_requirement#}}
+          - 处理动作：{{#1788319001279.structured_output.action#}}
+          - 风险等级：{{#1788319001279.structured_output.risk_level#}}
+          - 风险说明：{{#1788319001279.structured_output.risk_reason#}}
+          - 版本标题：{{#1788319001279.structured_output.version_title#}}
+          - 变更摘要：{{#1788319001279.structured_output.change_summary#}}
+          - 目标需求ID：{{#1788319001279.structured_output.target_requirement_id#}}
+
+          写库清单：
+          1. requirement_record：记录输入渠道、输入人、需求简述、原始需求、附件摘要、输入时间
+          2. requirement_master：若 action=create_new 则新建主需求
+          3. requirement_version：创建或追加版本记录
+          4. requirement_master：若 action=update_existing 则更新最终需求与当前版本
+          5. requirement_knowledge：写入或更新向量知识
+          6. task_audit_log：记录本次治理执行结果
+
+          通过后系统将按清单顺序执行；拒绝则不写业务库，仅记录拒绝审计。
+        inputs: []
+        selected: false
+        timeout: 3
+        timeout_unit: hour
+        title: 人工审核需求
+        type: human-input
+        user_actions:
+        - button_style: default
+          id: approved
+          title: 通过
+        - button_style: accent
+          id: rejected
+          title: 拒绝
+      height: 190
+      id: '1788319037594'
+      position:
+        x: 2720
+        y: 320
+      positionAbsolute:
+        x: 2720
+        y: 320
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: action_is_create_new
+            value: create_new
+            varType: string
+            variable_selector:
+            - '1788319001279'
+            - structured_output
+            - action
+          id: 'true'
+          logical_operator: and
+        selected: false
+        title: 需求动作判断
+        type: if-else
+      height: 148
+      id: '1788319083766'
+      position:
+        x: 3400
+        y: 320
+      positionAbsolute:
+        x: 3400
+        y: 320
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: requester
+            ja_JP: requester
+            pt_BR: requester
+            zh_Hans: requester
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: requester
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: source_channel
+            ja_JP: source_channel
+            pt_BR: source_channel
+            zh_Hans: source_channel
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: source_channel
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: requirement_key
+            ja_JP: requirement_key
+            pt_BR: requirement_key
+            zh_Hans: requirement_key
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: requirement_key
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: requirement_name
+            ja_JP: requirement_name
+            pt_BR: requirement_name
+            zh_Hans: requirement_name
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: requirement_name
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: final_requirement
+            ja_JP: final_requirement
+            pt_BR: final_requirement
+            zh_Hans: final_requirement
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: final_requirement
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          final_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          requester: '{{#1788316764314.requester#}}'
+          requirement_key: ''
+          requirement_name: '{{#1788319001279.structured_output.requirement_name#}}'
+          source_channel: '{{#1788316764314.source_channel#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 创建主需求
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: create_master_requirement
+        tool_name: create_master_requirement
+        tool_node_version: '2'
+        tool_parameters:
+          final_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          requester:
+            type: mixed
+            value: '{{#1788316764314.requester#}}'
+          requirement_key:
+            type: mixed
+            value: null
+          requirement_name:
+            type: mixed
+            value: '{{#1788319001279.structured_output.requirement_name#}}'
+          source_channel:
+            type: mixed
+            value: '{{#1788316764314.source_channel#}}'
+        type: tool
+      height: 84
+      id: '1788319447452'
+      position:
+        x: 3840
+        y: 170
+      positionAbsolute:
+        x: 3840
+        y: 170
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_no
+            ja_JP: version_no
+            pt_BR: version_no
+            zh_Hans: version_no
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_no
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: change_type
+            ja_JP: change_type
+            pt_BR: change_type
+            zh_Hans: change_type
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: change_type
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_title
+            ja_JP: version_title
+            pt_BR: version_title
+            zh_Hans: version_title
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_title
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: change_summary
+            ja_JP: change_summary
+            pt_BR: change_summary
+            zh_Hans: change_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: change_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: requirement_id
+            ja_JP: requirement_id
+            pt_BR: requirement_id
+            zh_Hans: requirement_id
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: requirement_id
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: source_record_ids
+            ja_JP: source_record_ids
+            pt_BR: source_record_ids
+            zh_Hans: source_record_ids
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: source_record_ids
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_requirement
+            ja_JP: version_requirement
+            pt_BR: version_requirement
+            zh_Hans: version_requirement
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_requirement
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          change_summary: '{{#1788319001279.structured_output.change_summary#}}'
+          change_type: create
+          requirement_id: '{{#1788319447452.id#}}'
+          source_record_ids: '{{#sys.conversation_id#}}'
+          version_no: 1
+          version_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          version_title: '{{#1788319001279.structured_output.version_title#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 创建需求版本
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: create_requirement_version
+        tool_name: create_requirement_version
+        tool_node_version: '2'
+        tool_parameters:
+          change_summary:
+            type: mixed
+            value: '{{#1788319001279.structured_output.change_summary#}}'
+          change_type:
+            type: constant
+            value: create
+          requirement_id:
+            type: mixed
+            value: '{{#1788319447452.id#}}'
+          source_record_ids:
+            type: mixed
+            value: '{{#sys.conversation_id#}}'
+          version_no:
+            type: constant
+            value: 1
+          version_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          version_title:
+            type: mixed
+            value: '{{#1788319001279.structured_output.version_title#}}'
+        type: tool
+      height: 84
+      id: '1788319477268'
+      position:
+        x: 4280
+        y: 170
+      positionAbsolute:
+        x: 4280
+        y: 170
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_no
+            ja_JP: version_no
+            pt_BR: version_no
+            zh_Hans: version_no
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_no
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: change_type
+            ja_JP: change_type
+            pt_BR: change_type
+            zh_Hans: change_type
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: change_type
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_title
+            ja_JP: version_title
+            pt_BR: version_title
+            zh_Hans: version_title
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_title
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: change_summary
+            ja_JP: change_summary
+            pt_BR: change_summary
+            zh_Hans: change_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: change_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: requirement_id
+            ja_JP: requirement_id
+            pt_BR: requirement_id
+            zh_Hans: requirement_id
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: requirement_id
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: source_record_ids
+            ja_JP: source_record_ids
+            pt_BR: source_record_ids
+            zh_Hans: source_record_ids
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: source_record_ids
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: version_requirement
+            ja_JP: version_requirement
+            pt_BR: version_requirement
+            zh_Hans: version_requirement
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: version_requirement
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          change_summary: '{{#1788319001279.structured_output.change_summary#}}'
+          change_type: update
+          requirement_id: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          source_record_ids: '{{#sys.conversation_id#}}'
+          version_no: '{{#1788325001001.next_version_no#}}'
+          version_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          version_title: '{{#1788319001279.structured_output.version_title#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 创建更新版本
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: create_requirement_version
+        tool_name: create_requirement_version
+        tool_node_version: '2'
+        tool_parameters:
+          change_summary:
+            type: mixed
+            value: '{{#1788319001279.structured_output.change_summary#}}'
+          change_type:
+            type: constant
+            value: update
+          requirement_id:
+            type: mixed
+            value: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          source_record_ids:
+            type: mixed
+            value: '{{#sys.conversation_id#}}'
+          version_no:
+            type: mixed
+            value: '{{#1788325001001.next_version_no#}}'
+          version_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          version_title:
+            type: mixed
+            value: '{{#1788319001279.structured_output.version_title#}}'
+        type: tool
+      height: 84
+      id: '1788319579995'
+      position:
+        x: 4720
+        y: 520
+      positionAbsolute:
+        x: 4720
+        y: 520
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: task_id
+            ja_JP: task_id
+            pt_BR: task_id
+            zh_Hans: task_id
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: task_id
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: node_name
+            ja_JP: node_name
+            pt_BR: node_name
+            zh_Hans: node_name
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: node_name
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: error_reason
+            ja_JP: error_reason
+            pt_BR: error_reason
+            zh_Hans: error_reason
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: error_reason
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: input_summary
+            ja_JP: input_summary
+            pt_BR: input_summary
+            zh_Hans: input_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: input_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: result_status
+            ja_JP: result_status
+            pt_BR: result_status
+            zh_Hans: result_status
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: result_status
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: output_summary
+            ja_JP: output_summary
+            pt_BR: output_summary
+            zh_Hans: output_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: output_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          error_reason: ''
+          input_summary: '{{#1788316764314.requirement_text#}}'
+          node_name: requirement_workflow
+          output_summary: action={{#1788319001279.structured_output.action#}}, risk={{#1788319001279.structured_output.risk_level#}}
+          result_status: success
+          task_id: '{{#sys.conversation_id#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 追加成功审计日志
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: append_audit_log
+        tool_name: append_audit_log
+        tool_node_version: '2'
+        tool_parameters:
+          error_reason:
+            type: constant
+            value: ''
+          input_summary:
+            type: mixed
+            value: '{{#1788316764314.requirement_text#}}'
+          node_name:
+            type: constant
+            value: requirement_workflow
+          output_summary:
+            type: mixed
+            value: action={{#1788319001279.structured_output.action#}}, risk={{#1788319001279.structured_output.risk_level#}}
+          result_status:
+            type: constant
+            value: success
+          task_id:
+            type: mixed
+            value: '{{#sys.conversation_id#}}'
+        type: tool
+      height: 84
+      id: '1788319610143'
+      position:
+        x: 5600
+        y: 340
+      positionAbsolute:
+        x: 5600
+        y: 340
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: task_id
+            ja_JP: task_id
+            pt_BR: task_id
+            zh_Hans: task_id
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: task_id
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: node_name
+            ja_JP: node_name
+            pt_BR: node_name
+            zh_Hans: node_name
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: node_name
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: error_reason
+            ja_JP: error_reason
+            pt_BR: error_reason
+            zh_Hans: error_reason
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: error_reason
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: input_summary
+            ja_JP: input_summary
+            pt_BR: input_summary
+            zh_Hans: input_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: input_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: result_status
+            ja_JP: result_status
+            pt_BR: result_status
+            zh_Hans: result_status
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: result_status
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: output_summary
+            ja_JP: output_summary
+            pt_BR: output_summary
+            zh_Hans: output_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: output_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          error_reason: human_rejected
+          input_summary: '{{#1788316764314.requirement_text#}}'
+          node_name: requirement_workflow
+          output_summary: action=reject_by_human
+          result_status: failed
+          task_id: '{{#sys.conversation_id#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 追加拒绝审计日志
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: append_audit_log
+        tool_name: append_audit_log
+        tool_node_version: '2'
+        tool_parameters:
+          error_reason:
+            type: constant
+            value: human_rejected
+          input_summary:
+            type: mixed
+            value: '{{#1788316764314.requirement_text#}}'
+          node_name:
+            type: constant
+            value: requirement_workflow
+          output_summary:
+            type: constant
+            value: action=reject_by_human
+          result_status:
+            type: constant
+            value: failed
+          task_id:
+            type: mixed
+            value: '{{#sys.conversation_id#}}'
+        type: tool
+      height: 84
+      id: '1788319640384'
+      position:
+        x: 3425.6894204798564
+        y: 525.9025410293476
+      positionAbsolute:
+        x: 3425.6894204798564
+        y: 525.9025410293476
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: task_id
+            ja_JP: task_id
+            pt_BR: task_id
+            zh_Hans: task_id
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: task_id
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: node_name
+            ja_JP: node_name
+            pt_BR: node_name
+            zh_Hans: node_name
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: node_name
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: input_summary
+            ja_JP: input_summary
+            pt_BR: input_summary
+            zh_Hans: input_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: input_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: result_status
+            ja_JP: result_status
+            pt_BR: result_status
+            zh_Hans: result_status
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: result_status
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: ''
+            ja_JP: ''
+            pt_BR: ''
+            zh_Hans: ''
+          input_schema: null
+          label:
+            en_US: output_summary
+            ja_JP: output_summary
+            pt_BR: output_summary
+            zh_Hans: output_summary
+          llm_description: ''
+          max: null
+          min: null
+          multiple: false
+          name: output_summary
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        params:
+          error_reason: ai_rejected_by_policy
+          input_summary: '{{#1788316764314.requirement_text#}}'
+          node_name: requirement_workflow
+          output_summary: action=reject_by_ai
+          result_status: failed
+          task_id: '{{#sys.conversation_id#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 追加AI拒绝审计日志
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: append_audit_log
+        tool_name: append_audit_log
+        tool_node_version: '2'
+        tool_parameters:
+          error_reason:
+            type: constant
+            value: ai_rejected_by_policy
+          input_summary:
+            type: mixed
+            value: '{{#1788316764314.requirement_text#}}'
+          node_name:
+            type: constant
+            value: requirement_workflow
+          output_summary:
+            type: constant
+            value: action=reject_by_ai
+          result_status:
+            type: constant
+            value: failed
+          task_id:
+            type: mixed
+            value: '{{#sys.conversation_id#}}'
+        type: tool
+      height: 84
+      id: '1788322103001'
+      position:
+        x: 4020
+        y: 429
+      positionAbsolute:
+        x: 4020
+        y: 429
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: |-
+          需求台账卡片（通过）
+
+          卡片概览
+          - 状态：人工审核通过，已完成治理并写入台账
+          - 处理动作：{{#1788319001279.structured_output.action#}}
+          - 风险等级：{{#1788319001279.structured_output.risk_level#}}
+          - 风险结论：{{#1788319001279.structured_output.risk_reason#}}
+
+          需求基础信息
+          - 需求名称：{{#1788319001279.structured_output.requirement_name#}}
+          - 需求简述：{{#1788319001279.structured_output.requirement_summary#}}
+          - 输入渠道：{{#1788316764314.source_channel#}}
+          - 提交人：{{#1788316764314.requester#}}
+          - 原始需求：{{#1788316764314.requirement_text#}}
+
+          治理结果
+          - 关联关系：{{#1788319001279.structured_output.relation_type#}}
+          - 功能模块：{{#1788319001279.structured_output.functional_modules#}}
+          - 版本标题：{{#1788319001279.structured_output.version_title#}}
+          - 变更类型：{{#1788319001279.structured_output.change_type#}}
+          - 变更摘要：{{#1788319001279.structured_output.change_summary#}}
+
+          台账与追溯
+          - 目标需求ID：{{#1788319001279.structured_output.target_requirement_id#}}
+          - 台账任务ID：{{#sys.conversation_id#}}
+          - 审计追踪键：{{#sys.conversation_id#}}
+
+          最终需求描述
+          {{#1788319001279.structured_output.final_requirement#}}
+        selected: false
+        title: 直接回复
+        type: answer
+        variables: []
+      height: 633
+      id: '1788319695670'
+      position:
+        x: 6040
+        y: 340
+      positionAbsolute:
+        x: 6040
+        y: 340
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: |-
+          需求台账卡片（拒绝）
+
+          卡片概览
+          - 状态：人工审核未通过，已终止入库
+          - 处理动作：reject_by_human
+          - 风险等级：待复核
+          - 风险结论：人工审核拒绝
+
+          需求基础信息
+          - 输入渠道：{{#1788316764314.source_channel#}}
+          - 提交人：{{#1788316764314.requester#}}
+          - 原始需求：{{#1788316764314.requirement_text#}}
+
+          台账与追溯
+          - 台账任务ID：{{#sys.conversation_id#}}
+          - 审计追踪键：{{#sys.conversation_id#}}
+
+          说明
+          本次需求未进入主需求台账与版本表，仅保留审计记录。
+        selected: false
+        title: 拒绝处理结果
+        type: answer
+        variables: []
+      height: 325
+      id: '1788320222246'
+      position:
+        x: 3727.6894204798564
+        y: 525.9025410293476
+      positionAbsolute:
+        x: 3727.6894204798564
+        y: 525.9025410293476
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: |-
+          需求台账卡片（AI判拒绝）
+
+          卡片概览
+          - 状态：人工审核通过，但治理判定为拒绝，已终止入库
+          - 处理动作：{{#1788319001279.structured_output.action#}}
+          - 风险等级：{{#1788319001279.structured_output.risk_level#}}
+          - 风险结论：{{#1788319001279.structured_output.risk_reason#}}
+
+          需求基础信息
+          - 输入渠道：{{#1788316764314.source_channel#}}
+          - 提交人：{{#1788316764314.requester#}}
+          - 原始需求：{{#1788316764314.requirement_text#}}
+
+          治理判定摘要
+          - 需求名称：{{#1788319001279.structured_output.requirement_name#}}
+          - 需求简述：{{#1788319001279.structured_output.requirement_summary#}}
+          - 版本标题：{{#1788319001279.structured_output.version_title#}}
+          - 变更摘要：{{#1788319001279.structured_output.change_summary#}}
+
+          台账与追溯
+          - 台账任务ID：{{#sys.conversation_id#}}
+          - 审计追踪键：{{#sys.conversation_id#}}
+
+          说明
+          本次终止原因并非人工点击拒绝，而是治理判定动作为 reject。
+        selected: false
+        title: AI拒绝处理结果
+        type: answer
+        variables: []
+      height: 470
+      id: '1788322103002'
+      position:
+        x: 4322
+        y: 429
+      positionAbsolute:
+        x: 4322
+        y: 429
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: |-
+          需求台账卡片（系统异常）
+
+          卡片概览
+          - 状态：系统校验未通过，流程已中止
+          - 处理动作：system_guard_blocked
+          - 风险等级：高
+          - 风险结论：MCP 健康检查失败或依赖不可达
+
+          需求基础信息
+          - 输入渠道：{{#1788316764314.source_channel#}}
+          - 提交人：{{#1788316764314.requester#}}
+          - 原始需求：{{#1788316764314.requirement_text#}}
+
+          台账与追溯
+          - 台账任务ID：{{#sys.conversation_id#}}
+          - 审计追踪键：{{#sys.conversation_id#}}
+
+          处理建议
+          1. 检查 MCP 服务是否存活
+          2. 检查 Dify MCP 服务是否为最新配置
+          3. 通过后重新发起本次需求治理。
+        selected: false
+        title: 系统异常回复
+        type: answer
+        variables: []
+      height: 341
+      id: '1788320251818'
+      position:
+        x: 1010.4195990784099
+        y: 439.9317678376867
+      positionAbsolute:
+        x: 1010.4195990784099
+        y: 439.9317678376867
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: 合并审核结果（当前使用 LLM 输出作为稳定兜底，避免可选人审字段缺失导致中断）
+        selected: false
+        template: '{\n  "effective_final_requirement": {{ final_requirement | tojson
+          }},\n  "effective_change_summary": {{ change_summary | tojson }}\n}'
+        title: 审核结果合并
+        type: template-transform
+        variables:
+        - value_selector:
+          - '1788319001279'
+          - structured_output
+          - final_requirement
+          variable: final_requirement
+        - value_selector:
+          - '1788319001279'
+          - structured_output
+          - change_summary
+          variable: change_summary
+      height: 112
+      id: '1788322001001'
+      position:
+        x: 3008
+        y: 204
+      positionAbsolute:
+        x: 3008
+        y: 204
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: action_is_update_existing
+            value: update_existing
+            varType: string
+            variable_selector:
+            - '1788319001279'
+            - structured_output
+            - action
+          id: 'true'
+          logical_operator: and
+        selected: false
+        title: 更新动作判断
+        type: if-else
+      height: 148
+      id: '1788322002001'
+      position:
+        x: 3719
+        y: 429
+      positionAbsolute:
+        x: 3719
+        y: 429
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params:
+          attachment_summary: '{{#1788318005590.text#}}\n{{#1788317996538.text#}}'
+          original_requirement: '{{#1788316764314.requirement_text#}}'
+          requester: '{{#1788316764314.requester#}}'
+          requirement_summary: '{{#1788319001279.structured_output.requirement_summary#}}'
+          review_status: approved
+          source_channel: '{{#1788316764314.source_channel#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 创建原始需求记录
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: create_requirement_record
+        tool_name: create_requirement_record
+        tool_node_version: '2'
+        tool_parameters:
+          attachment_summary:
+            type: mixed
+            value: '{{#1788318005590.text#}}\n{{#1788317996538.text#}}'
+          original_requirement:
+            type: mixed
+            value: '{{#1788316764314.requirement_text#}}'
+          requester:
+            type: mixed
+            value: '{{#1788316764314.requester#}}'
+          requirement_summary:
+            type: mixed
+            value: '{{#1788319001279.structured_output.requirement_summary#}}'
+          review_status:
+            type: constant
+            value: approved
+          source_channel:
+            type: mixed
+            value: '{{#1788316764314.source_channel#}}'
+        type: tool
+      height: 84
+      id: '1788323001001'
+      position:
+        x: 3120
+        y: 320
+      positionAbsolute:
+        x: 3120
+        y: 320
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params:
+          final_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id: '{{#1788319447452.id#}}'
+          requirement_key: '{{#1788319447452.requirement_key#}}'
+          requirement_name: '{{#1788319001279.structured_output.requirement_name#}}'
+          summary: '{{#1788319001279.structured_output.requirement_summary#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 写入向量知识
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: upsert_knowledge_by_text
+        tool_name: upsert_knowledge_by_text
+        tool_node_version: '2'
+        tool_parameters:
+          final_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id:
+            type: mixed
+            value: '{{#1788319447452.id#}}'
+          requirement_key:
+            type: mixed
+            value: '{{#1788319447452.requirement_key#}}'
+          requirement_name:
+            type: mixed
+            value: '{{#1788319001279.structured_output.requirement_name#}}'
+          summary:
+            type: mixed
+            value: '{{#1788319001279.structured_output.requirement_summary#}}'
+        type: tool
+      height: 84
+      id: '1788323001002'
+      position:
+        x: 4720
+        y: 170
+      positionAbsolute:
+        x: 4720
+        y: 170
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params:
+          current_version: '{{#1788325001001.next_version_no#}}'
+          final_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          status: active
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 更新主需求
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: update_master_requirement
+        tool_name: update_master_requirement
+        tool_node_version: '2'
+        tool_parameters:
+          current_version:
+            type: mixed
+            value: '{{#1788325001001.next_version_no#}}'
+          final_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id:
+            type: mixed
+            value: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          status:
+            type: constant
+            value: active
+        type: tool
+      height: 84
+      id: '1788323001003'
+      position:
+        x: 4280
+        y: 520
+      positionAbsolute:
+        x: 4280
+        y: 520
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params:
+          final_requirement: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          requirement_key: '{{#1788325001001.requirement_key#}}'
+          requirement_name: '{{#1788325001001.requirement_name#}}'
+          summary: '{{#1788319001279.structured_output.requirement_summary#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 更新向量知识
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: upsert_knowledge_by_text
+        tool_name: upsert_knowledge_by_text
+        tool_node_version: '2'
+        tool_parameters:
+          final_requirement:
+            type: mixed
+            value: '{{#1788319001279.structured_output.final_requirement#}}'
+          requirement_id:
+            type: mixed
+            value: '{{#1788319001279.structured_output.target_requirement_id#}}'
+          requirement_key:
+            type: mixed
+            value: '{{#1788325001001.requirement_key#}}'
+          requirement_name:
+            type: mixed
+            value: '{{#1788325001001.requirement_name#}}'
+          summary:
+            type: mixed
+            value: '{{#1788319001279.structured_output.requirement_summary#}}'
+        type: tool
+      height: 84
+      id: '1788323001004'
+      position:
+        x: 5160
+        y: 520
+      positionAbsolute:
+        x: 5160
+        y: 520
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        is_team_authorization: true
+        paramSchemas: []
+        params:
+          requirement_id: '{{#1788319001279.structured_output.target_requirement_id#}}'
+        plugin_id: ''
+        plugin_unique_identifier: ''
+        provider_icon:
+          background: '#6366F1'
+          content: 🔗
+        provider_id: b274dee4-6119-48aa-990a-0161b7cdf6a9
+        provider_name: MY_MCP
+        provider_show_name: MY_MCP
+        provider_type: mcp
+        selected: false
+        title: 获取更新写入上下文
+        tool_configurations: {}
+        tool_description: ''
+        tool_label: get_requirement_write_context
+        tool_name: get_requirement_write_context
+        tool_node_version: '2'
+        tool_parameters:
+          requirement_id:
+            type: mixed
+            value: '{{#1788319001279.structured_output.target_requirement_id#}}'
+        type: tool
+      height: 84
+      id: '1788325001001'
+      position:
+        x: 3840
+        y: 520
+      positionAbsolute:
+        x: 3840
+        y: 520
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    viewport:
+      x: -1373.228397233043
+      y: 169.76348053367477
+      zoom: 0.45501941204044966
+  rag_pipeline_variables: []
