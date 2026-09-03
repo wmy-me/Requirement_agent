@@ -20,3 +20,5 @@ uvicorn apps.api.main:app --reload
 ## Notes
 
 The current scaffold intentionally keeps business logic minimal while following the suggested separation of concerns.
+
+The main PostgreSQL database for this project is `requirement_agent`.
