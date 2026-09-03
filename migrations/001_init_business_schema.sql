@@ -1,10 +1,6 @@
--- 需求管理 Agent 业务表结构
--- 适用于 PostgreSQL + pgvector
-
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- 1) 原始需求来源表
 CREATE TABLE IF NOT EXISTS requirement_source (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -31,7 +27,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_requirement_source_channel_event
 ON requirement_source(source_type, source_event_id)
 WHERE source_event_id IS NOT NULL;
 
--- 2) 原始附件表
 CREATE TABLE IF NOT EXISTS requirement_attachment (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     source_id BIGINT NOT NULL REFERENCES requirement_source(id),
@@ -45,7 +40,6 @@ CREATE TABLE IF NOT EXISTS requirement_attachment (
     UNIQUE (source_id, file_hash)
 );
 
--- 3) 需求主表
 CREATE SEQUENCE IF NOT EXISTS requirement_key_seq START 1;
 
 CREATE TABLE IF NOT EXISTS requirement_master (
@@ -61,7 +55,6 @@ CREATE TABLE IF NOT EXISTS requirement_master (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 4) 需求版本表
 CREATE TABLE IF NOT EXISTS requirement_version (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     requirement_id BIGINT NOT NULL REFERENCES requirement_master(id),
@@ -79,7 +72,6 @@ CREATE TABLE IF NOT EXISTS requirement_version (
     UNIQUE (requirement_id, version_no)
 );
 
--- 5) 版本来源关联表
 CREATE TABLE IF NOT EXISTS requirement_version_source (
     version_id BIGINT NOT NULL REFERENCES requirement_version(id),
     source_id BIGINT NOT NULL REFERENCES requirement_source(id),
@@ -88,7 +80,6 @@ CREATE TABLE IF NOT EXISTS requirement_version_source (
     PRIMARY KEY (version_id, source_id, relation_type)
 );
 
--- 6) 人工审核表
 CREATE TABLE IF NOT EXISTS requirement_review (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     source_id BIGINT NOT NULL REFERENCES requirement_source(id),
@@ -102,7 +93,6 @@ CREATE TABLE IF NOT EXISTS requirement_review (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 7) 审计日志表
 CREATE TABLE IF NOT EXISTS audit_event (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     trace_id TEXT NOT NULL,
@@ -118,7 +108,6 @@ CREATE TABLE IF NOT EXISTS audit_event (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 8) Outbox 事件表
 CREATE TABLE IF NOT EXISTS outbox_event (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     aggregate_type TEXT NOT NULL,
@@ -132,21 +121,6 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 9) 向量表：用于 pgvector 语义检索
-CREATE TABLE IF NOT EXISTS requirement_embedding (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    requirement_id BIGINT NOT NULL REFERENCES requirement_master(id),
-    requirement_key TEXT NOT NULL,
-    requirement_name TEXT NOT NULL,
-    summary TEXT,
-    final_requirement TEXT NOT NULL,
-    functional_modules JSONB,
-    embedding vector(1536),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (requirement_id)
-);
-
--- 索引：查询、排序和审计
 CREATE INDEX IF NOT EXISTS idx_requirement_master_status_updated
 ON requirement_master(status, updated_at DESC);
 
@@ -158,10 +132,6 @@ ON requirement_source(submitted_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_created
 ON outbox_event(status, created_at ASC);
-
--- 向量索引：HNSW（若数据库支持）
-CREATE INDEX IF NOT EXISTS idx_requirement_embedding_hnsw
-ON requirement_embedding USING hnsw (embedding vector_cosine_ops);
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -188,16 +158,3 @@ CREATE TRIGGER trg_outbox_event_updated_at
 BEFORE UPDATE ON outbox_event
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
-
--- 可选：示例数据
-INSERT INTO requirement_master (requirement_key, requirement_name, final_requirement, current_version, status)
-VALUES
-    ('REQ-000001', '用户登录', '支持邮箱和手机号登录，并支持验证码校验。', 1, 'active'),
-    ('REQ-000002', '需求审批流', '需求提交后必须经过审批，审批通过后才能进入开发。', 1, 'active')
-ON CONFLICT (requirement_key) DO NOTHING;
-
-INSERT INTO requirement_version (requirement_id, version_no, version_title, change_type, requirement_snapshot, change_summary, created_by, reviewed_by)
-SELECT id, 1, 'v1', 'new', final_requirement, '初始化版本', 'system', 'system'
-FROM requirement_master
-WHERE requirement_key IN ('REQ-000001', 'REQ-000002')
-ON CONFLICT (requirement_id, version_no) DO NOTHING;
