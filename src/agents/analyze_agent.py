@@ -1,10 +1,11 @@
-"""Analyze agent for duplicate, relation, conflict, and independence classification."""
+""""对重复、关联、冲突和独立性进行分析的 Agent。"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 from src.agents.extract_agent import ExtractedRequirement
+from src.skills.analyze_skill import AnalyzeSkill
 
 
 class CandidateMatch(BaseModel):
@@ -24,10 +25,22 @@ class AnalysisResult(BaseModel):
 
 
 class AnalyzeAgent:
-    """Classifier for requirement relationship analysis."""
+    """负责对需求与历史项进行关系判断的分类 Agent。"""
+
+    def __init__(self, skill: AnalyzeSkill | None = None) -> None:
+        self.skill = skill or AnalyzeSkill()
 
     def analyze(
         self,
+        extracted: ExtractedRequirement,
+        historical_requirements: list[dict[str, object]] | None = None,
+    ) -> AnalysisResult:
+        if not self.skill.provider.is_configured():
+            return self._heuristic_analyze(extracted, historical_requirements)
+        return self.skill.analyze(extracted, historical_requirements)
+
+    @staticmethod
+    def _heuristic_analyze(
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
     ) -> AnalysisResult:
@@ -37,12 +50,19 @@ class AnalyzeAgent:
         for item in historical:
             title = str(item.get("requirement_name") or item.get("title") or "")
             summary = str(item.get("final_requirement") or item.get("summary") or "")
-            score = self._score_similarity(extracted, title, summary)
+            score = AnalyzeAgent()._score_similarity(extracted, title, summary)
             if score >= 0.55:
                 reason = "业务语义相近，存在重合功能面"
                 if score >= 0.8:
                     reason = "高度相似，可能为重复需求"
-                candidates.append(CandidateMatch(requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"), title=title or "历史需求", similarity=round(score, 2), reason=reason))
+                candidates.append(
+                    CandidateMatch(
+                        requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
+                        title=title or "历史需求",
+                        similarity=round(score, 2),
+                        reason=reason,
+                    )
+                )
 
         duplicate = any(candidate.similarity >= 0.8 for candidate in candidates)
         related = any(candidate.similarity >= 0.6 for candidate in candidates)

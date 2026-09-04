@@ -17,7 +17,7 @@ from src.infrastructure.db.session import SessionLocal
 
 
 class RequirementSourceRepository:
-    """Persistence boundary for raw requirement sources."""
+    """原始需求来源的持久化边界。"""
 
     def save(self, source: RequirementSource) -> RequirementSource:
         with SessionLocal() as session:
@@ -55,11 +55,30 @@ class RequirementSourceRepository:
             source.metadata = dict(row["metadata"] or {})
             return source
 
+    def get_by_id(self, source_id: int) -> RequirementSource | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, submitted_at FROM requirement_source WHERE id = :id"
+                ),
+                {"id": source_id},
+            ).mappings().first()
+        if row is None:
+            return None
+        return RequirementSource(
+            idempotency_key=str(row["idempotency_key"]),
+            source_type=str(row["source_type"]),
+            requester_id=row["requester_id"],
+            requester_name=row["requester_name"],
+            original_text=row["original_text"],
+            metadata=dict(row["metadata"] or {}),
+        )
+
     def get_by_idempotency_key(self, idempotency_key: str) -> RequirementSource | None:
         with SessionLocal() as session:
             row = session.execute(
                 text(
-                    "SELECT idempotency_key, source_type, requester_id, requester_name, original_text, metadata, submitted_at FROM requirement_source WHERE idempotency_key = :key"
+                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, submitted_at FROM requirement_source WHERE idempotency_key = :key"
                 ),
                 {"key": idempotency_key},
             ).mappings().first()
@@ -76,7 +95,7 @@ class RequirementSourceRepository:
 
 
 class RequirementMasterRepository:
-    """Persistence boundary for canonical requirements."""
+    """规范化主需求的持久化边界。"""
 
     def save(self, requirement: RequirementMaster) -> RequirementMaster:
         with SessionLocal() as session:
@@ -123,6 +142,26 @@ class RequirementMasterRepository:
         if row is None:
             return None
         return RequirementMaster(
+            requirement_key=str(row["requirement_key"]),
+            requirement_name=str(row["requirement_name"]),
+            final_requirement=str(row["final_requirement"]),
+            current_version=int(row["current_version"]),
+            status=str(row["status"]),
+            lock_version=int(row["lock_version"]),
+        )
+
+    def get_by_key(self, requirement_key: str) -> RequirementMaster | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version FROM requirement_master WHERE requirement_key = :requirement_key"
+                ),
+                {"requirement_key": requirement_key},
+            ).mappings().first()
+        if row is None:
+            return None
+        return RequirementMaster(
+            id=int(row["id"]),
             requirement_key=str(row["requirement_key"]),
             requirement_name=str(row["requirement_name"]),
             final_requirement=str(row["final_requirement"]),
@@ -178,7 +217,7 @@ class RequirementMasterRepository:
 
 
 class RequirementVersionRepository:
-    """Persistence boundary for requirement version snapshots."""
+    """需求版本快照的持久化边界。"""
 
     def save(self, version: RequirementVersion) -> RequirementVersion:
         with SessionLocal() as session:
@@ -236,9 +275,32 @@ class RequirementVersionRepository:
             for item in rows
         ]
 
+    def get_latest_by_requirement(self, requirement_id: int) -> RequirementVersion | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT * FROM requirement_version WHERE requirement_id = :requirement_id ORDER BY version_no DESC LIMIT 1"
+                ),
+                {"requirement_id": requirement_id},
+            ).mappings().first()
+        if row is None:
+            return None
+        return RequirementVersion(
+            requirement_id=int(row["requirement_id"]),
+            parent_version_id=row["parent_version_id"],
+            version_no=int(row["version_no"]),
+            version_title=str(row["version_title"]),
+            change_type=str(row["change_type"]),
+            requirement_snapshot=str(row["requirement_snapshot"]),
+            change_summary=str(row["change_summary"]),
+            diff_payload=dict(row["diff_payload"] or {}),
+            created_by=str(row["created_by"]),
+            reviewed_by=str(row["reviewed_by"]),
+        )
+
 
 class RequirementReviewRepository:
-    """Persistence boundary for human review decisions."""
+    """人工审核决策的持久化边界。"""
 
     def save(self, review: RequirementReview) -> RequirementReview:
         with SessionLocal() as session:

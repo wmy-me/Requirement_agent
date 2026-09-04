@@ -1,4 +1,4 @@
-"""LLM provider adapter for OpenAI-compatible APIs."""
+"""兼容 OpenAI 接口格式的 LLM provider 适配器。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.config.settings import settings
 
 
 class LLMProvider:
-    """Thin wrapper around an OpenAI-compatible chat and embedding API."""
+    """对兼容 OpenAI 协议的 chat 与 embedding API 的轻量封装。"""
 
     def __init__(self) -> None:
         self.provider_name = settings.llm_provider

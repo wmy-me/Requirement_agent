@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Requirement Agent</title>
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">Requirement Agent</div>
+        <nav>
+          <button class="nav active" data-target="submit-panel">提交需求</button>
+          <button class="nav" data-target="list-panel">需求列表</button>
+          <button class="nav" data-target="status-panel">系统状态</button>
+        </nav>
+      </aside>
+
+      <main class="main-panel">
+        <section id="submit-panel" class="panel active">
+          <h1>需求提交流程</h1>
+          <form id="submit-form" class="card form-card">
+            <div class="field-row">
+              <label>
+                来源类型
+                <select id="source-type">
+                  <option value="web">web</option>
+                  <option value="email">email</option>
+                  <option value="meeting">meeting</option>
+                  <option value="manual">manual</option>
+                </select>
+              </label>
+              <label>
+                申请人
+                <input id="requester-name" type="text" placeholder="例如：alice" />
+              </label>
+            </div>
+
+            <label>
+              需求原文
+              <textarea id="original-text" rows="8" placeholder="请输入需求描述，例如：用户登录需要支持手机号登录、短信验证码和权限校验。"></textarea>
+            </label>
+
+            <div class="actions">
+              <button type="submit" class="primary">提交需求</button>
+              <button type="button" class="secondary" id="load-list">刷新列表</button>
+            </div>
+          </form>
+          <div id="submit-result" class="result-box hidden"></div>
+        </section>
+
+        <section id="list-panel" class="panel">
+          <h1>需求列表</h1>
+          <div class="toolbar">
+            <input id="search-input" type="text" placeholder="搜索关键字" />
+            <button id="search-btn" class="secondary">搜索</button>
+          </div>
+          <div id="requirements-list" class="list-box"></div>
+        </section>
+
+        <section id="status-panel" class="panel">
+          <h1>系统状态</h1>
+          <div class="status-grid">
+            <div class="status-card">
+              <h3>数据库</h3>
+              <div id="db-status" class="metric">检测中...</div>
+            </div>
+            <div class="status-card">
+              <h3>LLM</h3>
+              <div id="llm-status" class="metric">检测中...</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+  </body>
+</html>

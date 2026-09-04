@@ -1,4 +1,4 @@
-"""LLM embedding service adapter."""
+"""用于文本向量化的 embedding 服务适配器。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from src.infrastructure.llm.openai_provider import LLMProvider
 
 
 class EmbeddingService:
-    """Wraps the model used to convert requirement text into vectors."""
+    """负责将需求文本转换为向量表示，供检索和相似度比较使用。"""
 
     def __init__(self, provider: LLMProvider | None = None) -> None:
         self.provider = provider or LLMProvider()

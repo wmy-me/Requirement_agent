@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 @dataclass(slots=True)
 class RequirementSource:
-    """Represents an incoming requirement from a channel."""
+    """表示从某个渠道进入的原始需求。"""
 
     idempotency_key: str
     source_type: str
@@ -19,7 +19,7 @@ class RequirementSource:
 
 @dataclass(slots=True)
 class RequirementAttachment:
-    """Attachment metadata for a source requirement."""
+    """与来源需求绑定的附件元数据。"""
 
     source_id: int
     file_name: str
@@ -32,7 +32,7 @@ class RequirementAttachment:
 
 @dataclass(slots=True)
 class RequirementMaster:
-    """Canonical business requirement after approval."""
+    """已批准落地的主需求的规范化表示。"""
 
     requirement_key: str
     requirement_name: str
@@ -45,7 +45,7 @@ class RequirementMaster:
 
 @dataclass(slots=True)
 class RequirementVersion:
-    """Version snapshot and metadata for a requirement change."""
+    """需求变更时保留的版本快照及版本元数据。"""
 
     requirement_id: int
     parent_version_id: int | None
@@ -61,7 +61,7 @@ class RequirementVersion:
 
 @dataclass(slots=True)
 class RequirementReview:
-    """Manual review result for a requirement source."""
+    """对来源需求的人工审核结果。"""
 
     source_id: int
     analysis_snapshot: dict[str, object]
@@ -74,7 +74,7 @@ class RequirementReview:
 
 @dataclass(slots=True)
 class AuditEvent:
-    """Domain audit event for business-level state changes."""
+    """用于记录业务状态变更的审计事件。"""
 
     trace_id: str
     event_type: str

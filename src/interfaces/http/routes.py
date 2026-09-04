@@ -73,13 +73,22 @@ async def search_requirements(q: str, limit: int = 10) -> dict[str, object]:
 
 
 @router.post("/api/v1/reviews/submit")
-async def submit_review_decision(payload: dict[str, str]) -> dict[str, str]:
+async def submit_review_decision(payload: dict[str, str]) -> dict[str, object]:
+    source_id_raw = payload.get("source_id") or payload.get("sourceId") or "0"
+    decision = payload.get("decision", "approved")
     result = review_service.submit_decision(
-        source_id=int(payload.get("source_id", "0")),
-        decision=payload.get("decision", "approved"),
-        reviewer_id=payload.get("reviewer_id", "system"),
-        reviewer_name=payload.get("reviewer_name"),
+        source_id=int(source_id_raw),
+        decision=decision,
+        reviewer_id=payload.get("reviewer_id") or payload.get("reviewerId") or "system",
+        reviewer_name=payload.get("reviewer_name") or payload.get("reviewerName"),
         comment=payload.get("comment"),
-        edited_requirement=payload.get("edited_requirement"),
+        edited_requirement=payload.get("edited_requirement") or payload.get("editedRequirement"),
+        requirement_key=payload.get("requirement_key") or payload.get("requirementKey"),
+        analysis_snapshot={
+            "source_id": source_id_raw,
+            "decision": decision,
+            "reviewer_name": payload.get("reviewer_name") or payload.get("reviewerName"),
+            "comment": payload.get("comment"),
+        },
     )
     return result

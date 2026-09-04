@@ -1,4 +1,4 @@
-"""Retrieval service for knowledge and similarity search."""
+"""用于知识与相似度检索的检索服务。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.infrastructure.vector.pgvector_repository import RequirementVectorRepos
 
 
 class RetrievalService:
-    """Backs semantic and exact retrieval from requirement records."""
+    """为需求记录提供关键词检索、语义检索与候选排序能力。"""
 
     def __init__(
         self,
@@ -28,21 +28,32 @@ class RetrievalService:
             return []
 
         candidates: list[dict[str, object]] = []
-        query_tokens = {token for token in cleaned.lower().split() if token}
+        query_tokens = [token for token in cleaned.lower().split() if token]
+        phrase = cleaned.lower()
         for item in self.master_repo.list():
             if not self._matches_filters(item, filters):
                 continue
             title = str(item.requirement_name)
             summary = str(item.final_requirement)
             haystack = f"{title} {summary}".lower()
+            matched_tokens = 0
             score = 0.0
             for token in query_tokens:
                 if token in haystack:
+                    matched_tokens += 1
                     score += 0.35
-            if any(token in haystack for token in ["登录", "权限", "审批", "报表", "支付", "导出"]):
+                    if token in title.lower():
+                        score += 0.1
+            if title.lower().find(phrase) >= 0 or summary.lower().find(phrase) >= 0:
+                score += 0.4
+            if matched_tokens and matched_tokens == len(query_tokens):
                 score += 0.25
-            if title.lower().startswith(cleaned.lower()[:4]):
+            if any(token in haystack for token in ["登录", "权限", "审批", "报表", "支付", "导出", "验证码"]):
                 score += 0.2
+            if title.lower().startswith(cleaned.lower()[:4]):
+                score += 0.15
+            if self._is_user_submitted_requirement(item.requirement_key):
+                score += 0.35
             if score > 0:
                 candidates.append({
                     "requirement_key": item.requirement_key,
@@ -68,7 +79,14 @@ class RetrievalService:
                     "match_type": "vector",
                 })
 
-        ranked = sorted(candidates, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                -float(item.get("score", 0.0)),
+                -int(self._is_user_submitted_requirement(str(item.get("requirement_key") or ""))),
+                self._requirement_sort_rank(str(item.get("requirement_key") or "")),
+            ),
+        )
         deduped: list[dict[str, object]] = []
         seen: set[str] = set()
         for item in ranked:
@@ -101,3 +119,14 @@ class RetrievalService:
             if getattr(item, key, None) != value:
                 return False
         return True
+
+    @staticmethod
+    def _is_user_submitted_requirement(requirement_key: str) -> bool:
+        return requirement_key.startswith("REQ-000") or requirement_key.startswith("REQ-00")
+
+    @staticmethod
+    def _requirement_sort_rank(requirement_key: str) -> int:
+        digits = "".join(ch for ch in requirement_key if ch.isdigit())
+        if not digits:
+            return 10**9
+        return int(digits)

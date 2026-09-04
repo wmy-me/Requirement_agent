@@ -1,10 +1,11 @@
-"""Risk agent for quality, change, and technical impact evaluation."""
+"""对质量风险、变更风险和技术影响进行评估的风险 Agent。"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel
 
 from src.agents.extract_agent import ExtractedRequirement
+from src.skills.risk_skill import RiskSkill
 
 
 class RiskAssessment(BaseModel):
@@ -15,12 +16,21 @@ class RiskAssessment(BaseModel):
 
 
 class RiskAgent:
-    """Minimal risk classification aligned with the project design."""
+    """遵循项目设计的轻量风险评估 Agent。"""
+
+    def __init__(self, skill: RiskSkill | None = None) -> None:
+        self.skill = skill or RiskSkill()
 
     def assess(self, extracted: ExtractedRequirement) -> RiskAssessment:
-        quality_risk = self._evaluate_quality(extracted)
-        change_risk = self._evaluate_change(extracted)
-        technical_impact_risk = self._evaluate_technical(extracted)
+        if not self.skill.provider.is_configured():
+            return self._heuristic_assess(extracted)
+        return self.skill.assess(extracted)
+
+    @staticmethod
+    def _heuristic_assess(extracted: ExtractedRequirement) -> RiskAssessment:
+        quality_risk = RiskAgent()._evaluate_quality(extracted)
+        change_risk = RiskAgent()._evaluate_change(extracted)
+        technical_impact_risk = RiskAgent()._evaluate_technical(extracted)
         confidence = 0.8 if any(item in extracted.tags for item in ["登录", "权限", "支付", "审批"]) else 0.7
 
         return RiskAssessment(

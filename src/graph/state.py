@@ -1,4 +1,4 @@
-"""Graph state for the requirement workflow."""
+"""需求工作流的状态对象。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from uuid import uuid4
 
 @dataclass
 class RequirementGraphState:
-    """Mutable state carried through the LangGraph-style workflow."""
+    """在 LangGraph 风格工作流中流转的状态容器。"""
 
     trace_id: str = field(default_factory=lambda: uuid4().hex)
     source_text: str = ""

@@ -1,11 +1,11 @@
-"""Node functions for the requirement workflow graph."""
+"""需求工作流图中的节点函数。"""
 
 from __future__ import annotations
 
 from src.agents.analyze_agent import AnalyzeAgent
 from src.agents.extract_agent import ExtractAgent, ExtractedRequirement
+from src.agents.retrieval_agent import RetrievalAgent
 from src.agents.risk_agent import RiskAgent
-from src.application.retrieval_service import RetrievalService
 from src.graph.state import RequirementGraphState
 
 
@@ -24,8 +24,8 @@ def extract_requirement(state: RequirementGraphState) -> RequirementGraphState:
 
 
 def retrieval_candidates(state: RequirementGraphState) -> RequirementGraphState:
-    service = RetrievalService()
-    state.candidates = service.search(state.summary or state.source_text, limit=5)
+    agent = RetrievalAgent()
+    state.candidates = agent.retrieve(state.summary or state.source_text, limit=5)
     state.current_step = "analyze"
     return state
 
@@ -65,15 +65,33 @@ def assess_risk(state: RequirementGraphState) -> RequirementGraphState:
 
 
 def review_requirement(state: RequirementGraphState) -> RequirementGraphState:
+    analysis = state.analysis or {}
+    risk = state.risk or {}
+
     if state.review_decision is None:
-        state.review_decision = "approved" if not state.analysis.get("duplicate") else "needs_revision"
+        if analysis.get("duplicate") or analysis.get("conflict"):
+            state.review_decision = "needs_revision"
+        elif any(risk.get(key) == "high" for key in ["quality_risk", "change_risk", "technical_impact_risk"]):
+            state.review_decision = "needs_revision"
+        else:
+            state.review_decision = "approved"
+
     if state.review_decision == "needs_revision":
         state.status = "needs_revision"
+        state.review_comment = (
+            analysis.get("reasoning")
+            or "需求存在重复、冲突或较高风险，建议在提交前补充澄清与修正。"
+        )
+        state.current_step = "done"
     elif state.review_decision == "approved":
         state.status = "in_review"
+        state.review_comment = "审核通过，等待提交入库。"
+        state.current_step = "commit"
     else:
         state.status = "rejected"
-    state.current_step = "commit" if state.review_decision in {"approved", "needs_revision"} else "rejected"
+        state.review_comment = "需求已被拒绝，未进入提交流程。"
+        state.current_step = "rejected"
+
     return state
 
 

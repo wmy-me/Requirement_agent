@@ -1,4 +1,4 @@
-"""LangGraph-style orchestrator for requirement processing."""
+"""用于需求处理的 LangGraph 风格编排器。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from src.graph.state import RequirementGraphState
 
 
 class RequirementGraph:
-    """Simple orchestration runner that imitates a LangGraph workflow."""
+    """一个轻量的 LangGraph 风格执行器，用于串联需求处理节点。"""
 
     def __init__(self) -> None:
         self.nodes = {
@@ -44,23 +44,32 @@ class RequirementGraph:
         while next_step not in {"done", "rejected"}:
             if next_step == "extract":
                 state = self.nodes["extract"](state)
+                state.status = "extracting"
                 next_step = route_after_extract(state)
             elif next_step == "retrieve":
                 state = self.nodes["retrieve"](state)
+                state.status = "retrieving"
                 next_step = route_after_retrieval(state)
             elif next_step == "analyze":
                 state = self.nodes["analyze"](state)
+                state.status = "analyzing"
                 next_step = route_after_analysis(state)
             elif next_step == "risk":
                 state = self.nodes["risk"](state)
+                state.status = "assessing_risk"
                 next_step = route_after_risk(state)
             elif next_step == "review":
                 state = self.nodes["review"](state)
+                state.status = state.status or "in_review"
                 next_step = route_after_review(state)
             elif next_step == "commit":
                 state = self.nodes["commit"](state)
+                state.status = "committed"
                 next_step = "done"
             else:
                 break
+
+        if state.status in {"", "pending"}:
+            state.status = "done" if next_step == "done" else state.status
 
         return state

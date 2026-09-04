@@ -1,4 +1,4 @@
-"""Extract agent for converting raw requirement text into a structured model."""
+"""将原始需求文本转换为结构化模型的抽取 Agent。"""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.skills.extract_skill import ExtractSkill
+
 
 class ExtractedRequirement(BaseModel):
-    """Structured requirement payload produced from raw source text."""
+    """从原始需求文本中抽取出的结构化需求对象。"""
 
     requirement_title: str
     summary: str
@@ -22,7 +24,7 @@ class ExtractedRequirement(BaseModel):
 
 
 class ExtractAgent:
-    """Heuristic extraction agent used before persistence or review."""
+    """在持久化与评审前执行需求抽取的 Agent。"""
 
     _domain_keywords: dict[str, set[str]] = {
         "auth": {"登录", "认证", "权限", "账号", "验证码", "密码"},
@@ -32,8 +34,22 @@ class ExtractAgent:
         "workflow": {"审批", "流程", "任务", "状态", "通知"},
     }
 
+    def __init__(self, skill: ExtractSkill | None = None) -> None:
+        self.skill = skill or ExtractSkill()
+
     def extract(
         self,
+        raw_text: str,
+        *,
+        source_type: str = "web",
+        requester_name: str | None = None,
+    ) -> ExtractedRequirement:
+        if not self.skill.provider.is_configured():
+            return self._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
+        return self.skill.extract(raw_text, source_type=source_type, requester_name=requester_name)
+
+    @staticmethod
+    def _fallback_extract(
         raw_text: str,
         *,
         source_type: str = "web",
@@ -44,12 +60,12 @@ class ExtractAgent:
             cleaned = "新需求：补充需求说明。"
 
         lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-        title = self._extract_title(cleaned, lines)
-        summary = self._summarize(cleaned)
-        requirements = self._extract_requirements(lines)
-        domain = self._detect_domain(cleaned)
-        tags = self._extract_tags(cleaned, domain)
-        priority = self._detect_priority(cleaned)
+        title = ExtractAgent()._extract_title(cleaned, lines)
+        summary = ExtractAgent()._summarize(cleaned)
+        requirements = ExtractAgent()._extract_requirements(lines)
+        domain = ExtractAgent()._detect_domain(cleaned)
+        tags = ExtractAgent()._extract_tags(cleaned, domain)
+        priority = ExtractAgent()._detect_priority(cleaned)
 
         return ExtractedRequirement(
             requirement_title=title,

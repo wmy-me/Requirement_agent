@@ -1,4 +1,4 @@
-"""Application service for requirement lifecycle operations."""
+"""需求生命周期的应用服务。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.infrastructure.db.repositories import RequirementMasterRepository, Requ
 
 
 class RequirementService:
-    """Application use case boundary for requirement submission and query."""
+    """对需求提交、查询和结构化分析的应用层边界。"""
 
     def __init__(
         self,
@@ -33,10 +33,23 @@ class RequirementService:
             source_type=source.source_type,
             requester_name=source.requester_name,
         )
-        analysis = self.analyze_agent.analyze(extracted, [])
+
+        historical = []
+        for item in self.master_repo.list():
+            historical.append(
+                {
+                    "requirement_key": item.requirement_key,
+                    "requirement_name": item.requirement_name,
+                    "final_requirement": item.final_requirement,
+                    "status": item.status,
+                }
+            )
+
+        analysis = self.analyze_agent.analyze(extracted, historical)
         risk = self.risk_agent.assess(extracted)
+        requirement_key = self._next_requirement_key()
         requirement = RequirementMaster(
-            requirement_key="REQ-000001",
+            requirement_key=requirement_key,
             requirement_name=extracted.requirement_title,
             final_requirement=extracted.summary,
             current_version=1,
@@ -54,12 +67,21 @@ class RequirementService:
         }
 
     def list_requirements(self) -> list[dict[str, object]]:
+        rows = self.master_repo.list()
         return [
             {
-                "requirement_key": "REQ-000001",
-                "requirement_name": "用户登录",
-                "final_requirement": "支持邮箱和手机号登录，并支持验证码校验。",
-                "status": "active",
-                "business_domain": "auth",
+                "requirement_key": item.requirement_key,
+                "requirement_name": item.requirement_name,
+                "final_requirement": item.final_requirement,
+                "status": item.status,
+                "business_domain": "general",
             }
+            for item in rows
         ]
+
+    def _next_requirement_key(self) -> str:
+        existing = {item.requirement_key for item in self.master_repo.list()}
+        counter = 1
+        while f"REQ-{counter:06d}" in existing:
+            counter += 1
+        return f"REQ-{counter:06d}"

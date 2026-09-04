@@ -1,4 +1,4 @@
-"""Commit service for transactional requirement writes."""
+"""用于需求事务写入的提交服务。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from src.infrastructure.db.repositories import AuditRepository, RequirementMaste
 
 
 class CommitService:
-    """Coordinates transactional requirement creation and versioning."""
+    """协调需求创建、版本记录和审计日志的事务流程。"""
 
     def __init__(
         self,
