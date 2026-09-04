@@ -14,9 +14,9 @@ class LLMProvider:
 
     def __init__(self) -> None:
         self.provider_name = settings.llm_provider
-        self.api_key = settings.openai_api_key
-        self.base_url = settings.openai_base_url.rstrip("/")
-        self.model = settings.openai_model
+        self.api_key = settings.active_llm_api_key
+        self.base_url = settings.active_llm_base_url.rstrip("/")
+        self.model = settings.active_llm_model
         self.embedding_model = settings.embedding_model
 
     def is_configured(self) -> bool:
@@ -24,7 +24,7 @@ class LLMProvider:
 
     def generate(self, prompt: str, *, system_prompt: str | None = None) -> str:
         if not self.is_configured():
-            return "LLM is not configured. Set OPENAI_API_KEY and OPENAI_BASE_URL first."
+            return f"{self.provider_name} is not configured. Set API key and base URL first."
 
         payload: dict[str, Any] = {
             "model": self.model,

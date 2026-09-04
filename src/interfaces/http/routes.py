@@ -5,6 +5,7 @@ from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
 from src.domain.requirement import RequirementSource
 from src.infrastructure.db.session import check_database_connection
+from src.infrastructure.db.seed_data import seed_requirement_master
 from src.infrastructure.llm.openai_provider import LLMProvider
 from src.interfaces.http.schemas import RequirementSubmitRequest, RequirementSubmitResponse
 
@@ -35,6 +36,12 @@ async def database_health() -> dict[str, object]:
 async def llm_health() -> dict[str, object]:
     provider = LLMProvider()
     return {"configured": provider.is_configured(), "provider": provider.provider_name, "model": provider.model}
+
+
+@router.post("/api/v1/admin/seed")
+async def seed_demo_data() -> dict[str, object]:
+    inserted = seed_requirement_master()
+    return {"status": "ok", "inserted": inserted}
 
 
 @router.get("/api/v1/requirements")

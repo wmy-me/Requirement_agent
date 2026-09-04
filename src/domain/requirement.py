@@ -40,6 +40,7 @@ class RequirementMaster:
     current_version: int = 0
     status: str = "active"
     lock_version: int = 0
+    id: int | None = None
 
 
 @dataclass(slots=True)

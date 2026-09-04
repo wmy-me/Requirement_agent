@@ -20,10 +20,13 @@ class Settings(BaseSettings):
     minio_access_key: str = Field(default="minioadmin", alias="MINIO_ACCESS_KEY")
     minio_secret_key: str = Field(default="minioadmin", alias="MINIO_SECRET_KEY")
 
-    llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
+    llm_provider: str = Field(default="deepseek", alias="LLM_PROVIDER")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
+    deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
 
     model_config = SettingsConfigDict(
@@ -46,6 +49,24 @@ class Settings(BaseSettings):
             f"postgresql://{self.postgres_user}:{self.postgres_password}@"
             f"{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def active_llm_api_key(self) -> str:
+        if self.llm_provider.lower() == "deepseek":
+            return self.deepseek_api_key
+        return self.openai_api_key
+
+    @property
+    def active_llm_base_url(self) -> str:
+        if self.llm_provider.lower() == "deepseek":
+            return self.deepseek_base_url
+        return self.openai_base_url
+
+    @property
+    def active_llm_model(self) -> str:
+        if self.llm_provider.lower() == "deepseek":
+            return self.deepseek_model
+        return self.openai_model
 
 
 settings = Settings()

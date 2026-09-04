@@ -18,7 +18,10 @@ class EmbeddingService:
         if not text:
             return [0.0] * 1536
         if self.provider.is_configured():
-            return self.provider.embed(text)
+            try:
+                return self.provider.embed(text)
+            except Exception:
+                pass
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         values: list[float] = []
         for i in range(1536):

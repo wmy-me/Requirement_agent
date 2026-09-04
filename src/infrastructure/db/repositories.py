@@ -105,8 +105,11 @@ class RequirementMasterRepository:
                 },
             ).mappings().one()
             session.commit()
+            requirement_id = int(row["id"])
             requirement.current_version = int(row["current_version"])
             requirement.status = str(row["status"])
+            requirement.lock_version = int(row["lock_version"])
+            requirement.id = requirement_id
             return requirement
 
     def get_by_id(self, requirement_id: int) -> RequirementMaster | None:

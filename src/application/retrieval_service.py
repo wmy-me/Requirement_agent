@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from src.infrastructure.db.repositories import RequirementMasterRepository
 from src.infrastructure.embedding.embedding_service import EmbeddingService
 from src.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 
@@ -11,44 +12,15 @@ from src.infrastructure.vector.pgvector_repository import RequirementVectorRepos
 class RetrievalService:
     """Backs semantic and exact retrieval from requirement records."""
 
-    _catalog: list[dict[str, object]] = [
-        {
-            "requirement_key": "REQ-000001",
-            "requirement_name": "用户登录",
-            "summary": "支持邮箱和手机号登录，并支持验证码校验。",
-            "business_domain": "auth",
-            "status": "active",
-        },
-        {
-            "requirement_key": "REQ-000002",
-            "requirement_name": "角色权限管理",
-            "summary": "支持用户角色分配、菜单权限控制与审批授权。",
-            "business_domain": "auth",
-            "status": "active",
-        },
-        {
-            "requirement_key": "REQ-000003",
-            "requirement_name": "订单支付审批",
-            "summary": "订单支付需要审批流并支持退款审计。",
-            "business_domain": "workflow",
-            "status": "active",
-        },
-        {
-            "requirement_key": "REQ-000004",
-            "requirement_name": "报表导出",
-            "summary": "支持报表查询、导出和筛选条件保存。",
-            "business_domain": "report",
-            "status": "active",
-        },
-    ]
-
     def __init__(
         self,
         vector_repo: RequirementVectorRepository | None = None,
         embedding_service: EmbeddingService | None = None,
+        master_repo: RequirementMasterRepository | None = None,
     ) -> None:
         self.vector_repo = vector_repo or RequirementVectorRepository()
         self.embedding_service = embedding_service or EmbeddingService()
+        self.master_repo = master_repo or RequirementMasterRepository()
 
     def search(self, query: str, limit: int = 10, filters: Mapping[str, object] | None = None) -> list[dict[str, object]]:
         cleaned = (query or "").strip()
@@ -57,11 +29,11 @@ class RetrievalService:
 
         candidates: list[dict[str, object]] = []
         query_tokens = {token for token in cleaned.lower().split() if token}
-        for item in self._catalog:
+        for item in self.master_repo.list():
             if not self._matches_filters(item, filters):
                 continue
-            title = str(item.get("requirement_name", ""))
-            summary = str(item.get("summary", ""))
+            title = str(item.requirement_name)
+            summary = str(item.final_requirement)
             haystack = f"{title} {summary}".lower()
             score = 0.0
             for token in query_tokens:
@@ -73,12 +45,12 @@ class RetrievalService:
                 score += 0.2
             if score > 0:
                 candidates.append({
-                    "requirement_key": item.get("requirement_key"),
+                    "requirement_key": item.requirement_key,
                     "requirement_name": title,
                     "summary": summary,
                     "score": round(min(score, 1.0), 2),
-                    "business_domain": item.get("business_domain"),
-                    "status": item.get("status"),
+                    "business_domain": "general",
+                    "status": item.status,
                     "match_type": "keyword",
                 })
 
@@ -122,10 +94,10 @@ class RetrievalService:
             })
         return normalized[: max(1, min(limit, 10))]
 
-    def _matches_filters(self, item: Mapping[str, object], filters: Mapping[str, object] | None) -> bool:
+    def _matches_filters(self, item: object, filters: Mapping[str, object] | None) -> bool:
         if not filters:
             return True
         for key, value in filters.items():
-            if item.get(key) != value:
+            if getattr(item, key, None) != value:
                 return False
         return True
