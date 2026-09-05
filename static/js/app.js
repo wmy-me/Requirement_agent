@@ -5,11 +5,21 @@ const dbStatus = document.getElementById('db-status');
 const llmStatus = document.getElementById('llm-status');
 const searchInput = document.getElementById('search-input');
 const searchBtn = document.getElementById('search-btn');
+const apiTokenInput = document.getElementById('api-token');
 
 async function fetchJson(url, options = {}) {
+  const token = apiTokenInput?.value.trim() || sessionStorage.getItem('requirement-agent-api-token') || '';
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    sessionStorage.setItem('requirement-agent-api-token', token);
+  }
   const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
 
   if (!response.ok) {
@@ -30,18 +40,32 @@ function switchPanel(targetId) {
 }
 
 function renderRequirements(items) {
+  requirementsList.replaceChildren();
   if (!items || items.length === 0) {
-    requirementsList.innerHTML = '<div class="requirement-item">暂无需求记录</div>';
+    const empty = document.createElement('div');
+    empty.className = 'requirement-item';
+    empty.textContent = '暂无需求记录';
+    requirementsList.append(empty);
     return;
   }
 
-  requirementsList.innerHTML = items.map((item) => `
-    <div class="requirement-item">
-      <h3>${item.requirement_name || item.title || '未命名需求'}</h3>
-      <div class="requirement-meta">状态: ${item.status || 'pending'} · 关键字: ${item.requirement_key || 'N/A'}</div>
-      <div>${item.final_requirement || item.summary || item.description || '暂无描述'}</div>
-    </div>
-  `).join('');
+  items.forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'requirement-item';
+
+    const title = document.createElement('h3');
+    title.textContent = item.requirement_name || item.title || '未命名需求';
+
+    const meta = document.createElement('div');
+    meta.className = 'requirement-meta';
+    meta.textContent = `状态: ${item.status || 'pending'} · 关键字: ${item.requirement_key || 'N/A'}`;
+
+    const description = document.createElement('div');
+    description.textContent = item.final_requirement || item.summary || item.description || '暂无描述';
+
+    card.append(title, meta, description);
+    requirementsList.append(card);
+  });
 }
 
 async function loadRequirements(search = '') {
@@ -51,7 +75,11 @@ async function loadRequirements(search = '') {
     const items = payload.items || [];
     renderRequirements(items);
   } catch (error) {
-    requirementsList.innerHTML = `<div class="requirement-item">加载失败: ${error.message}</div>`;
+    requirementsList.replaceChildren();
+    const failure = document.createElement('div');
+    failure.className = 'requirement-item';
+    failure.textContent = `加载失败: ${error.message}`;
+    requirementsList.append(failure);
   }
 }
 

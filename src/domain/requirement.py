@@ -10,10 +10,12 @@ class RequirementSource:
 
     idempotency_key: str
     source_type: str
+    id: int | None = None
     requester_id: str | None = None
     requester_name: str | None = None
     original_text: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    processing_status: str = "received"
     submitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -48,12 +50,13 @@ class RequirementVersion:
     """需求变更时保留的版本快照及版本元数据。"""
 
     requirement_id: int
-    parent_version_id: int | None
     version_no: int
     version_title: str
     change_type: str
     requirement_snapshot: str
     change_summary: str
+    parent_version_id: int | None = None
+    id: int | None = None
     diff_payload: dict[str, object] = field(default_factory=dict)
     created_by: str = "system"
     reviewed_by: str = "system"

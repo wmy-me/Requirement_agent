@@ -9,7 +9,8 @@ class SearchRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
+    source_id: int = Field(gt=0)
     decision: str = Field(pattern="^(approved|rejected|returned)$")
-    reviewer_id: str
-    reviewer_name: str | None = None
-    comment: str | None = None
+    reviewer_name: str | None = Field(default=None, max_length=120)
+    comment: str | None = Field(default=None, max_length=5_000)
+    edited_requirement: str | None = Field(default=None, max_length=20_000)

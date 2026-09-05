@@ -21,13 +21,20 @@ for key in [
 
 
 async def main() -> None:
-    url = "http://localhost:8000/mcp"
+    url = os.getenv("MCP_URL", "http://localhost:8000/mcp")
+    token = os.getenv("MCP_AUTH_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("MCP_AUTH_TOKEN must be configured")
     print(f"连接 MCP 服务: {url}")
 
     def client_factory(**kwargs):
         return httpx.AsyncClient(trust_env=False, **kwargs)
 
-    async with streamablehttp_client(url, httpx_client_factory=client_factory) as (read, write, _):
+    async with streamablehttp_client(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        httpx_client_factory=client_factory,
+    ) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
 

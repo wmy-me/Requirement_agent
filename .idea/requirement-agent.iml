@@ -6,7 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/mcp_requirement_agent/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="~/Software/Requirement_agent/Requirement_agent/.venv" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="uv (Requirement_agent)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

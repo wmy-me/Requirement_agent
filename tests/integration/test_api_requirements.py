@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("API_AUTH_TOKEN", "test-api-token")
+
 from fastapi.testclient import TestClient
 
 from apps.api.main import app
@@ -6,9 +10,16 @@ from apps.api.main import app
 client = TestClient(app)
 
 
-def test_submit_requirement_api() -> None:
+API_HEADERS = {"Authorization": "Bearer test-api-token"}
+
+
+def test_submit_requirement_api(monkeypatch) -> None:
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings.api_auth_token, "_secret_value", "test-api-token")
     response = client.post(
         "/api/v1/requirements/submit",
+        headers=API_HEADERS,
         json={
             "source_type": "web",
             "requester_id": "u-001",
@@ -18,5 +29,5 @@ def test_submit_requirement_api() -> None:
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "accepted"
+    assert payload["status"] == "pending_review"
     assert payload["source_type"] == "web"

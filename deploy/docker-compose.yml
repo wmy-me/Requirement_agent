@@ -1,29 +1,145 @@
-version: "3.9"
-
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: requirement_agent
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python", "deploy/migrate.py"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-35-21Z
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      "until mc alias set local http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY}; do sleep 2; done;
+      mc mb --ignore-existing local/$${MINIO_BUCKET}"
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-requirement-attachments}
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8888"]
+    environment: &app-environment
+      APP_ENV: ${APP_ENV:-prod}
+      APP_PORT: 8888
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-requirement-attachments}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
+      API_ACTOR_ID: ${API_ACTOR_ID:-api-operator}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
+      MCP_ACTOR_ID: ${MCP_ACTOR_ID:-dify-mcp-client}
+      MCP_ISSUER_URL: ${MCP_ISSUER_URL:-http://localhost:8000}
+      MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-http://localhost:8000/mcp}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8888}:8888"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["uvicorn", "apps.mcp.server:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app-environment
+      APP_PORT: 8888
+      MCP_PORT: 8000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${MCP_BIND_ADDRESS:-127.0.0.1}:${MCP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   minio_data:
+
+networks:
+  backend:
+    driver: bridge

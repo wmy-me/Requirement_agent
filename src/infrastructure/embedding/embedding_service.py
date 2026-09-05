@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 
-from src.config.settings import settings
 from src.infrastructure.llm.openai_provider import LLMProvider
 
 
@@ -30,4 +29,4 @@ class EmbeddingService:
         return values
 
     def is_configured(self) -> bool:
-        return self.provider.is_configured() or bool(settings.openai_api_key)
+        return self.provider.is_configured()

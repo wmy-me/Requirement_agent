@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from src.domain.requirement import (
     AuditEvent,
@@ -19,8 +20,10 @@ from src.infrastructure.db.session import SessionLocal
 class RequirementSourceRepository:
     """原始需求来源的持久化边界。"""
 
-    def save(self, source: RequirementSource) -> RequirementSource:
-        with SessionLocal() as session:
+    def save(self, source: RequirementSource, session: Session | None = None) -> RequirementSource:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
             row = session.execute(
                 text(
                     """
@@ -39,7 +42,7 @@ class RequirementSourceRepository:
                         metadata = EXCLUDED.metadata,
                         updated_at = NOW()
                     RETURNING id, idempotency_key, source_type, requester_id, requester_name,
-                              original_text, metadata, submitted_at
+                              original_text, metadata, processing_status, submitted_at
                     """
                 ),
                 {
@@ -51,54 +54,107 @@ class RequirementSourceRepository:
                     "metadata": json.dumps(source.metadata or {}),
                 },
             ).mappings().one()
-            session.commit()
+            if owns_session:
+                session.commit()
+            source.id = int(row["id"])
             source.metadata = dict(row["metadata"] or {})
+            source.processing_status = str(row["processing_status"])
+            if owns_session:
+                session.close()
             return source
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
 
-    def get_by_id(self, source_id: int) -> RequirementSource | None:
-        with SessionLocal() as session:
-            row = session.execute(
+    def update_status(
+        self,
+        source_id: int,
+        processing_status: str,
+        *,
+        metadata: dict[str, object] | None = None,
+        session: Session | None = None,
+    ) -> None:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            values: dict[str, object] = {
+                "id": source_id,
+                "processing_status": processing_status,
+            }
+            metadata_clause = ""
+            if metadata is not None:
+                values["metadata"] = json.dumps(metadata)
+                metadata_clause = ", metadata = CAST(:metadata AS JSONB)"
+            session.execute(
                 text(
-                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, submitted_at FROM requirement_source WHERE id = :id"
+                    f"UPDATE requirement_source SET processing_status = :processing_status{metadata_clause}, updated_at = NOW() WHERE id = :id"
                 ),
-                {"id": source_id},
-            ).mappings().first()
+                values,
+            )
+            if owns_session:
+                session.commit()
+                session.close()
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
+
+    def get_by_id(self, source_id: int, session: Session | None = None) -> RequirementSource | None:
+        owns_session = session is None
+        session = session or SessionLocal()
+        row = session.execute(
+            text(
+                "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, processing_status, submitted_at FROM requirement_source WHERE id = :id"
+            ),
+            {"id": source_id},
+        ).mappings().first()
+        if owns_session:
+            session.close()
         if row is None:
             return None
         return RequirementSource(
+            id=int(row["id"]),
             idempotency_key=str(row["idempotency_key"]),
             source_type=str(row["source_type"]),
             requester_id=row["requester_id"],
             requester_name=row["requester_name"],
             original_text=row["original_text"],
             metadata=dict(row["metadata"] or {}),
+            processing_status=str(row["processing_status"]),
         )
 
     def get_by_idempotency_key(self, idempotency_key: str) -> RequirementSource | None:
         with SessionLocal() as session:
             row = session.execute(
                 text(
-                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, submitted_at FROM requirement_source WHERE idempotency_key = :key"
+                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, processing_status, submitted_at FROM requirement_source WHERE idempotency_key = :key"
                 ),
                 {"key": idempotency_key},
             ).mappings().first()
         if row is None:
             return None
         return RequirementSource(
+            id=int(row["id"]),
             idempotency_key=str(row["idempotency_key"]),
             source_type=str(row["source_type"]),
             requester_id=row["requester_id"],
             requester_name=row["requester_name"],
             original_text=row["original_text"],
             metadata=dict(row["metadata"] or {}),
+            processing_status=str(row["processing_status"]),
         )
 
 
 class RequirementMasterRepository:
     """规范化主需求的持久化边界。"""
 
-    def save(self, requirement: RequirementMaster) -> RequirementMaster:
-        with SessionLocal() as session:
+    def save(self, requirement: RequirementMaster, session: Session | None = None) -> RequirementMaster:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
             row = session.execute(
                 text(
                     """
@@ -123,13 +179,21 @@ class RequirementMasterRepository:
                     "lock_version": requirement.lock_version,
                 },
             ).mappings().one()
-            session.commit()
+            if owns_session:
+                session.commit()
             requirement_id = int(row["id"])
             requirement.current_version = int(row["current_version"])
             requirement.status = str(row["status"])
             requirement.lock_version = int(row["lock_version"])
             requirement.id = requirement_id
+            if owns_session:
+                session.close()
             return requirement
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
 
     def get_by_id(self, requirement_id: int) -> RequirementMaster | None:
         with SessionLocal() as session:
@@ -150,14 +214,33 @@ class RequirementMasterRepository:
             lock_version=int(row["lock_version"]),
         )
 
-    def get_by_key(self, requirement_key: str) -> RequirementMaster | None:
-        with SessionLocal() as session:
-            row = session.execute(
+    def allocate_key(self, session: Session | None = None) -> str:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            value = session.execute(text("SELECT nextval('requirement_key_seq')")).scalar_one()
+            key = f"REQ-{int(value):06d}"
+            if owns_session:
+                session.commit()
+                session.close()
+            return key
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
+
+    def get_by_key(self, requirement_key: str, session: Session | None = None) -> RequirementMaster | None:
+        owns_session = session is None
+        session = session or SessionLocal()
+        row = session.execute(
                 text(
                     "SELECT id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version FROM requirement_master WHERE requirement_key = :requirement_key"
                 ),
                 {"requirement_key": requirement_key},
             ).mappings().first()
+        if owns_session:
+            session.close()
         if row is None:
             return None
         return RequirementMaster(
@@ -219,8 +302,10 @@ class RequirementMasterRepository:
 class RequirementVersionRepository:
     """需求版本快照的持久化边界。"""
 
-    def save(self, version: RequirementVersion) -> RequirementVersion:
-        with SessionLocal() as session:
+    def save(self, version: RequirementVersion, session: Session | None = None) -> RequirementVersion:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
             row = session.execute(
                 text(
                     """
@@ -247,9 +332,41 @@ class RequirementVersionRepository:
                     "reviewed_by": version.reviewed_by,
                 },
             ).mappings().one()
-            session.commit()
+            if owns_session:
+                session.commit()
+            version.id = int(row["id"])
             version.requirement_id = int(row["requirement_id"])
+            if owns_session:
+                session.close()
             return version
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
+
+    def link_source(self, version_id: int, source_id: int, session: Session | None = None) -> None:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO requirement_version_source (version_id, source_id, relation_type)
+                    VALUES (:version_id, :source_id, 'source')
+                    ON CONFLICT DO NOTHING
+                    """
+                ),
+                {"version_id": version_id, "source_id": source_id},
+            )
+            if owns_session:
+                session.commit()
+                session.close()
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
 
     def list_by_requirement(self, requirement_id: int) -> list[RequirementVersion]:
         with SessionLocal() as session:
@@ -302,8 +419,10 @@ class RequirementVersionRepository:
 class RequirementReviewRepository:
     """人工审核决策的持久化边界。"""
 
-    def save(self, review: RequirementReview) -> RequirementReview:
-        with SessionLocal() as session:
+    def save(self, review: RequirementReview, session: Session | None = None) -> RequirementReview:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
             session.execute(
                 text(
                     """
@@ -326,15 +445,24 @@ class RequirementReviewRepository:
                     "edited_requirement": review.edited_requirement,
                 },
             )
-            session.commit()
-        return review
+            if owns_session:
+                session.commit()
+                session.close()
+            return review
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
 
 
 class AuditRepository:
     """Persistence boundary for audit event records."""
 
-    def record(self, event: AuditEvent) -> AuditEvent:
-        with SessionLocal() as session:
+    def record(self, event: AuditEvent, session: Session | None = None) -> AuditEvent:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
             session.execute(
                 text(
                     """
@@ -360,8 +488,15 @@ class AuditRepository:
                     "error_code": event.error_code,
                 },
             )
-            session.commit()
-        return event
+            if owns_session:
+                session.commit()
+                session.close()
+            return event
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
 
     def list(self) -> list[AuditEvent]:
         with SessionLocal() as session:

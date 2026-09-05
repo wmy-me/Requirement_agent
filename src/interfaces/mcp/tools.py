@@ -4,13 +4,25 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+
+from src.config.settings import settings
+from src.interfaces.mcp.auth import StaticTokenVerifier
 
 from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
 from src.infrastructure.db.repositories import RequirementMasterRepository
 
-mcp = FastMCP("requirement-agent")
+mcp = FastMCP(
+    "requirement-agent",
+    token_verifier=StaticTokenVerifier(),
+    auth=AuthSettings(
+        issuer_url=settings.mcp_issuer_url,
+        resource_server_url=settings.mcp_resource_url,
+        required_scopes=["mcp"],
+    ),
+)
 
 retrieval_service = RetrievalService()
 review_service = ReviewService()
@@ -34,7 +46,6 @@ def search_requirements(query: str, limit: int = 10) -> dict[str, Any]:
 def submit_review_decision(
     source_id: int,
     decision: str,
-    reviewer_id: str,
     reviewer_name: str | None = None,
     comment: str | None = None,
     edited_requirement: str | None = None,
@@ -43,7 +54,7 @@ def submit_review_decision(
     return review_service.submit_decision(
         source_id=source_id,
         decision=decision,
-        reviewer_id=reviewer_id,
+        reviewer_id=settings.mcp_actor_id,
         reviewer_name=reviewer_name,
         comment=comment,
         edited_requirement=edited_requirement,

@@ -1,13 +1,21 @@
 import asyncio
+import os
+
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 
 async def main():
-    url = "http://localhost:8000/mcp"
+    url = os.getenv("MCP_URL", "http://localhost:8000/mcp")
+    token = os.getenv("MCP_AUTH_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("MCP_AUTH_TOKEN must be configured")
     print(f"正在连接 MCP 服务: {url}")
     try:
-        async with streamablehttp_client(url) as (read, write, _):
+        async with streamablehttp_client(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await session.list_tools()
