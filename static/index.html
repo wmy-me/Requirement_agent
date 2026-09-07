@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Requirement Agent</title>
+    <title>Requirement Agent 工作台</title>
     <link rel="stylesheet" href="/static/css/styles.css" />
   </head>
   <body>
@@ -11,56 +11,204 @@
       <aside class="sidebar">
         <div class="brand">Requirement Agent</div>
         <nav>
-          <button class="nav active" data-target="submit-panel">提交需求</button>
-          <button class="nav" data-target="list-panel">需求列表</button>
+          <button class="nav active" data-target="agent-panel">需求助手</button>
+          <button class="nav" data-target="upload-panel">统一上传</button>
+          <button class="nav" data-target="review-panel">审核工作台</button>
+          <button class="nav" data-target="version-panel">回放与审计</button>
           <button class="nav" data-target="status-panel">系统状态</button>
         </nav>
       </aside>
 
       <main class="main-panel">
-        <section id="submit-panel" class="panel active">
-          <h1>需求提交流程</h1>
-          <label class="card">
-            API 访问令牌
-            <input id="api-token" type="password" autocomplete="off" placeholder="请输入部署时配置的 API_AUTH_TOKEN" />
-          </label>
-          <form id="submit-form" class="card form-card">
-            <div class="field-row">
+        <label class="card token-card">
+          API 访问令牌
+          <input id="api-token" type="password" autocomplete="off" placeholder="请输入 API_AUTH_TOKEN" />
+        </label>
+
+        <section id="agent-panel" class="panel active">
+          <h1>需求对话助手</h1>
+          <div class="card assistant-card">
+            <div class="assistant-header">
+              <div>
+                <h2>像聊天一样说需求</h2>
+                <p>你直接描述业务想法，助手会边理解边抽取标题、摘要、风险、相似需求，并支持一键提交审核。</p>
+              </div>
+              <button type="button" class="secondary" id="submit-requirement">提交最近识别需求</button>
+            </div>
+            <div id="chat-messages" class="chat-messages assistant-messages"></div>
+            <form id="chat-form" class="chat-form assistant-composer">
+              <div class="field-row compact-fields">
+                <label>
+                  来源
+                  <select id="agent-source-type">
+                    <option value="web">web</option>
+                    <option value="email">email</option>
+                    <option value="meeting">meeting</option>
+                    <option value="manual">manual</option>
+                  </select>
+                </label>
+                <label>
+                  申请人
+                  <input id="agent-requester-name" type="text" placeholder="例如：alice" />
+                </label>
+              </div>
+              <textarea
+                id="chat-input"
+                rows="5"
+                placeholder="直接说需求，例如：我们希望登录页支持短信验证码，用户输手机号后发送验证码，失败三次要限制重试，并记录审计日志。"
+              ></textarea>
+              <div class="actions">
+                <button type="submit" class="primary">发送并理解</button>
+                <button type="button" class="secondary" id="clear-chat">清空对话</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="upload-panel" class="panel">
+          <h1>企业统一上传</h1>
+          <div class="grid-two">
+            <form id="ingest-form" class="card form-card">
+              <h2>文本 / 文档 / 混合输入</h2>
+              <div class="field-row">
+                <label>
+                  来源渠道
+                  <select id="ingest-source-type">
+                    <option value="web">web</option>
+                    <option value="email">email</option>
+                    <option value="meeting">meeting</option>
+                    <option value="manual">manual</option>
+                  </select>
+                </label>
+                <label>
+                  来源事件 ID
+                  <input id="ingest-source-event-id" type="text" placeholder="邮件ID / 会议ID / 外部工单ID" />
+                </label>
+              </div>
+              <div class="field-row">
+                <label>
+                  申请人 ID
+                  <input id="ingest-requester-id" type="text" placeholder="例如：u-001" />
+                </label>
+                <label>
+                  申请人
+                  <input id="ingest-requester-name" type="text" placeholder="例如：alice" />
+                </label>
+              </div>
+              <div class="field-row">
+                <label>
+                  部门
+                  <input id="ingest-department" type="text" placeholder="例如：用户体验部" />
+                </label>
+                <label>
+                  业务域
+                  <input id="ingest-business-domain" type="text" placeholder="例如：auth / order / report" />
+                </label>
+                <label>
+                  敏感级别
+                  <select id="ingest-sensitivity-level">
+                    <option value="">未指定</option>
+                    <option value="public">public</option>
+                    <option value="internal">internal</option>
+                    <option value="confidential">confidential</option>
+                    <option value="restricted">restricted</option>
+                  </select>
+                </label>
+              </div>
               <label>
-                来源类型
-                <select id="source-type">
-                  <option value="web">web</option>
-                  <option value="email">email</option>
-                  <option value="meeting">meeting</option>
-                  <option value="manual">manual</option>
+                需求文本
+                <textarea id="ingest-original-text" rows="7" placeholder="可单独提交文本，也可与附件一起提交"></textarea>
+              </label>
+              <label>
+                附件
+                <input id="ingest-file" type="file" />
+              </label>
+              <button type="submit" class="primary">上传并进入审核</button>
+            </form>
+
+            <div class="card">
+              <div class="section-header">
+                <h2>上传结果</h2>
+                <button id="refresh-after-upload" class="secondary">刷新待审</button>
+              </div>
+              <div id="ingest-result" class="result-box hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="review-panel" class="panel">
+          <h1>审核工作台</h1>
+          <div class="grid-two">
+            <div class="card">
+              <div class="section-header">
+                <h2>待审核需求</h2>
+                <button id="load-pending-reviews" class="secondary">刷新</button>
+              </div>
+              <div id="pending-reviews" class="list-box"></div>
+            </div>
+
+            <form id="review-form" class="card form-card">
+              <h2>审核处理</h2>
+              <label>
+                Source ID
+                <input id="review-source-id" type="number" min="1" placeholder="点击左侧待审核项自动填充" />
+              </label>
+              <label>
+                审核决定
+                <select id="review-decision">
+                  <option value="approved">通过</option>
+                  <option value="returned">退回</option>
+                  <option value="rejected">拒绝</option>
                 </select>
               </label>
               <label>
-                申请人
-                <input id="requester-name" type="text" placeholder="例如：alice" />
+                审核意见
+                <textarea id="review-comment" rows="4" placeholder="填写审核意见"></textarea>
               </label>
+              <label>
+                编辑后的最终需求
+                <textarea id="review-edited-requirement" rows="5" placeholder="通过审核时可填写最终入库版本"></textarea>
+              </label>
+              <button type="submit" class="primary">提交审核</button>
+              <div id="review-result" class="result-box hidden"></div>
+            </form>
+          </div>
+          <div class="card trace-card">
+            <div class="section-header">
+              <h2>Source 回放</h2>
+              <div class="toolbar compact">
+                <input id="source-trace-id" type="number" min="1" placeholder="Source ID" />
+                <button id="load-source-trace" class="secondary">加载回放</button>
+              </div>
             </div>
-
-            <label>
-              需求原文
-              <textarea id="original-text" rows="8" placeholder="请输入需求描述，例如：用户登录需要支持手机号登录、短信验证码和权限校验。"></textarea>
-            </label>
-
-            <div class="actions">
-              <button type="submit" class="primary">提交需求</button>
-              <button type="button" class="secondary" id="load-list">刷新列表</button>
-            </div>
-          </form>
-          <div id="submit-result" class="result-box hidden"></div>
+            <div id="source-trace-result" class="result-box hidden"></div>
+          </div>
         </section>
 
-        <section id="list-panel" class="panel">
-          <h1>需求列表</h1>
-          <div class="toolbar">
-            <input id="search-input" type="text" placeholder="搜索关键字" />
-            <button id="search-btn" class="secondary">搜索</button>
+        <section id="version-panel" class="panel">
+          <h1>版本与审计</h1>
+          <div class="grid-two">
+            <div class="card">
+              <div class="section-header">
+                <h2>需求版本</h2>
+              </div>
+              <div class="toolbar">
+                <input id="version-key" type="text" placeholder="输入 requirement_key，例如 REQ-000001" />
+                <button id="load-versions" class="secondary">查询版本</button>
+                <button id="load-requirement-trace" class="secondary">追踪回放</button>
+              </div>
+              <div id="version-list" class="list-box"></div>
+              <div id="requirement-trace-result" class="result-box hidden"></div>
+            </div>
+
+            <div class="card">
+              <div class="section-header">
+                <h2>审计日志</h2>
+                <button id="load-audit-events" class="secondary">刷新</button>
+              </div>
+              <div id="audit-events" class="list-box"></div>
+            </div>
           </div>
-          <div id="requirements-list" class="list-box"></div>
         </section>
 
         <section id="status-panel" class="panel">

@@ -115,8 +115,10 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     event_type TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'sent', 'failed', 'completed')),
+        CHECK (status IN ('pending', 'processing', 'sent', 'failed', 'completed', 'dead_letter')),
     retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    locked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

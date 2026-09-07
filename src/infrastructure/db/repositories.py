@@ -28,37 +28,47 @@ class RequirementSourceRepository:
                 text(
                     """
                     INSERT INTO requirement_source (
-                        idempotency_key, source_type, requester_id, requester_name,
-                        original_text, metadata, submitted_at
+                        idempotency_key, source_type, source_event_id, requester_id, requester_name,
+                        original_text, extracted_text, original_payload, metadata, submitted_at
                     ) VALUES (
-                        :idempotency_key, :source_type, :requester_id, :requester_name,
-                        :original_text, :metadata, NOW()
+                        :idempotency_key, :source_type, :source_event_id, :requester_id, :requester_name,
+                        :original_text, :extracted_text, :original_payload, :metadata, NOW()
                     )
                     ON CONFLICT (idempotency_key) DO UPDATE SET
                         source_type = EXCLUDED.source_type,
+                        source_event_id = EXCLUDED.source_event_id,
                         requester_id = EXCLUDED.requester_id,
                         requester_name = EXCLUDED.requester_name,
                         original_text = EXCLUDED.original_text,
+                        extracted_text = EXCLUDED.extracted_text,
+                        original_payload = EXCLUDED.original_payload,
                         metadata = EXCLUDED.metadata,
                         updated_at = NOW()
-                    RETURNING id, idempotency_key, source_type, requester_id, requester_name,
-                              original_text, metadata, processing_status, submitted_at
+                    RETURNING id, idempotency_key, source_type, source_event_id, requester_id, requester_name,
+                              original_text, extracted_text, original_payload, metadata, processing_status, submitted_at
                     """
                 ),
                 {
                     "idempotency_key": source.idempotency_key,
                     "source_type": source.source_type,
+                    "source_event_id": source.source_event_id,
                     "requester_id": source.requester_id,
                     "requester_name": source.requester_name,
                     "original_text": source.original_text,
+                    "extracted_text": source.extracted_text,
+                    "original_payload": json.dumps(source.original_payload or {}),
                     "metadata": json.dumps(source.metadata or {}),
                 },
             ).mappings().one()
             if owns_session:
                 session.commit()
             source.id = int(row["id"])
+            source.source_event_id = row["source_event_id"]
+            source.extracted_text = row["extracted_text"]
+            source.original_payload = dict(row["original_payload"] or {})
             source.metadata = dict(row["metadata"] or {})
             source.processing_status = str(row["processing_status"])
+            source.submitted_at = row["submitted_at"]
             if owns_session:
                 session.close()
             return source
@@ -102,12 +112,51 @@ class RequirementSourceRepository:
                 session.close()
             raise
 
+    def update_extraction(
+        self,
+        source_id: int,
+        *,
+        extracted_text: str,
+        metadata: dict[str, object],
+        processing_status: str = "extracting",
+        session: Session | None = None,
+    ) -> None:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            session.execute(
+                text(
+                    """
+                    UPDATE requirement_source
+                    SET extracted_text = :extracted_text,
+                        metadata = CAST(:metadata AS JSONB),
+                        processing_status = :processing_status,
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": source_id,
+                    "extracted_text": extracted_text,
+                    "metadata": json.dumps(metadata),
+                    "processing_status": processing_status,
+                },
+            )
+            if owns_session:
+                session.commit()
+                session.close()
+        except Exception:
+            if owns_session:
+                session.rollback()
+                session.close()
+            raise
+
     def get_by_id(self, source_id: int, session: Session | None = None) -> RequirementSource | None:
         owns_session = session is None
         session = session or SessionLocal()
         row = session.execute(
             text(
-                "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, processing_status, submitted_at FROM requirement_source WHERE id = :id"
+                "SELECT id, idempotency_key, source_type, source_event_id, requester_id, requester_name, original_text, extracted_text, original_payload, metadata, processing_status, submitted_at FROM requirement_source WHERE id = :id"
             ),
             {"id": source_id},
         ).mappings().first()
@@ -122,15 +171,19 @@ class RequirementSourceRepository:
             requester_id=row["requester_id"],
             requester_name=row["requester_name"],
             original_text=row["original_text"],
+            extracted_text=row["extracted_text"],
+            source_event_id=row["source_event_id"],
+            original_payload=dict(row["original_payload"] or {}),
             metadata=dict(row["metadata"] or {}),
             processing_status=str(row["processing_status"]),
+            submitted_at=row["submitted_at"],
         )
 
     def get_by_idempotency_key(self, idempotency_key: str) -> RequirementSource | None:
         with SessionLocal() as session:
             row = session.execute(
                 text(
-                    "SELECT id, idempotency_key, source_type, requester_id, requester_name, original_text, metadata, processing_status, submitted_at FROM requirement_source WHERE idempotency_key = :key"
+                    "SELECT id, idempotency_key, source_type, source_event_id, requester_id, requester_name, original_text, extracted_text, original_payload, metadata, processing_status, submitted_at FROM requirement_source WHERE idempotency_key = :key"
                 ),
                 {"key": idempotency_key},
             ).mappings().first()
@@ -143,9 +196,130 @@ class RequirementSourceRepository:
             requester_id=row["requester_id"],
             requester_name=row["requester_name"],
             original_text=row["original_text"],
+            extracted_text=row["extracted_text"],
+            source_event_id=row["source_event_id"],
+            original_payload=dict(row["original_payload"] or {}),
             metadata=dict(row["metadata"] or {}),
             processing_status=str(row["processing_status"]),
+            submitted_at=row["submitted_at"],
         )
+
+    def list_by_status(self, processing_status: str, limit: int = 20) -> list[dict[str, object]]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, source_type, source_event_id, requester_id, requester_name,
+                           original_text, extracted_text, original_payload, metadata,
+                           processing_status, submitted_at, updated_at
+                    FROM requirement_source
+                    WHERE processing_status = :processing_status
+                    ORDER BY updated_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"processing_status": processing_status, "limit": limit},
+            ).mappings().all()
+        return [
+            {
+                "source_id": int(row["id"]),
+                "source_type": row["source_type"],
+                "source_event_id": row["source_event_id"],
+                "requester_id": row["requester_id"],
+                "requester_name": row["requester_name"],
+                "original_text": row["original_text"],
+                "extracted_text": row["extracted_text"],
+                "original_payload": dict(row["original_payload"] or {}),
+                "metadata": dict(row["metadata"] or {}),
+                "processing_status": row["processing_status"],
+                "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+            for row in rows
+        ]
+
+    def get_detail(self, source_id: int) -> dict[str, object] | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, source_type, source_event_id, requester_id, requester_name,
+                           original_text, extracted_text, original_payload, metadata,
+                           processing_status, submitted_at, updated_at
+                    FROM requirement_source
+                    WHERE id = :id
+                    """
+                ),
+                {"id": source_id},
+            ).mappings().first()
+        if row is None:
+            return None
+        return {
+            "source_id": int(row["id"]),
+            "source_type": row["source_type"],
+            "source_event_id": row["source_event_id"],
+            "requester_id": row["requester_id"],
+            "requester_name": row["requester_name"],
+            "original_text": row["original_text"],
+            "extracted_text": row["extracted_text"],
+            "original_payload": dict(row["original_payload"] or {}),
+            "metadata": dict(row["metadata"] or {}),
+            "processing_status": row["processing_status"],
+            "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+    def get_trace(self, source_id: int) -> dict[str, object] | None:
+        source = self.get_detail(source_id)
+        if source is None:
+            return None
+
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT m.id AS requirement_id, m.requirement_key, m.requirement_name,
+                           m.current_version, m.status AS requirement_status,
+                           v.id AS version_id, v.version_no, v.version_title,
+                           v.change_type, v.created_at AS version_created_at,
+                           vs.relation_type
+                    FROM requirement_version_source vs
+                    JOIN requirement_version v ON v.id = vs.version_id
+                    JOIN requirement_master m ON m.id = v.requirement_id
+                    WHERE vs.source_id = :source_id
+                    ORDER BY v.created_at DESC
+                    """
+                ),
+                {"source_id": source_id},
+            ).mappings().all()
+
+        source_metadata = dict(source.get("metadata") or {})
+        return {
+            "source": source,
+            "extraction": {
+                "extracted_text": source.get("extracted_text"),
+                "standardized_document": source_metadata.get("standardized_document") or {},
+                "structured_requirement": source_metadata.get("extracted") or {},
+                "analysis": source_metadata.get("analysis") or {},
+                "risk": source_metadata.get("risk") or {},
+            },
+            "mappings": [
+                {
+                    "requirement_id": int(row["requirement_id"]),
+                    "requirement_key": row["requirement_key"],
+                    "requirement_name": row["requirement_name"],
+                    "current_version": int(row["current_version"]),
+                    "requirement_status": row["requirement_status"],
+                    "version_id": int(row["version_id"]),
+                    "version_no": int(row["version_no"]),
+                    "version_title": row["version_title"],
+                    "change_type": row["change_type"],
+                    "relation_type": row["relation_type"],
+                    "version_created_at": row["version_created_at"].isoformat() if row["version_created_at"] else None,
+                }
+                for row in rows
+            ],
+        }
 
 
 class RequirementMasterRepository:
@@ -270,6 +444,64 @@ class RequirementMasterRepository:
                 lock_version=int(item["lock_version"]),
             )
             for item in rows
+        ]
+
+    def list_with_source_context(self, limit: int = 100) -> list[dict[str, object]]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT m.id, m.requirement_key, m.requirement_name, m.final_requirement,
+                           m.current_version, m.status, m.lock_version,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.source_type), NULL) AS source_types,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
+                               s.metadata->>'department',
+                               s.metadata #>> '{standardized_document,normalized_fields,department}'
+                           )), NULL) AS departments,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
+                               s.metadata->>'business_domain',
+                               s.metadata #>> '{standardized_document,normalized_fields,business_domain}',
+                               s.metadata #>> '{extracted,business_domain}'
+                           )), NULL) AS business_domains,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
+                               s.metadata->>'sensitivity_level',
+                               s.metadata #>> '{standardized_document,normalized_fields,sensitivity_level}'
+                           )), NULL) AS sensitivity_levels,
+                           MIN(s.submitted_at) AS first_source_submitted_at,
+                           MAX(s.submitted_at) AS latest_source_submitted_at
+                    FROM requirement_master m
+                    LEFT JOIN requirement_version v ON v.requirement_id = m.id
+                    LEFT JOIN requirement_version_source vs ON vs.version_id = v.id
+                    LEFT JOIN requirement_source s ON s.id = vs.source_id
+                    GROUP BY m.id, m.requirement_key, m.requirement_name, m.final_requirement,
+                             m.current_version, m.status, m.lock_version
+                    ORDER BY m.updated_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            ).mappings().all()
+        return [
+            {
+                "id": int(row["id"]),
+                "requirement_key": row["requirement_key"],
+                "requirement_name": row["requirement_name"],
+                "final_requirement": row["final_requirement"],
+                "current_version": int(row["current_version"]),
+                "status": row["status"],
+                "lock_version": int(row["lock_version"]),
+                "source_types": list(row["source_types"] or []),
+                "departments": list(row["departments"] or []),
+                "business_domains": list(row["business_domains"] or []),
+                "sensitivity_levels": list(row["sensitivity_levels"] or []),
+                "first_source_submitted_at": row["first_source_submitted_at"].isoformat()
+                if row["first_source_submitted_at"]
+                else None,
+                "latest_source_submitted_at": row["latest_source_submitted_at"].isoformat()
+                if row["latest_source_submitted_at"]
+                else None,
+            }
+            for row in rows
         ]
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, object]]:
@@ -415,6 +647,131 @@ class RequirementVersionRepository:
             reviewed_by=str(row["reviewed_by"]),
         )
 
+    def list_by_requirement_key(self, requirement_key: str) -> list[dict[str, object]]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT v.id, v.requirement_id, v.parent_version_id, v.version_no,
+                           v.version_title, v.change_type, v.requirement_snapshot,
+                           v.change_summary, v.diff_payload, v.created_by, v.reviewed_by,
+                           v.created_at
+                    FROM requirement_version v
+                    JOIN requirement_master m ON m.id = v.requirement_id
+                    WHERE m.requirement_key = :requirement_key
+                    ORDER BY v.version_no DESC
+                    """
+                ),
+                {"requirement_key": requirement_key},
+            ).mappings().all()
+        return [
+            {
+                "id": int(row["id"]),
+                "requirement_id": int(row["requirement_id"]),
+                "parent_version_id": row["parent_version_id"],
+                "version_no": int(row["version_no"]),
+                "version_title": row["version_title"],
+                "change_type": row["change_type"],
+                "requirement_snapshot": row["requirement_snapshot"],
+                "change_summary": row["change_summary"],
+                "diff_payload": dict(row["diff_payload"] or {}),
+                "created_by": row["created_by"],
+                "reviewed_by": row["reviewed_by"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
+        ]
+
+    def trace_by_requirement_key(self, requirement_key: str) -> dict[str, object] | None:
+        with SessionLocal() as session:
+            master = session.execute(
+                text(
+                    """
+                    SELECT id, requirement_key, requirement_name, final_requirement,
+                           current_version, status, lock_version, created_at, updated_at
+                    FROM requirement_master
+                    WHERE requirement_key = :requirement_key
+                    """
+                ),
+                {"requirement_key": requirement_key},
+            ).mappings().first()
+            if master is None:
+                return None
+
+            rows = session.execute(
+                text(
+                    """
+                    SELECT v.id AS version_id, v.version_no, v.version_title, v.change_type,
+                           v.requirement_snapshot, v.change_summary, v.diff_payload,
+                           v.created_by, v.reviewed_by, v.created_at AS version_created_at,
+                           s.id AS source_id, s.source_type, s.source_event_id,
+                           s.requester_id, s.requester_name, s.original_text,
+                           s.extracted_text, s.original_payload, s.metadata,
+                           s.processing_status, s.submitted_at, vs.relation_type
+                    FROM requirement_version v
+                    LEFT JOIN requirement_version_source vs ON vs.version_id = v.id
+                    LEFT JOIN requirement_source s ON s.id = vs.source_id
+                    WHERE v.requirement_id = :requirement_id
+                    ORDER BY v.version_no DESC, s.submitted_at DESC
+                    """
+                ),
+                {"requirement_id": int(master["id"])},
+            ).mappings().all()
+
+        versions_by_id: dict[int, dict[str, object]] = {}
+        for row in rows:
+            version_id = int(row["version_id"])
+            version = versions_by_id.setdefault(
+                version_id,
+                {
+                    "version_id": version_id,
+                    "version_no": int(row["version_no"]),
+                    "version_title": row["version_title"],
+                    "change_type": row["change_type"],
+                    "requirement_snapshot": row["requirement_snapshot"],
+                    "change_summary": row["change_summary"],
+                    "diff_payload": dict(row["diff_payload"] or {}),
+                    "created_by": row["created_by"],
+                    "reviewed_by": row["reviewed_by"],
+                    "created_at": row["version_created_at"].isoformat() if row["version_created_at"] else None,
+                    "sources": [],
+                },
+            )
+            if row["source_id"] is None:
+                continue
+            metadata = dict(row["metadata"] or {})
+            version["sources"].append(
+                {
+                    "source_id": int(row["source_id"]),
+                    "source_type": row["source_type"],
+                    "source_event_id": row["source_event_id"],
+                    "requester_id": row["requester_id"],
+                    "requester_name": row["requester_name"],
+                    "original_text": row["original_text"],
+                    "extracted_text": row["extracted_text"],
+                    "original_payload": dict(row["original_payload"] or {}),
+                    "structured_requirement": metadata.get("extracted") or {},
+                    "relation_type": row["relation_type"],
+                    "processing_status": row["processing_status"],
+                    "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                }
+            )
+
+        return {
+            "requirement": {
+                "id": int(master["id"]),
+                "requirement_key": master["requirement_key"],
+                "requirement_name": master["requirement_name"],
+                "final_requirement": master["final_requirement"],
+                "current_version": int(master["current_version"]),
+                "status": master["status"],
+                "lock_version": int(master["lock_version"]),
+                "created_at": master["created_at"].isoformat() if master["created_at"] else None,
+                "updated_at": master["updated_at"].isoformat() if master["updated_at"] else None,
+            },
+            "versions": list(versions_by_id.values()),
+        }
+
 
 class RequirementReviewRepository:
     """人工审核决策的持久化边界。"""
@@ -519,4 +876,35 @@ class AuditRepository:
                 error_code=item["error_code"],
             )
             for item in rows
+        ]
+
+    def list_dicts(self, limit: int = 50) -> list[dict[str, object]]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT trace_id, event_type, aggregate_type, aggregate_id, actor_type,
+                           actor_id, before_data, after_data, result_status, error_code, created_at
+                    FROM audit_event
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            ).mappings().all()
+        return [
+            {
+                "trace_id": row["trace_id"],
+                "event_type": row["event_type"],
+                "aggregate_type": row["aggregate_type"],
+                "aggregate_id": row["aggregate_id"],
+                "actor_type": row["actor_type"],
+                "actor_id": row["actor_id"],
+                "before_data": dict(row["before_data"] or {}),
+                "after_data": dict(row["after_data"] or {}),
+                "result_status": row["result_status"],
+                "error_code": row["error_code"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
         ]

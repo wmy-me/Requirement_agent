@@ -37,7 +37,15 @@ class FakeSourceRepo:
             requester_id="alice",
             requester_name="alice",
             original_text="用户登录需求",
-            metadata={"requirement_key": "REQ-000001"},
+            extracted_text="需求标题：短信登录\n\n用户登录需要支持短信验证码",
+            metadata={
+                "requirement_key": "REQ-000001",
+                "extracted": {
+                    "requirement_title": "短信登录",
+                    "summary": "用户登录需要支持短信验证码",
+                    "requirements": ["支持短信验证码登录", "记录验证码校验结果"],
+                },
+            },
             processing_status="pending_review",
         )
 
@@ -79,6 +87,7 @@ class FakeMasterRepo:
 class FakeVersionRepo:
     def __init__(self):
         self.version = None
+        self.links = []
 
     def save(self, version, session=None):
         self.version = version
@@ -87,6 +96,7 @@ class FakeVersionRepo:
         return version
 
     def link_source(self, version_id, source_id, session=None):
+        self.links.append((version_id, source_id))
         return None
 
 
@@ -99,6 +109,15 @@ class FakeAuditRepo:
         return event
 
 
+class FakeOutboxRepo:
+    def __init__(self):
+        self.events = []
+
+    def enqueue(self, **kwargs):
+        self.events.append(kwargs)
+        return kwargs
+
+
 class FailingAuditRepo(FakeAuditRepo):
     def record(self, event, session=None):
         raise RuntimeError("audit write failed")
@@ -106,12 +125,17 @@ class FailingAuditRepo(FakeAuditRepo):
 
 def test_review_service_approves_and_commits_version() -> None:
     session = FakeSession()
+    source_repo = FakeSourceRepo()
+    master_repo = FakeMasterRepo()
+    version_repo = FakeVersionRepo()
+    outbox_repo = FakeOutboxRepo()
     review_service = ReviewService(
         review_repo=FakeReviewRepo(),
-        source_repo=FakeSourceRepo(),
-        master_repo=FakeMasterRepo(),
-        version_repo=FakeVersionRepo(),
+        source_repo=source_repo,
+        master_repo=master_repo,
+        version_repo=version_repo,
         audit_repo=FakeAuditRepo(),
+        outbox_repo=outbox_repo,
         session_factory=lambda: session,
     )
 
@@ -129,9 +153,50 @@ def test_review_service_approves_and_commits_version() -> None:
     assert result["status"] == "recorded"
     assert result["requirement_key"] == "REQ-000001"
     assert result["version_no"] == 1
+    assert version_repo.version.requirement_snapshot == "新增手机号登录与短信验证码认证能力"
+    assert version_repo.version.diff_payload["source_id"] == 1
+    assert version_repo.links == [(1, 1)]
+    assert source_repo.source.metadata["trace"] == {
+        "source_id": 1,
+        "requirement_key": "REQ-000001",
+        "version_id": 1,
+        "version_no": 1,
+        "relation_type": "source",
+    }
+    assert outbox_repo.events[0]["event_type"] == "embedding_sync"
+    assert outbox_repo.events[0]["payload"]["requirement_id"] == 1
+    assert outbox_repo.events[0]["payload"]["content"] == "新增手机号登录与短信验证码认证能力"
     assert session.commits == 1
     assert session.rollbacks == 0
     assert session.closed is True
+
+
+def test_review_service_uses_structured_extraction_without_manual_edit() -> None:
+    session = FakeSession()
+    master_repo = FakeMasterRepo()
+    master_repo.master = None
+    version_repo = FakeVersionRepo()
+    outbox_repo = FakeOutboxRepo()
+    review_service = ReviewService(
+        review_repo=FakeReviewRepo(),
+        source_repo=FakeSourceRepo(),
+        master_repo=master_repo,
+        version_repo=version_repo,
+        audit_repo=FakeAuditRepo(),
+        outbox_repo=outbox_repo,
+        session_factory=lambda: session,
+    )
+
+    result = review_service.submit_decision(
+        source_id=1,
+        decision="approved",
+        reviewer_id="manager",
+    )
+
+    assert result["requirement_key"] == "REQ-000002"
+    assert master_repo.master.requirement_name == "短信登录"
+    assert version_repo.version.requirement_snapshot == "支持短信验证码登录\n记录验证码校验结果"
+    assert outbox_repo.events[0]["aggregate_id"] == "REQ-000002"
 
 
 def test_review_service_rolls_back_when_audit_write_fails() -> None:
@@ -142,6 +207,7 @@ def test_review_service_rolls_back_when_audit_write_fails() -> None:
         master_repo=FakeMasterRepo(),
         version_repo=FakeVersionRepo(),
         audit_repo=FailingAuditRepo(),
+        outbox_repo=FakeOutboxRepo(),
         session_factory=lambda: session,
     )
 

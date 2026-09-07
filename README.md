@@ -195,7 +195,6 @@ Requirement_agent/
 ├── docx/
 ├── static/
 ├── .env
-├── .env.example
 ├── main.py
 ├── pyproject.toml
 ├── README.md

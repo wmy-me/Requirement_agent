@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 
 from src.infrastructure.db.repositories import RequirementMasterRepository
 from src.infrastructure.embedding.embedding_service import EmbeddingService
@@ -30,11 +31,11 @@ class RetrievalService:
         candidates: list[dict[str, object]] = []
         query_tokens = [token for token in cleaned.lower().split() if token]
         phrase = cleaned.lower()
-        for item in self.master_repo.list():
+        for item in self.master_repo.list_with_source_context():
             if not self._matches_filters(item, filters):
                 continue
-            title = str(item.requirement_name)
-            summary = str(item.final_requirement)
+            title = str(item["requirement_name"])
+            summary = str(item["final_requirement"])
             haystack = f"{title} {summary}".lower()
             matched_tokens = 0
             score = 0.0
@@ -52,20 +53,23 @@ class RetrievalService:
                 score += 0.2
             if title.lower().startswith(cleaned.lower()[:4]):
                 score += 0.15
-            if self._is_user_submitted_requirement(item.requirement_key):
+            if self._is_user_submitted_requirement(str(item["requirement_key"])):
                 score += 0.35
             if score > 0:
                 candidates.append({
-                    "requirement_key": item.requirement_key,
+                    "requirement_key": item["requirement_key"],
                     "requirement_name": title,
                     "summary": summary,
                     "score": round(min(score, 1.0), 2),
-                    "business_domain": "general",
-                    "status": item.status,
+                    "business_domain": self._first_value(item.get("business_domains"), "general"),
+                    "status": item["status"],
                     "match_type": "keyword",
+                    "source_types": item.get("source_types", []),
+                    "departments": item.get("departments", []),
+                    "sensitivity_levels": item.get("sensitivity_levels", []),
                 })
 
-        vector_results = self.search_by_vector(cleaned, limit=limit)
+        vector_results = self.search_by_vector(cleaned, limit=limit, filters=filters)
         for row in vector_results:
             key = str(row.get("requirement_key") or "")
             if not any(item["requirement_key"] == key for item in candidates):
@@ -77,6 +81,9 @@ class RetrievalService:
                     "business_domain": row.get("business_domain", "general"),
                     "status": row.get("status", "active"),
                     "match_type": "vector",
+                    "source_types": row.get("source_types", []),
+                    "departments": row.get("departments", []),
+                    "sensitivity_levels": row.get("sensitivity_levels", []),
                 })
 
         ranked = sorted(
@@ -97,9 +104,14 @@ class RetrievalService:
             deduped.append(item)
         return deduped[: max(1, min(limit, 20))]
 
-    def search_by_vector(self, query: str, limit: int = 10) -> list[dict[str, object]]:
+    def search_by_vector(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
         vector = self.embedding_service.embed(query)
-        results = self.vector_repo.search(vector, limit=limit)
+        results = self.vector_repo.search(vector, limit=limit, filters=filters)
         normalized: list[dict[str, object]] = []
         for row in results:
             normalized.append({
@@ -107,18 +119,51 @@ class RetrievalService:
                 "title": row.get("title", "相关需求"),
                 "summary": row.get("summary", ""),
                 "score": float(row.get("score", 0.0)),
-                "business_domain": "general",
+                "business_domain": row.get("business_domain", "general"),
                 "status": row.get("status", "active"),
+                "source_types": row.get("source_types", []),
+                "departments": row.get("departments", []),
+                "sensitivity_levels": row.get("sensitivity_levels", []),
             })
         return normalized[: max(1, min(limit, 10))]
 
     def _matches_filters(self, item: object, filters: Mapping[str, object] | None) -> bool:
         if not filters:
             return True
-        for key, value in filters.items():
-            if getattr(item, key, None) != value:
+        normalized = {key: value for key, value in filters.items() if value not in (None, "")}
+        if not normalized:
+            return True
+
+        checks = {
+            "channel": item.get("source_types", []) if isinstance(item, dict) else [],
+            "source_type": item.get("source_types", []) if isinstance(item, dict) else [],
+            "department": item.get("departments", []) if isinstance(item, dict) else [],
+            "business_domain": item.get("business_domains", []) if isinstance(item, dict) else [],
+            "sensitivity_level": item.get("sensitivity_levels", []) if isinstance(item, dict) else [],
+        }
+        for key, candidates in checks.items():
+            expected = normalized.get(key)
+            if expected and str(expected) not in {str(candidate) for candidate in candidates}:
                 return False
+
+        submitted_from = normalized.get("submitted_from")
+        submitted_to = normalized.get("submitted_to")
+        latest_submitted = item.get("latest_source_submitted_at") if isinstance(item, dict) else None
+        if latest_submitted and submitted_from and self._parse_time(str(latest_submitted)) < self._parse_time(str(submitted_from)):
+            return False
+        if latest_submitted and submitted_to and self._parse_time(str(latest_submitted)) > self._parse_time(str(submitted_to)):
+            return False
         return True
+
+    @staticmethod
+    def _first_value(values: object, default: str) -> str:
+        if isinstance(values, list) and values:
+            return str(values[0])
+        return default
+
+    @staticmethod
+    def _parse_time(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
     @staticmethod
     def _is_user_submitted_requirement(requirement_key: str) -> bool:

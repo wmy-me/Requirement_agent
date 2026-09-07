@@ -14,6 +14,9 @@ class RequirementSource:
     requester_id: str | None = None
     requester_name: str | None = None
     original_text: str | None = None
+    extracted_text: str | None = None
+    source_event_id: str | None = None
+    original_payload: dict[str, object] = field(default_factory=dict)
     metadata: dict[str, object] = field(default_factory=dict)
     processing_status: str = "received"
     submitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
