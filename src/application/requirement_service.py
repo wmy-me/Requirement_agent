@@ -6,6 +6,7 @@ from src.agents.analyze_agent import AnalyzeAgent
 from src.agents.extract_agent import ExtractAgent
 from src.agents.risk_agent import RiskAgent
 from src.domain.requirement import RequirementSource
+from src.graph.graphs import run_analysis
 from src.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
 from src.infrastructure.parser.document_parser import DocumentParser
 
@@ -61,33 +62,26 @@ class RequirementService:
             metadata=metadata,
         )
 
-        extracted = self.extract_agent.extract(
-            standardized_text,
-            source_type=source.source_type,
-            requester_name=source.requester_name,
+        # —— Agent 编排统一走 LangGraph 分析图（抽取→检索→冲突分析→风险→决策）——
+        result = run_analysis(
+            source_id=saved_source.id,
+            source_text=standardized_text,
+            source_type=saved_source.source_type,
+            requester_name=saved_source.requester_name,
         )
+        extracted = dict(result.get("extracted") or {})
+        analysis = dict(result.get("analysis") or {})
+        risk = dict(result.get("risk") or {})
+        candidates = result.get("candidates") or []
 
-        historical = []
-        for item in self.master_repo.list():
-            historical.append(
-                {
-                    "requirement_key": item.requirement_key,
-                    "requirement_name": item.requirement_name,
-                    "final_requirement": item.final_requirement,
-                    "status": item.status,
-                }
-            )
-
-        analysis = self.analyze_agent.analyze(extracted, historical)
-        risk = self.risk_agent.assess(extracted)
         normalized_fields = dict(metadata["standardized_document"].get("normalized_fields") or {})
         for key in ("department", "business_domain", "sensitivity_level"):
             if normalized_fields.get(key) and not metadata.get(key):
                 metadata[key] = normalized_fields[key]
-        metadata.setdefault("business_domain", extracted.business_domain)
-        metadata["analysis"] = analysis.model_dump(mode="python")
-        metadata["risk"] = risk.model_dump(mode="python")
-        metadata["extracted"] = extracted.model_dump(mode="python")
+        metadata.setdefault("business_domain", extracted.get("business_domain", "general"))
+        metadata["analysis"] = analysis
+        metadata["risk"] = risk
+        metadata["extracted"] = extracted
         metadata["retrieval_filters"] = {
             "channel": saved_source.source_type,
             "department": metadata.get("department"),
@@ -101,8 +95,10 @@ class RequirementService:
             "idempotency_key": saved_source.idempotency_key,
             "source_type": saved_source.source_type,
             "status": "pending_review",
-            "analysis": analysis.model_dump(mode="python"),
-            "risk": risk.model_dump(mode="python"),
+            "analysis": analysis,
+            "risk": risk,
+            "candidates": candidates,
+            "next_action": result.get("decision") or result.get("next_action"),
         }
 
     def list_requirements(self) -> list[dict[str, object]]:

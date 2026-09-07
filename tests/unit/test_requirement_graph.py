@@ -1,46 +1,110 @@
 from src.agents.analyze_agent import AnalysisResult
+from src.agents.extract_agent import ExtractedRequirement
 from src.agents.risk_agent import RiskAssessment
-from src.graph.requirement_graph import RequirementGraph
+from src.graph import run_analysis
 
 
-def test_requirement_graph_commits() -> None:
-    graph = RequirementGraph()
-    state = graph.run({
-        "source_text": "用户登录需要支持手机号登录、短信验证码和权限校验。",
-        "source_type": "web",
-        "requester_name": "alice",
-    })
-    assert state.status == "committed"
-    assert state.requirement_key
+def _extracted(**overrides):
+    base = dict(
+        requirement_title="登录增强",
+        summary="支持短信验证码登录",
+        requester_name=None,
+        source_type="web",
+        business_domain="auth",
+        priority="medium",
+        tags=["登录"],
+        requirements=["短信验证码登录", "记录审计"],
+        raw_text="支持短信验证码登录并记录审计。",
+    )
+    base.update(overrides)
+    return ExtractedRequirement(**base)
 
 
-def test_requirement_graph_routes_to_review_when_duplicate_detected(monkeypatch) -> None:
-    def fake_analyze(self, extracted, historical_requirements=None):
-        return AnalysisResult(
+def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.agents.extract_agent.ExtractAgent.extract",
+        lambda self, raw_text, **kw: _extracted(),
+    )
+    monkeypatch.setattr(
+        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        lambda self, query, limit=5: [],
+    )
+    monkeypatch.setattr(
+        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        lambda self, extracted, historical=None: AnalysisResult(independent=True),
+    )
+    monkeypatch.setattr(
+        "src.agents.risk_agent.RiskAgent.assess",
+        lambda self, extracted: RiskAssessment(change_risk="medium"),
+    )
+
+    state = run_analysis(
+        source_text="支持短信验证码登录。",
+        source_type="web",
+        requester_name="alice",
+    )
+
+    assert state["decision"] == "can_commit"
+    assert state["next_action"] == "can_commit"
+    # 风险恒在决策前已算
+    assert state["risk"]["change_risk"] == "medium"
+    # 完整字段透传，未降级
+    assert state["extracted"]["business_domain"] == "auth"
+    assert state["extracted"]["requirements"] == ["短信验证码登录", "记录审计"]
+
+
+def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.agents.extract_agent.ExtractAgent.extract",
+        lambda self, raw_text, **kw: _extracted(),
+    )
+    monkeypatch.setattr(
+        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        lambda self, query, limit=5: [{"requirement_key": "REQ-000001", "requirement_name": "短信登录"}],
+    )
+    monkeypatch.setattr(
+        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        lambda self, extracted, historical=None: AnalysisResult(
             duplicate=True,
-            related=False,
+            related=True,
             conflict=False,
             independent=False,
-            reasoning="需求与历史记录高度相似，建议修订。",
+            reasoning="与 REQ-000001 高度相似。",
             candidates=[],
-        )
+        ),
+    )
+    monkeypatch.setattr(
+        "src.agents.risk_agent.RiskAgent.assess",
+        lambda self, extracted: RiskAssessment(change_risk="high"),
+    )
 
-    def fake_assess(self, extracted):
-        return RiskAssessment(
-            quality_risk="low",
-            change_risk="low",
-            technical_impact_risk="low",
-            confidence=0.9,
-        )
+    state = run_analysis(source_text="支持短信验证码登录。")
 
-    monkeypatch.setattr("src.agents.analyze_agent.AnalyzeAgent.analyze", fake_analyze)
-    monkeypatch.setattr("src.agents.risk_agent.RiskAgent.assess", fake_assess)
+    assert state["decision"] == "manual_review"
+    # 命中 duplicate → 人工审核，且 risk 也被评估（不再是空 dict）
+    assert state["risk"]["change_risk"] == "high"
+    assert state["candidates"]
 
-    state = RequirementGraph().run({
-        "source_text": "用户登录需要支持手机号登录。",
-        "source_type": "web",
-        "requester_name": "bob",
-    })
 
-    assert state.status == "needs_revision"
-    assert state.review_decision == "needs_revision"
+def test_analysis_graph_high_risk_triggers_manual_review(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.agents.extract_agent.ExtractAgent.extract",
+        lambda self, raw_text, **kw: _extracted(),
+    )
+    monkeypatch.setattr(
+        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        lambda self, query, limit=5: [],
+    )
+    monkeypatch.setattr(
+        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        lambda self, extracted, historical=None: AnalysisResult(independent=True),
+    )
+    monkeypatch.setattr(
+        "src.agents.risk_agent.RiskAgent.assess",
+        lambda self, extracted: RiskAssessment(technical_impact_risk="high"),
+    )
+
+    state = run_analysis(source_text="对账系统变更，影响资金结算。")
+
+    assert state["decision"] == "manual_review"
+    assert state["risk"]["technical_impact_risk"] == "high"

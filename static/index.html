@@ -3,230 +3,98 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Requirement Agent 工作台</title>
+    <title>需求治理 Agent · 对话式工作台</title>
     <link rel="stylesheet" href="/static/css/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">Requirement Agent</div>
-        <nav>
-          <button class="nav active" data-target="agent-panel">需求助手</button>
-          <button class="nav" data-target="upload-panel">统一上传</button>
-          <button class="nav" data-target="review-panel">审核工作台</button>
-          <button class="nav" data-target="version-panel">回放与审计</button>
-          <button class="nav" data-target="status-panel">系统状态</button>
-        </nav>
-      </aside>
+    <div id="app">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-logo">✦</span>
+          <div class="brand-text">
+            <strong>需求治理 Agent</strong>
+            <span class="brand-sub">对话式需求工作台</span>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <span id="model-chip" class="model-chip" title="当前 LLM 模型">模型加载中…</span>
+          <span id="db-pill" class="pill"><span class="dot"></span>DB</span>
+          <span id="llm-pill" class="pill"><span class="dot"></span>LLM</span>
+          <button id="toggle-left" class="icon-btn active" title="收起 / 展开会话栏" type="button">☰</button>
+          <button id="toggle-right" class="icon-btn active" title="收起 / 展开工作台" type="button">▤</button>
+        </div>
+      </header>
 
-      <main class="main-panel">
-        <label class="card token-card">
-          API 访问令牌
-          <input id="api-token" type="password" autocomplete="off" placeholder="请输入 API_AUTH_TOKEN" />
-        </label>
+      <div class="workspace">
+        <!-- Left: recent conversations -->
+        <aside id="rail-sessions" class="rail rail-sessions">
+          <button id="new-chat" class="new-chat" type="button">＋ 新建对话</button>
+          <div class="rail-label">最近会话</div>
+          <ul id="session-list" class="session-list"></ul>
+        </aside>
 
-        <section id="agent-panel" class="panel active">
-          <h1>需求对话助手</h1>
-          <div class="card assistant-card">
-            <div class="assistant-header">
-              <div>
-                <h2>像聊天一样说需求</h2>
-                <p>你直接描述业务想法，助手会边理解边抽取标题、摘要、风险、相似需求，并支持一键提交审核。</p>
-              </div>
-              <button type="button" class="secondary" id="submit-requirement">提交最近识别需求</button>
-            </div>
-            <div id="chat-messages" class="chat-messages assistant-messages"></div>
-            <form id="chat-form" class="chat-form assistant-composer">
-              <div class="field-row compact-fields">
-                <label>
-                  来源
-                  <select id="agent-source-type">
-                    <option value="web">web</option>
-                    <option value="email">email</option>
-                    <option value="meeting">meeting</option>
-                    <option value="manual">manual</option>
-                  </select>
-                </label>
-                <label>
-                  申请人
-                  <input id="agent-requester-name" type="text" placeholder="例如：alice" />
-                </label>
-              </div>
-              <textarea
-                id="chat-input"
-                rows="5"
-                placeholder="直接说需求，例如：我们希望登录页支持短信验证码，用户输手机号后发送验证码，失败三次要限制重试，并记录审计日志。"
-              ></textarea>
-              <div class="actions">
-                <button type="submit" class="primary">发送并理解</button>
-                <button type="button" class="secondary" id="clear-chat">清空对话</button>
-              </div>
+        <!-- Center: chat -->
+        <main id="chat-pane" class="chat-pane">
+          <div id="messages" class="messages"></div>
+
+          <div class="composer-wrap">
+            <form id="composer" class="composer" autocomplete="off">
+              <input id="file-input" type="file" hidden accept=".pdf,.doc,.docx,.txt,.md" />
+              <button type="button" id="attach-btn" class="composer-btn" title="上传需求文档（pdf/word/txt）">📎</button>
+              <textarea id="input" rows="1" placeholder="说出你的业务需求，例如：希望登录页支持手机号 + 短信验证码，连续输错三次需锁定并记录审计日志…"></textarea>
+              <button type="submit" id="send-btn" class="send-btn" title="发送" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+              </button>
             </form>
+            <div class="composer-hint">Enter 发送 · Shift + Enter 换行 · 可直接上传需求文档</div>
           </div>
-        </section>
+        </main>
 
-        <section id="upload-panel" class="panel">
-          <h1>企业统一上传</h1>
-          <div class="grid-two">
-            <form id="ingest-form" class="card form-card">
-              <h2>文本 / 文档 / 混合输入</h2>
-              <div class="field-row">
-                <label>
-                  来源渠道
-                  <select id="ingest-source-type">
-                    <option value="web">web</option>
-                    <option value="email">email</option>
-                    <option value="meeting">meeting</option>
-                    <option value="manual">manual</option>
-                  </select>
-                </label>
-                <label>
-                  来源事件 ID
-                  <input id="ingest-source-event-id" type="text" placeholder="邮件ID / 会议ID / 外部工单ID" />
-                </label>
-              </div>
-              <div class="field-row">
-                <label>
-                  申请人 ID
-                  <input id="ingest-requester-id" type="text" placeholder="例如：u-001" />
-                </label>
-                <label>
-                  申请人
-                  <input id="ingest-requester-name" type="text" placeholder="例如：alice" />
-                </label>
-              </div>
-              <div class="field-row">
-                <label>
-                  部门
-                  <input id="ingest-department" type="text" placeholder="例如：用户体验部" />
-                </label>
-                <label>
-                  业务域
-                  <input id="ingest-business-domain" type="text" placeholder="例如：auth / order / report" />
-                </label>
-                <label>
-                  敏感级别
-                  <select id="ingest-sensitivity-level">
-                    <option value="">未指定</option>
-                    <option value="public">public</option>
-                    <option value="internal">internal</option>
-                    <option value="confidential">confidential</option>
-                    <option value="restricted">restricted</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                需求文本
-                <textarea id="ingest-original-text" rows="7" placeholder="可单独提交文本，也可与附件一起提交"></textarea>
-              </label>
-              <label>
-                附件
-                <input id="ingest-file" type="file" />
-              </label>
-              <button type="submit" class="primary">上传并进入审核</button>
+        <!-- Right: workbench rail -->
+        <aside id="rail-workbench" class="rail rail-workbench">
+          <div class="wb-tabs">
+            <button class="wb-tab active" data-tab="pending" type="button">待办<span id="pending-count" class="count-badge hidden">0</span></button>
+            <button class="wb-tab" data-tab="library" type="button">需求库</button>
+            <button class="wb-tab" data-tab="audit" type="button">审计</button>
+          </div>
+
+          <section id="tab-pending" class="wb-pane active">
+            <div class="pane-toolbar">
+              <span>待审核需求</span>
+              <button id="refresh-pending" class="link-btn" type="button">刷新</button>
+            </div>
+            <div id="pending-list" class="item-scroll"></div>
+          </section>
+
+          <section id="tab-library" class="wb-pane">
+            <form id="lib-search" class="lib-search">
+              <input id="lib-q" placeholder="检索存量需求…" />
+              <button class="link-btn" type="submit">搜索</button>
             </form>
+            <div class="pane-toolbar">
+              <span>需求库</span>
+              <button id="lib-all" class="link-btn" type="button">显示全部</button>
+            </div>
+            <div id="library-list" class="item-scroll"></div>
+            <div id="lib-detail" class="lib-detail hidden"></div>
+          </section>
 
-            <div class="card">
-              <div class="section-header">
-                <h2>上传结果</h2>
-                <button id="refresh-after-upload" class="secondary">刷新待审</button>
-              </div>
-              <div id="ingest-result" class="result-box hidden"></div>
+          <section id="tab-audit" class="wb-pane">
+            <div class="audit-status">
+              <span id="audit-model" class="status-tag active">模型加载中…</span>
             </div>
-          </div>
-        </section>
-
-        <section id="review-panel" class="panel">
-          <h1>审核工作台</h1>
-          <div class="grid-two">
-            <div class="card">
-              <div class="section-header">
-                <h2>待审核需求</h2>
-                <button id="load-pending-reviews" class="secondary">刷新</button>
-              </div>
-              <div id="pending-reviews" class="list-box"></div>
+            <div class="pane-toolbar">
+              <span>审计事件</span>
+              <button id="refresh-audit" class="link-btn" type="button">刷新</button>
             </div>
-
-            <form id="review-form" class="card form-card">
-              <h2>审核处理</h2>
-              <label>
-                Source ID
-                <input id="review-source-id" type="number" min="1" placeholder="点击左侧待审核项自动填充" />
-              </label>
-              <label>
-                审核决定
-                <select id="review-decision">
-                  <option value="approved">通过</option>
-                  <option value="returned">退回</option>
-                  <option value="rejected">拒绝</option>
-                </select>
-              </label>
-              <label>
-                审核意见
-                <textarea id="review-comment" rows="4" placeholder="填写审核意见"></textarea>
-              </label>
-              <label>
-                编辑后的最终需求
-                <textarea id="review-edited-requirement" rows="5" placeholder="通过审核时可填写最终入库版本"></textarea>
-              </label>
-              <button type="submit" class="primary">提交审核</button>
-              <div id="review-result" class="result-box hidden"></div>
-            </form>
-          </div>
-          <div class="card trace-card">
-            <div class="section-header">
-              <h2>Source 回放</h2>
-              <div class="toolbar compact">
-                <input id="source-trace-id" type="number" min="1" placeholder="Source ID" />
-                <button id="load-source-trace" class="secondary">加载回放</button>
-              </div>
-            </div>
-            <div id="source-trace-result" class="result-box hidden"></div>
-          </div>
-        </section>
-
-        <section id="version-panel" class="panel">
-          <h1>版本与审计</h1>
-          <div class="grid-two">
-            <div class="card">
-              <div class="section-header">
-                <h2>需求版本</h2>
-              </div>
-              <div class="toolbar">
-                <input id="version-key" type="text" placeholder="输入 requirement_key，例如 REQ-000001" />
-                <button id="load-versions" class="secondary">查询版本</button>
-                <button id="load-requirement-trace" class="secondary">追踪回放</button>
-              </div>
-              <div id="version-list" class="list-box"></div>
-              <div id="requirement-trace-result" class="result-box hidden"></div>
-            </div>
-
-            <div class="card">
-              <div class="section-header">
-                <h2>审计日志</h2>
-                <button id="load-audit-events" class="secondary">刷新</button>
-              </div>
-              <div id="audit-events" class="list-box"></div>
-            </div>
-          </div>
-        </section>
-
-        <section id="status-panel" class="panel">
-          <h1>系统状态</h1>
-          <div class="status-grid">
-            <div class="status-card">
-              <h3>数据库</h3>
-              <div id="db-status" class="metric">检测中...</div>
-            </div>
-            <div class="status-card">
-              <h3>LLM</h3>
-              <div id="llm-status" class="metric">检测中...</div>
-            </div>
-          </div>
-        </section>
-      </main>
+            <div id="audit-list" class="item-scroll"></div>
+          </section>
+        </aside>
+      </div>
     </div>
 
+    <div id="toast" class="toast hidden"></div>
     <script src="/static/js/app.js"></script>
   </body>
 </html>

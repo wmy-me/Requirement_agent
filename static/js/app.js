@@ -1,466 +1,860 @@
-const apiTokenInput = document.getElementById('api-token');
-const ingestForm = document.getElementById('ingest-form');
-const ingestResult = document.getElementById('ingest-result');
-const chatForm = document.getElementById('chat-form');
-const chatInput = document.getElementById('chat-input');
-const chatMessages = document.getElementById('chat-messages');
-const pendingReviews = document.getElementById('pending-reviews');
-const reviewForm = document.getElementById('review-form');
-const reviewResult = document.getElementById('review-result');
-const sourceTraceResult = document.getElementById('source-trace-result');
-const versionList = document.getElementById('version-list');
-const requirementTraceResult = document.getElementById('requirement-trace-result');
-const auditEvents = document.getElementById('audit-events');
-const dbStatus = document.getElementById('db-status');
-const llmStatus = document.getElementById('llm-status');
+/* ============ 需求治理 Agent · 对话式工作台 ============ */
+'use strict';
 
-let chatSessionId = null;
-let lastRequirementText = '';
-let lastArtifacts = null;
+/* ---------------- DOM refs ---------------- */
+const $ = (id) => document.getElementById(id);
+const msgs = $('messages');
+const composerForm = $('composer');
+const inputEl = $('input');
+const sendBtn = $('send-btn');
+const attachBtn = $('attach-btn');
+const fileInput = $('file-input');
+const sessionList = $('session-list');
+const pendingCount = $('pending-count');
+const modelChip = $('model-chip');
+const dbPill = $('db-pill');
+const llmPill = $('llm-pill');
 
-function getApiToken() {
-  const token = apiTokenInput?.value.trim() || sessionStorage.getItem('requirement-agent-api-token') || '';
-  if (token) {
-    sessionStorage.setItem('requirement-agent-api-token', token);
-  }
-  return token;
+const STREAM_URL = '/api/v1/agent/chat/stream';
+const SESSIONS_KEY = 'ra.sessions.v1';
+
+const state = {
+  sessionId: null,
+  streaming: false,
+};
+
+/* ---------------- helpers ---------------- */
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+function firstLine(text, n) {
+  const line = String(text || '').split('\n')[0].trim();
+  return line.length > (n || 40) ? line.slice(0, n) + '…' : line;
+}
+function levelText(l) { return ({ low: '低', medium: '中', high: '高' })[l] || l; }
+function levelClass(l) { return l === 'high' ? 'lvl-high' : l === 'medium' ? 'lvl-medium' : 'lvl-low'; }
+function nowIso() { return new Date().toISOString(); }
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16).replace('T', ' ');
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtAgo(ts) {
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return '昨天';
+  return `${d} 天前`;
 }
 
-async function fetchJson(url, options = {}) {
-  const token = getApiToken();
-  const headers = { ...(options.headers || {}) };
-  if (!(options.body instanceof FormData)) {
-    headers['Content-Type'] = 'application/json';
-  }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await fetch(url, { ...options, headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `请求失败: ${response.status}`);
-  }
-  return response.json();
+function toast(msg, kind) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + (kind || 'ok');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.add('hidden'), 2600);
 }
 
-function switchPanel(targetId) {
-  document.querySelectorAll('.nav').forEach((button) => {
-    button.classList.toggle('active', button.dataset.target === targetId);
-  });
-  document.querySelectorAll('.panel').forEach((panel) => {
-    panel.classList.toggle('active', panel.id === targetId);
-  });
+function scrollBottom() {
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
-function clear(element) {
-  element.replaceChildren();
-}
-
-function showJson(container, payload) {
-  container.classList.remove('hidden');
-  clear(container);
-  const pre = document.createElement('pre');
-  pre.textContent = JSON.stringify(payload, null, 2);
-  container.append(pre);
-}
-
-function getInputValue(id) {
-  return document.getElementById(id)?.value.trim() || '';
-}
-
-function addCard(container, title, meta, body, onClick) {
-  const card = document.createElement('button');
-  card.type = 'button';
-  card.className = 'item-card';
-  if (onClick) {
-    card.addEventListener('click', onClick);
-  }
-
-  const heading = document.createElement('h3');
-  heading.textContent = title || '未命名';
-  const metaNode = document.createElement('div');
-  metaNode.className = 'requirement-meta';
-  metaNode.textContent = meta || '';
-  const bodyNode = document.createElement('p');
-  bodyNode.textContent = body || '暂无内容';
-
-  card.append(heading, metaNode, bodyNode);
-  container.append(card);
-}
-
-function addChatMessage(role, content, artifacts = null) {
-  const message = document.createElement('div');
-  message.className = `chat-message ${role}`;
-
-  const text = document.createElement('div');
-  text.textContent = content;
-  message.append(text);
-
-  if (artifacts) {
-    message.append(buildArtifactPanel(artifacts));
-  }
-
-  chatMessages.append(message);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function buildArtifactPanel(artifacts) {
-  const extracted = artifacts.extracted || {};
-  const analysis = artifacts.analysis || {};
-  const risk = artifacts.risk || {};
-  const panel = document.createElement('div');
-  panel.className = 'artifact-panel';
-
-  const title = document.createElement('strong');
-  title.textContent = extracted.requirement_title || '已识别需求';
-  const summary = document.createElement('p');
-  summary.textContent = extracted.summary || extracted.raw_text || '暂无摘要';
-
-  const meta = document.createElement('div');
-  meta.className = 'artifact-meta';
-  meta.textContent = [
-    `业务域：${extracted.business_domain || 'general'}`,
-    `优先级：${extracted.priority || 'medium'}`,
-    `重复：${analysis.duplicate ? '是' : '否'}`,
-    `冲突：${analysis.conflict ? '是' : '否'}`,
-    `质量风险：${risk.quality_risk || '-'}`,
-    `变更风险：${risk.change_risk || '-'}`,
-  ].join(' · ');
-
-  const actions = document.createElement('div');
-  actions.className = 'actions compact-actions';
-  const submit = document.createElement('button');
-  submit.type = 'button';
-  submit.className = 'secondary';
-  submit.textContent = '提交这条需求进入审核';
-  submit.addEventListener('click', async () => {
+async function apiJson(url, options) {
+  const resp = await fetch(url, options);
+  if (!resp.ok) {
+    let detail = resp.statusText || '请求失败';
     try {
-      await submitRequirementFromChat(extracted.raw_text || lastRequirementText);
-    } catch (error) {
-      addChatMessage('assistant', `提交失败：${error.message}`);
+      const body = await resp.json();
+      if (typeof body.detail === 'string') detail = body.detail;
+      else if (body.message) detail = body.message;
+    } catch (e) { /* ignore */ }
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+/* minimal markdown-lite renderer (HTML-safe after escape) */
+function md(s) {
+  const raw = String(s == null ? '' : s);
+  const lines = raw.split('\n');
+  const out = [];
+  let list = null;
+  const flushList = () => { if (list) { out.push('<ul>' + list.join('') + '</ul>'); list = null; } };
+  for (let line of lines) {
+    const t = line.trim();
+    const m = /^[-•*]\s+(.*)$/.exec(t);
+    if (m) {
+      list = list || [];
+      list.push('<li>' + esc(m[1]) + '</li>');
+      continue;
     }
-  });
-  actions.append(submit);
-
-  panel.append(title, summary, meta, actions);
-  return panel;
+    flushList();
+    out.push(esc(line) || '<br/>');
+  }
+  flushList();
+  return out.join('\n').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
-function buildIngestMetadata() {
-  const metadata = {};
-  const department = getInputValue('ingest-department');
-  const businessDomain = getInputValue('ingest-business-domain');
-  const sensitivityLevel = getInputValue('ingest-sensitivity-level');
-  if (department) {
-    metadata.department = department;
-  }
-  if (businessDomain) {
-    metadata.business_domain = businessDomain;
-  }
-  if (sensitivityLevel) {
-    metadata.sensitivity_level = sensitivityLevel;
-  }
-  return metadata;
-}
-
-async function submitRequirementFromChat(text) {
-  const requirementText = (text || lastRequirementText || chatInput.value || '').trim();
-  if (!requirementText) {
-    addChatMessage('assistant', '还没有可提交的需求。请先用一句话描述你的需求。');
-    return;
-  }
-
-  const requester = getInputValue('agent-requester-name') || 'anonymous';
-  const result = await fetchJson('/api/v1/requirements/submit', {
-    method: 'POST',
-    body: JSON.stringify({
-      source_type: getInputValue('agent-source-type') || 'web',
-      requester_id: requester,
-      requester_name: requester,
-      original_text: requirementText,
-      metadata: {
-        chat_session_id: chatSessionId,
-        extracted: lastArtifacts?.extracted || {},
-        analysis: lastArtifacts?.analysis || {},
-        risk: lastArtifacts?.risk || {},
-      },
-    }),
-  });
-  addChatMessage('assistant', `已提交进入审核，Source ID：${result.source_id}`);
-  document.getElementById('source-trace-id').value = result.source_id || '';
-  await loadPendingReviews();
-}
-
-async function submitIngest(event) {
-  event.preventDefault();
-  const fileInput = document.getElementById('ingest-file');
-  const file = fileInput.files[0];
-  const originalText = getInputValue('ingest-original-text');
-  if (!originalText && !file) {
-    ingestResult.classList.remove('hidden');
-    ingestResult.textContent = '请填写需求文本或选择附件';
-    return;
-  }
-
-  const form = new FormData();
-  form.append('source_type', getInputValue('ingest-source-type') || 'web');
-  form.append('metadata', JSON.stringify(buildIngestMetadata()));
-  [
-    ['requester_id', 'ingest-requester-id'],
-    ['requester_name', 'ingest-requester-name'],
-    ['source_event_id', 'ingest-source-event-id'],
-    ['original_text', 'ingest-original-text'],
-  ].forEach(([field, id]) => {
-    const value = getInputValue(id);
-    if (value) {
-      form.append(field, value);
+/* ---------------- SSE parsing ---------------- */
+async function* parseSSE(resp) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const ev = parseBlock(block);
+      if (ev) yield ev;
     }
-  });
-  if (file) {
-    form.append('file', file);
   }
-
-  const result = await fetchJson('/api/v1/requirements/ingest', {
-    method: 'POST',
-    body: form,
-  });
-  showJson(ingestResult, result);
-  document.getElementById('source-trace-id').value = result.source_id || '';
-  await loadPendingReviews();
-}
-
-async function loadPendingReviews() {
-  clear(pendingReviews);
-  try {
-    const payload = await fetchJson('/api/v1/reviews/pending?limit=20');
-    const items = payload.items || [];
-    if (!items.length) {
-      addCard(pendingReviews, '暂无待审核需求', '', '提交需求后会出现在这里');
-      return;
-    }
-    items.forEach((item) => {
-      const extracted = item.metadata?.extracted || {};
-      const filterMeta = item.metadata?.retrieval_filters || {};
-      addCard(
-        pendingReviews,
-        extracted.requirement_title || `Source #${item.source_id}`,
-        `source_id=${item.source_id} · ${item.source_type} · ${filterMeta.department || '未标部门'} · ${item.processing_status}`,
-        extracted.summary || item.extracted_text || item.original_text,
-        () => selectReviewItem(item),
-      );
-    });
-  } catch (error) {
-    addCard(pendingReviews, '待审核加载失败', '', error.message);
+  if (buf.trim()) {
+    const ev = parseBlock(buf);
+    if (ev) yield ev;
   }
 }
-
-function selectReviewItem(item) {
-  document.getElementById('review-source-id').value = item.source_id;
-  document.getElementById('source-trace-id').value = item.source_id;
-  document.getElementById('review-edited-requirement').value =
-    item.metadata?.extracted?.summary || item.extracted_text || item.original_text || '';
-  showJson(reviewResult, item);
+function parseBlock(block) {
+  let event = 'message';
+  const datas = [];
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) datas.push(line.slice(5).replace(/^ /, ''));
+  }
+  if (!datas.length) return null;
+  return { event, data: datas.join('\n') };
 }
 
-async function submitReviewDecision(event) {
-  event.preventDefault();
-  const sourceId = Number(document.getElementById('review-source-id').value);
-  if (!sourceId) {
-    reviewResult.classList.remove('hidden');
-    reviewResult.textContent = '请先选择或填写 Source ID';
-    return;
-  }
-  const payload = {
-    source_id: sourceId,
-    decision: document.getElementById('review-decision').value,
-    reviewer_name: '前端审核人',
-    comment: getInputValue('review-comment') || null,
-    edited_requirement: getInputValue('review-edited-requirement') || null,
+/* ---------------- Chat: DOM builders ---------------- */
+function appendUser(text) {
+  const art = document.createElement('article');
+  art.className = 'msg user';
+  art.innerHTML = `
+    <div class="msg-body"><div class="bubble"></div></div>
+    <div class="avatar">我</div>`;
+  art.querySelector('.bubble').innerHTML = md(text);
+  msgs.appendChild(art);
+  return art;
+}
+
+function appendSystem(text) {
+  const art = document.createElement('article');
+  art.className = 'msg system';
+  art.innerHTML = `<div class="msg-body"><div class="bubble"></div></div>`;
+  art.querySelector('.bubble').textContent = text;
+  msgs.appendChild(art);
+  scrollBottom();
+  return art;
+}
+
+/* A pending assistant message with a live steps line, streaming text and artifacts. */
+function appendAssistantPending() {
+  const art = document.createElement('article');
+  art.className = 'msg assistant';
+  art.innerHTML = `
+    <div class="avatar">✦</div>
+    <div class="msg-body">
+      <div class="bubble steps-holder">
+        <div class="steps-line"><span class="steps-dot"></span><span class="steps-text">正在准备…</span></div>
+      </div>
+      <div class="artifact"></div>
+    </div>`;
+  msgs.appendChild(art);
+  scrollBottom();
+
+  const holder = art.querySelector('.steps-holder');
+  const stepsText = art.querySelector('.steps-text');
+  const artifactBox = art.querySelector('.artifact');
+  let textNode = null;
+  let textBuffer = '';
+  let hasNarrative = false;
+  let finished = false;
+
+  const api = {
+    setStep(label) { if (!hasNarrative) stepsText.textContent = label; scrollBottom(); },
+    startNarrative() {
+      hasNarrative = true;
+      holder.classList.remove('steps-holder');
+      holder.innerHTML = '';
+      textNode = document.createTextNode('');
+      const caret = document.createElement('span');
+      caret.className = 'caret';
+      holder.appendChild(textNode);
+      holder.appendChild(caret);
+      scrollBottom();
+    },
+    token(t) {
+      if (!textNode) return;
+      textNode.appendData(t);
+      textBuffer += t;
+      scrollBottom();
+    },
+    addArtifacts(pipeline) {
+      if (!pipeline || typeof pipeline !== 'object') return;
+      const frag = buildArtifact(pipeline);
+      if (frag) { artifactBox.appendChild(frag); scrollBottom(); }
+    },
+    finish() {
+      if (finished) return;
+      finished = true;
+      const finalText = textBuffer || (hasNarrative ? '' : '已理解需求。');
+      holder.classList.remove('steps-holder');
+      holder.innerHTML = md(finalText);
+      textNode = null;
+      textBuffer = '';
+      scrollBottom();
+    },
+    error(message) {
+      holder.classList.remove('steps-holder');
+      holder.innerHTML = '';
+      const box = document.createElement('div');
+      box.className = 'bubble';
+      box.style.cssText = 'background:var(--danger-soft);color:var(--danger);border:0;';
+      box.textContent = '⚠ ' + (message || '请求失败，请重试');
+      art.querySelector('.msg-body').insertBefore(box, holder);
+      holder.style.display = 'none';
+      scrollBottom();
+    },
+    art: art,
   };
-  const result = await fetchJson('/api/v1/reviews/submit', {
-    method: 'POST',
-    body: JSON.stringify(payload),
+  return api;
+}
+
+/* ---------------- Artifacts cards ---------------- */
+function card(title, emoji, openDefault) {
+  const box = document.createElement('div');
+  box.className = 'acard' + (openDefault ? ' open' : '');
+  box.innerHTML = `
+    <div class="acard-head">
+      <span class="acard-title"><span class="emoji">${emoji}</span>${esc(title)}</span>
+      <span class="acard-caret">▶</span>
+    </div>
+    <div class="acard-body"></div>`;
+  box.querySelector('.acard-head').addEventListener('click', () => {
+    box.classList.toggle('open');
   });
-  showJson(reviewResult, result);
-  if (result.requirement_key) {
-    document.getElementById('version-key').value = result.requirement_key;
-  }
-  await loadPendingReviews();
-  await loadAuditEvents();
+  return box;
 }
 
-async function loadSourceTrace() {
-  const sourceId = Number(document.getElementById('source-trace-id').value);
-  if (!sourceId) {
-    sourceTraceResult.classList.remove('hidden');
-    sourceTraceResult.textContent = '请输入 Source ID';
-    return;
+function chipHtml(cls, text) { return `<span class="chip ${cls}">${esc(text)}</span>`; }
+
+function buildArtifact(p) {
+  const frag = document.createDocumentFragment();
+  const extracted = p.extracted || {};
+  const analysis = p.analysis || {};
+  const risk = p.risk || {};
+  const extCands = analysis.candidates || [];
+  const topCands = Array.isArray(p.candidates) ? p.candidates : [];
+
+  // 1) understood requirement
+  const c1 = card('已理解的需求', '🔎', true);
+  const b1 = c1.querySelector('.acard-body');
+  const fields = [];
+  if (extracted.requirement_title) fields.push(`<div class="field"><span class="k">标题</span><strong>${esc(extracted.requirement_title)}</strong></div>`);
+  if (extracted.business_domain) fields.push(`<div class="field"><span class="k">领域</span>${chipHtml('tagged', extracted.business_domain)}</div>`);
+  if (extracted.priority) fields.push(`<div class="field"><span class="k">优先级</span>${chipHtml('pri-' + extracted.priority, levelText(extracted.priority) + '优先级')}</div>`);
+  if (extracted.source_type) fields.push(`<div class="field"><span class="k">来源</span>${esc(extracted.source_type)}</div>`);
+  if (extracted.requester_name) fields.push(`<div class="field"><span class="k">发起人</span>${esc(extracted.requester_name)}</div>`);
+  if (extracted.tags && extracted.tags.length) fields.push(`<div class="field"><span class="k">标签</span>${extracted.tags.map((t) => chipHtml('tagged', t)).join(' ')}</div>`);
+  b1.innerHTML = `<div class="kv">${fields.join('') || '—'}</div>`;
+  if (extracted.summary) b1.insertAdjacentHTML('beforeend', `<p style="margin:2px 0 0;font-size:13px;color:var(--text-2)">${esc(extracted.summary)}</p>`);
+  if (extracted.requirements && extracted.requirements.length) {
+    b1.insertAdjacentHTML('beforeend', `<div class="section-label">要点拆解</div><ul class="list-plain">${extracted.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`);
   }
-  const payload = await fetchJson(`/api/v1/sources/${sourceId}/trace`);
-  showJson(sourceTraceResult, payload);
+  if (extracted.raw_text) {
+    const orig = document.createElement('details');
+    orig.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-3);';
+    orig.innerHTML = `<summary style="cursor:pointer">查看来源原文</summary><pre style="white-space:pre-wrap;background:var(--surface-2);border-radius:8px;padding:8px;margin:6px 0 0;color:var(--text-2);font-family:inherit">${esc(extracted.raw_text)}</pre>`;
+    b1.appendChild(orig);
+  }
+  frag.appendChild(c1);
+
+  // 2) similar / related
+  const cands = extCands.length ? extCands : topCands.map((c) => ({
+    requirement_key: c.requirement_key, title: c.requirement_name || c.title, similarity: c.score, reason: '检索命中（' + (c.match_type || '') + '）',
+  }));
+  const c2 = card('相似 / 关联需求', '🔗', false);
+  const b2 = c2.querySelector('.acard-body');
+  if (cands.length) {
+    b2.innerHTML = cands.map((c) => `
+      <div class="cand">
+        <div class="cand-top"><span class="cand-key">${esc(c.requirement_key || '')}</span><span style="font-size:12px;color:var(--text-2)">${Math.round((c.similarity || 0) * 100)}%</span></div>
+        <div class="cand-title">${esc(c.title || '历史需求')}</div>
+        <div class="score"><span class="track"><span class="fill" style="width:${Math.max(2, Math.round((c.similarity || 0) * 100))}%"></span></span></div>
+        <div class="reason">${esc(c.reason || '')}</div>
+      </div>`).join('');
+  } else {
+    b2.innerHTML = `<div class="empty-hint">未检索到存量相似需求</div>`;
+  }
+  frag.appendChild(c2);
+
+  // 3) conflict / duplicate verdicts
+  const c3 = card('冲突与重复分析', '🧭', false);
+  const b3 = c3.querySelector('.acard-body');
+  const verdicts = [
+    { k: 'duplicate', yes: analysis.duplicate, label: '重复', cls: 'yes' },
+    { k: 'related', yes: analysis.related, label: '关联', cls: 'related' },
+    { k: 'conflict', yes: analysis.conflict, label: '冲突', cls: 'yes' },
+    { k: 'independent', yes: analysis.independent, label: '独立', cls: 'no' },
+  ];
+  b3.innerHTML = `<div class="verdict-row">${verdicts.map((v) => `<span class="verdict ${v.yes ? v.cls : ''}">${v.label} ${v.yes ? '是' : '否'}</span>`).join('')}</div>`;
+  if (analysis.reasoning) b3.insertAdjacentHTML('beforeend', `<p style="margin:8px 0 2px;font-size:13px;color:var(--text-2)">${esc(analysis.reasoning)}</p>`);
+  frag.appendChild(c3);
+
+  // 4) risk
+  const c4 = card('风险评估', '🛡', false);
+  const b4 = c4.querySelector('.acard-body');
+  const risks = [['质量风险', risk.quality_risk], ['变更风险', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
+  b4.innerHTML = `<div class="risk-line">${risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)} · ${levelText(lvl)}</span>`).join('')}</div>`;
+  if (risk.confidence != null) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:6px">模型置信度 ${Math.round(risk.confidence * 100)}%</div>`);
+  frag.appendChild(c4);
+
+  // 5) actions
+  const c5 = document.createElement('div');
+  c5.className = 'acard';
+  c5.innerHTML = `<div class="acard-body" style="display:block;border:0;padding:10px 14px"><div class="act-row"></div></div>`;
+  const actRow = c5.querySelector('.act-row');
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'btn primary';
+  submitBtn.textContent = '提交到待办审核';
+  const againBtn = document.createElement('button');
+  againBtn.className = 'btn ghost';
+  againBtn.textContent = '重新分析';
+  actRow.appendChild(submitBtn);
+  actRow.appendChild(againBtn);
+  submitBtn.addEventListener('click', async () => {
+    if (state.streaming) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = '正在写入…';
+    try {
+      const res = await doSubmitRequirement(p);
+      appendSystem(`已提交待办审核（来源 #${res.source_id || ''}）。可到右侧「待办」进行审核。`);
+      refreshPending();
+      setRailTab('pending');
+    } catch (e) {
+      toast('提交失败：' + e.message, 'err');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '提交到待办审核';
+    }
+  });
+  againBtn.addEventListener('click', () => {
+    const raw = (p.extracted && p.extracted.raw_text) || '';
+    if (raw) runChat(raw);
+  });
+  frag.appendChild(c5);
+
+  return frag;
 }
 
-async function loadVersions() {
-  clear(versionList);
-  const key = getInputValue('version-key');
-  if (!key) {
-    addCard(versionList, '请输入 requirement_key', '', '例如 REQ-000001');
-    return;
-  }
+/* ---------------- Submit from chat ---------------- */
+async function doSubmitRequirement(p) {
+  const extracted = p.extracted || {};
+  const body = {
+    source_type: p.source_type || 'web',
+    requester_id: 'chat',
+    requester_name: extracted.requester_name || '需求方',
+    original_text: extracted.raw_text || '',
+    metadata: {
+      chat_session_id: state.sessionId,
+      extracted: p.extracted || {},
+      analysis: p.analysis || {},
+      risk: p.risk || {},
+    },
+  };
+  return apiJson('/api/v1/requirements/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/* ---------------- Streaming chat ---------------- */
+function setSendEnabled() {
+  sendBtn.disabled = state.streaming || !inputEl.value.trim();
+}
+
+function resizeInput() {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(160, inputEl.scrollHeight) + 'px';
+}
+
+async function runChat(text) {
+  const msg = String(text || '').trim();
+  if (!msg || state.streaming) return;
+
+  state.streaming = true;
+  setSendEnabled();
+  const needRecord = !state.sessionId;
+  const snippet = firstLine(msg, 36);
+
+  appendUser(msg);
+  const asst = appendAssistantPending();
+
+  const payload = {
+    message: msg,
+    session_id: state.sessionId || null,
+    source_type: 'web',
+    requester_name: '我',
+  };
+
   try {
-    const payload = await fetchJson(`/api/v1/requirements/${encodeURIComponent(key)}/versions`);
-    const items = payload.items || [];
-    if (!items.length) {
-      addCard(versionList, '暂无版本记录', key, '审核通过后会生成版本快照');
+    const resp = await fetch(STREAM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { const b = await resp.json(); detail = b.detail || detail; } catch (e) { /* ignore */ }
+      throw new Error(detail);
+    }
+    for await (const ev of parseSSE(resp)) {
+      let data = {};
+      try { data = ev.data ? JSON.parse(ev.data) : {}; } catch (e) { /* ignore */ }
+      if (ev.event === 'session') state.sessionId = data.session_id || state.sessionId;
+      else if (ev.event === 'step') asst.setStep(data.label || '');
+      else if (ev.event === 'narrative') {
+        if (data.start) asst.startNarrative();
+        else if (data.t) asst.token(data.t);
+      } else if (ev.event === 'artifacts') asst.addArtifacts(data.artifacts);
+      else if (ev.event === 'error') asst.error(data.message);
+      else if (ev.event === 'done') asst.finish();
+    }
+    asst.finish();
+  } catch (err) {
+    asst.error(err && err.message ? err.message : '网络异常，请重试');
+  } finally {
+    state.streaming = false;
+    setSendEnabled();
+    if (needRecord && state.sessionId) upsertSession(state.sessionId, snippet);
+    renderSessions();
+    scrollBottom();
+    refreshPending();
+  }
+}
+
+/* ---------------- History replay ---------------- */
+function renderHistory(history) {
+  clearChatInner();
+  (history || []).forEach((m) => {
+    if (m.role === 'user') {
+      appendUser(m.content || '');
+    } else if (m.role === 'assistant') {
+      const art = appendAssistantPending();
+      art.startNarrative();
+      art.token(m.content || '');
+      if (m.artifacts && typeof m.artifacts === 'object') art.addArtifacts(m.artifacts);
+      art.finish();
+    }
+  });
+  scrollBottom();
+}
+
+async function loadSession(id) {
+  if (state.streaming) return;
+  state.sessionId = id;
+  renderSessions();
+  try {
+    const res = await apiJson('/api/v1/agent/chat/' + encodeURIComponent(id));
+    const history = res.history || [];
+    if (!history.length) {
+      clearChatInner();
+      appendSystem('该会话在服务端已失效（服务可能刚重启），已为你重置为新对话。');
+      state.sessionId = null;
+      renderSessions();
       return;
     }
-    items.forEach((item) => {
-      addCard(
-        versionList,
-        `V${item.version_no} · ${item.version_title}`,
-        `${item.change_type} · ${item.created_by} · ${item.created_at || ''}`,
-        item.requirement_snapshot,
-      );
-    });
-    requirementTraceResult.classList.add('hidden');
-  } catch (error) {
-    addCard(versionList, '版本加载失败', key, error.message);
+    renderHistory(history);
+  } catch (e) {
+    toast('加载会话失败：' + e.message, 'err');
   }
 }
 
-async function loadRequirementTrace() {
-  const key = getInputValue('version-key');
-  if (!key) {
-    requirementTraceResult.classList.remove('hidden');
-    requirementTraceResult.textContent = '请输入 requirement_key';
+function clearChatInner() {
+  msgs.innerHTML = '';
+}
+
+/* ---------------- Sessions (localStorage) ---------------- */
+function getSessions() {
+  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)) || []; } catch (e) { return []; }
+}
+function saveSessions(list) {
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list.slice(0, 40))); } catch (e) { /* ignore */ }
+}
+function upsertSession(id, title) {
+  const list = getSessions().filter((s) => s.id !== id);
+  list.unshift({ id, title, ts: Date.now() });
+  saveSessions(list);
+}
+function removeSession(id) {
+  saveSessions(getSessions().filter((s) => s.id !== id));
+  if (state.sessionId === id) newChat();
+  else renderSessions();
+}
+function renderSessions() {
+  sessionList.innerHTML = '';
+  const sessions = getSessions();
+  if (!sessions.length) {
+    const li = document.createElement('li');
+    li.className = '';
+    li.innerHTML = `<div style="padding:6px 2px;color:var(--text-3);font-size:12px">还没有历史会话，直接开始一段对话吧</div>`;
+    sessionList.appendChild(li);
     return;
   }
-  const payload = await fetchJson(`/api/v1/requirements/${encodeURIComponent(key)}/trace`);
-  showJson(requirementTraceResult, payload);
+  sessions.forEach((s) => {
+    const li = document.createElement('li');
+    if (state.sessionId === s.id) li.classList.add('active');
+    li.innerHTML = `<div class="s-title"></div><div class="s-time"></div><button class="s-del" type="button" title="删除">×</button>`;
+    li.querySelector('.s-title').textContent = s.title || '对话';
+    li.querySelector('.s-time').textContent = fmtAgo(s.ts);
+    li.querySelector('.s-del').addEventListener('click', (e) => { e.stopPropagation(); removeSession(s.id); });
+    li.addEventListener('click', () => loadSession(s.id));
+    sessionList.appendChild(li);
+  });
+}
+function newChat() {
+  if (state.streaming) return;
+  state.sessionId = null;
+  clearChatInner();
+  appendSystem('新对话已开启。直接说出业务需求，我会提取要点、检索相似需求并评估风险。');
+  renderSessions();
+  inputEl.focus();
 }
 
+/* ---------------- Right rail: tabs ---------------- */
+function setRailTab(name) {
+  document.querySelectorAll('.wb-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.wb-pane').forEach((p) => p.classList.remove('active'));
+  const pane = $('tab-' + name);
+  if (pane) pane.classList.add('active');
+}
+
+function setPendingBadge(n) {
+  if (n > 0) { pendingCount.textContent = n > 99 ? '99+' : n; pendingCount.classList.remove('hidden'); }
+  else pendingCount.classList.add('hidden');
+}
+
+/* ---------------- Workbench: pending review ---------------- */
+async function loadPendingReviews() {
+  const listEl = $('pending-list');
+  try {
+    const res = await apiJson('/api/v1/reviews/pending?limit=30');
+    const items = res.items || [];
+    setPendingBadge(items.length);
+    listEl.innerHTML = '';
+    if (!items.length) {
+      listEl.innerHTML = `<div class="empty-hint">没有待审核的需求 🎉</div>`;
+      return;
+    }
+    items.forEach((item) => listEl.appendChild(buildPendingItem(item)));
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+function refreshPending() { loadPendingReviews(); }
+
+function buildPendingItem(item) {
+  const meta = item.metadata || {};
+  const extracted = meta.extracted || {};
+  const analysis = meta.analysis || {};
+  const risk = meta.risk || {};
+  const title = extracted.requirement_title || firstLine(item.original_text, 36) || '待审核需求';
+  const summary = extracted.summary || item.original_text || '';
+
+  const box = document.createElement('div');
+  box.className = 'wb-item';
+  box.innerHTML = `
+    <div class="w-title"></div>
+    <div class="w-meta">
+      <span class="src-tag">#${item.source_id} · ${esc(item.source_type || 'web')}</span>
+      <span class="status-tag pending_review">待审核</span>
+      <span style="margin-left:auto">${esc(fmtTime(item.submitted_at || item.updated_at))}</span>
+    </div>
+    <div class="w-ext">
+      <div class="w-section"><div class="k">摘要</div><div class="w-summary"></div></div>
+      <div class="w-section"><div class="k">来源原文</div><div class="orig-text"></div></div>
+      <div class="w-section"><div class="k">分析结论</div><div class="verdict-row"></div></div>
+      <div class="w-section"><div class="k">风险</div><div class="risk-line"></div></div>
+      <div class="w-actions">
+        <textarea class="review-note" placeholder="审核意见（可选）"></textarea>
+        <button class="btn primary" data-d="approved" type="button">✓ 通过并生成需求</button>
+        <button class="btn" data-d="rejected" type="button">✕ 退回</button>
+      </div>
+    </div>`;
+  box.querySelector('.w-title').textContent = title;
+  box.querySelector('.w-summary').textContent = summary;
+  box.querySelector('.orig-text').textContent = item.original_text || '';
+
+  const verdictRow = box.querySelector('.verdict-row');
+  verdictRow.innerHTML = [
+    ['重复', analysis.duplicate],
+    ['关联', analysis.related],
+    ['冲突', analysis.conflict],
+  ].map(([label, v]) => `<span class="verdict ${v ? 'yes' : ''}">${label} ${v ? '是' : '否'}</span>`).join('');
+
+  const riskLine = box.querySelector('.risk-line');
+  const risks = [['质量', risk.quality_risk], ['变更', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
+  riskLine.innerHTML = risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)}·${levelText(lvl)}</span>`).join('');
+
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('.w-actions, .review-note, .orig-text')) return;
+    box.classList.toggle('open');
+  });
+
+  const approveBtn = box.querySelector('[data-d="approved"]');
+  const rejectBtn = box.querySelector('[data-d="rejected"]');
+  approveBtn.addEventListener('click', () => decideReview(item.source_id, 'approved', box));
+  rejectBtn.addEventListener('click', () => decideReview(item.source_id, 'rejected', box));
+  return box;
+}
+
+async function decideReview(sourceId, decision, boxEl) {
+  const noteEl = boxEl.querySelector('.review-note');
+  const comment = (noteEl && noteEl.value.trim()) || undefined;
+  const buttons = boxEl.querySelectorAll('.btn');
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const res = await apiJson('/api/v1/reviews/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: sourceId, decision, reviewer_name: '需求负责人', comment }),
+    });
+    let line;
+    if (decision === 'approved') {
+      line = `✅ 来源 #${sourceId} 已通过审核 → 生成正式需求 ${res.requirement_key || ''}（v${res.version_no || 1}），已入库。`;
+      toast('已通过并生成正式需求', 'ok');
+    } else {
+      line = `↩️ 来源 #${sourceId} 已退回${comment ? '，意见：' + comment : ''}。`;
+      toast('已退回该需求', 'ok');
+    }
+    appendSystem(line);
+    refreshPending();
+    loadAuditEvents();
+  } catch (e) {
+    toast('审核提交失败：' + e.message, 'err');
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+
+/* ---------------- Workbench: library ---------------- */
+async function loadLibrary(query) {
+  const listEl = $('library-list');
+  try {
+    let items;
+    if (query) {
+      const res = await apiJson('/api/v1/requirements/search?q=' + encodeURIComponent(query) + '&limit=20');
+      items = res.items || [];
+    } else {
+      const res = await apiJson('/api/v1/requirements');
+      items = res.items || [];
+    }
+    listEl.innerHTML = '';
+    if (!items.length) { listEl.innerHTML = `<div class="empty-hint">暂无需求数据</div>`; return; }
+    items.forEach((it) => listEl.appendChild(buildLibraryItem(it)));
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function buildLibraryItem(it) {
+  const key = it.requirement_key || it.requirement_name || '';
+  const name = it.requirement_name || it.final_requirement || firstLine(it.summary, 30) || key;
+  const box = document.createElement('div');
+  box.className = 'wb-item';
+  box.innerHTML = `
+    <div class="w-title"></div>
+    <div class="w-meta">
+      <span class="src-tag">${esc(it.requirement_key || '')}</span>
+      <span class="status-tag ${it.status === 'active' ? 'active' : ''}">${esc(it.status || '')}</span>
+      ${it.business_domain ? `<span class="status-tag">${esc(it.business_domain)}</span>` : ''}
+      ${it.score != null ? `<span style="margin-left:auto">相似 ${Math.round(it.score * 100)}%</span>` : ''}
+    </div>`;
+  box.querySelector('.w-title').textContent = name;
+  box.addEventListener('click', () => showRequirementDetail(it.requirement_key, name));
+  return box;
+}
+
+async function showRequirementDetail(key, name) {
+  const detailEl = $('lib-detail');
+  detailEl.classList.remove('hidden');
+  detailEl.innerHTML = `<div class="empty-hint">加载版本与溯源…</div>`;
+  try {
+    const [vers, trace] = await Promise.all([
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/versions'),
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/trace'),
+    ]);
+    const req = (trace.requirement || {});
+    let html = `<div class="d-title"></div>`;
+    if (req.final_requirement) html += `<p style="font-size:12px;color:var(--text-2);margin:2px 0 8px"></p>`;
+    html += `<div class="section-label">版本历史</div><ul class="timeline"></ul>`;
+    detailEl.innerHTML = html;
+    detailEl.querySelector('.d-title').textContent = `${key} · ${name || ''}`;
+    if (req.final_requirement) detailEl.querySelector('p').textContent = req.final_requirement;
+    const tl = detailEl.querySelector('.timeline');
+    const versions = vers.items || trace.versions || [];
+    if (!versions.length) tl.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无版本记录</span></li>`;
+    versions.forEach((v) => {
+      const li = document.createElement('li');
+      const head = document.createElement('div');
+      head.className = 't-head';
+      head.textContent = `V${v.version_no} · ${v.change_type || ''}`;
+      const sub = document.createElement('div');
+      sub.className = 't-sub';
+      sub.textContent = `${v.change_summary || v.version_title || ''}（${v.created_by || ''} · ${fmtTime(v.created_at) || ''}）`;
+      li.appendChild(head);
+      li.appendChild(sub);
+      if (v.requirement_snapshot) {
+        const pre = document.createElement('pre');
+        pre.textContent = v.requirement_snapshot;
+        li.appendChild(pre);
+      }
+      tl.appendChild(li);
+    });
+  } catch (e) {
+    detailEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+/* ---------------- Workbench: audit & status ---------------- */
 async function loadAuditEvents() {
-  clear(auditEvents);
+  const listEl = $('audit-list');
   try {
-    const payload = await fetchJson('/api/v1/audit/events?limit=50');
-    const items = payload.items || [];
-    if (!items.length) {
-      addCard(auditEvents, '暂无审计日志', '', '审核或提交后会产生审计记录');
-      return;
-    }
-    items.forEach((item) => {
-      addCard(
-        auditEvents,
-        item.event_type,
-        `${item.aggregate_type}:${item.aggregate_id || '-'} · ${item.result_status}`,
-        `${item.actor_id || 'system'} · ${item.created_at || ''}`,
-      );
+    const res = await apiJson('/api/v1/audit/events?limit=15');
+    const items = res.items || [];
+    listEl.innerHTML = '';
+    if (!items.length) { listEl.innerHTML = `<div class="empty-hint">暂无审计事件</div>`; return; }
+    items.forEach((a) => {
+      const row = document.createElement('div');
+      row.className = 'audit-item';
+      row.innerHTML = `<span class="a-time"></span><div style="min-width:0"><div class="a-type"></div><div class="a-sub"></div></div>`;
+      row.querySelector('.a-time').textContent = fmtTime(a.created_at);
+      row.querySelector('.a-type').textContent = a.event_type || '';
+      row.querySelector('.a-sub').textContent = `${a.aggregate_type || ''} ${a.aggregate_id || ''} · ${a.actor_id || a.actor_type || ''} · ${a.result_status || ''}`.trim();
+      listEl.appendChild(row);
     });
-  } catch (error) {
-    addCard(auditEvents, '审计日志加载失败', '', error.message);
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
   }
 }
 
 async function loadStatus() {
+  const setPill = (pill, ok, label) => {
+    pill.classList.remove('ok', 'bad');
+    pill.classList.add(ok ? 'ok' : 'bad');
+    pill.title = label;
+  };
   try {
-    const db = await fetchJson('/api/v1/health/db');
-    dbStatus.textContent = db.database ? '正常' : '不可用';
-    dbStatus.className = `metric ${db.database ? 'success' : 'danger'}`;
-  } catch (error) {
-    dbStatus.textContent = `异常：${error.message}`;
-    dbStatus.className = 'metric danger';
-  }
+    const db = await apiJson('/api/v1/health/db');
+    setPill(dbPill, !!db.database, '数据库 ' + (db.status || ''));
+  } catch (e) { setPill(dbPill, false, '数据库不可达'); }
+  try {
+    const llm = await apiJson('/api/v1/health/llm');
+    const ok = !!llm.configured;
+    setPill(llmPill, ok, `${llm.provider} ${llm.model}`);
+    const text = `${llm.provider || ''} · ${llm.model || ''}`;
+    modelChip.textContent = text || '未配置模型';
+    const tag = $('audit-model');
+    tag.textContent = '模型 ' + text;
+  } catch (e) { setPill(llmPill, false, 'LLM 不可达'); }
+}
 
+/* ---------------- File upload -> pending queue ---------------- */
+async function uploadDocument(file) {
+  if (!file || state.streaming) return;
+  state.streaming = true;
+  setSendEnabled();
+  const snippet = '📎 ' + file.name;
+  appendUser(snippet);
+  const asst = appendAssistantPending();
+  asst.setStep('正在解析并理解文档…');
+  const form = new FormData();
+  form.append('source_type', 'web');
+  form.append('requester_id', 'chat');
+  form.append('requester_name', '我');
+  form.append('file', file);
   try {
-    const llm = await fetchJson('/api/v1/health/llm');
-    llmStatus.textContent = llm.configured ? `${llm.provider}/${llm.model}` : '未配置';
-    llmStatus.className = `metric ${llm.configured ? 'success' : 'warning'}`;
-  } catch (error) {
-    llmStatus.textContent = `异常：${error.message}`;
-    llmStatus.className = 'metric danger';
+    const res = await apiJson('/api/v1/requirements/ingest', { method: 'POST', body: form });
+    asst.startNarrative();
+    asst.token(`已解析文档「${file.name}」并完成抽取 → 已进入待办审核队列。`);
+    asst.finish();
+    appendSystem(`来源 #${res.source_id || ''} 已入队（${res.status || ''}）。可到右侧「待办」查看或审核。`);
+    refreshPending();
+    setRailTab('pending');
+  } catch (e) {
+    asst.error(e.message);
+  } finally {
+    state.streaming = false;
+    setSendEnabled();
   }
 }
 
-chatForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const message = chatInput.value.trim();
-  if (!message) {
-    return;
-  }
-  addChatMessage('user', message);
-  chatInput.value = '';
-  lastRequirementText = message;
-  try {
-    const payload = await fetchJson('/api/v1/agent/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        session_id: chatSessionId,
-        message,
-        requirement_text: lastRequirementText,
-        source_type: getInputValue('agent-source-type') || 'web',
-        requester_name: getInputValue('agent-requester-name') || null,
-      }),
-    });
-    chatSessionId = payload.session_id;
-    lastArtifacts = payload.message?.artifacts || null;
-    addChatMessage(payload.message?.role || 'assistant', payload.message?.content || '已理解需求', lastArtifacts);
-  } catch (error) {
-    addChatMessage('assistant', `理解失败：${error.message}`);
-  }
+/* ---------------- Wire events ---------------- */
+composerForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = inputEl.value.trim();
+  if (!text || state.streaming) return;
+  inputEl.value = '';
+  resizeInput();
+  runChat(text);
 });
 
-document.getElementById('submit-requirement').addEventListener('click', async () => {
-  try {
-    await submitRequirementFromChat();
-  } catch (error) {
-    addChatMessage('assistant', `提交失败：${error.message}`);
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    composerForm.requestSubmit();
   }
 });
+inputEl.addEventListener('input', () => { setSendEnabled(); resizeInput(); });
 
-document.getElementById('clear-chat').addEventListener('click', () => {
-  clear(chatMessages);
-  chatSessionId = null;
-  lastRequirementText = '';
-  lastArtifacts = null;
-});
-
-ingestForm.addEventListener('submit', async (event) => {
-  try {
-    await submitIngest(event);
-  } catch (error) {
-    ingestResult.classList.remove('hidden');
-    ingestResult.textContent = `上传失败：${error.message}`;
-  }
+attachBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  const f = fileInput.files && fileInput.files[0];
+  if (f) uploadDocument(f);
+  fileInput.value = '';
 });
 
-reviewForm.addEventListener('submit', submitReviewDecision);
-document.getElementById('load-pending-reviews').addEventListener('click', loadPendingReviews);
-document.getElementById('refresh-after-upload').addEventListener('click', loadPendingReviews);
-document.getElementById('load-source-trace').addEventListener('click', async () => {
-  try {
-    await loadSourceTrace();
-  } catch (error) {
-    sourceTraceResult.classList.remove('hidden');
-    sourceTraceResult.textContent = `回放加载失败：${error.message}`;
-  }
-});
-document.getElementById('load-versions').addEventListener('click', loadVersions);
-document.getElementById('load-requirement-trace').addEventListener('click', async () => {
-  try {
-    await loadRequirementTrace();
-  } catch (error) {
-    requirementTraceResult.classList.remove('hidden');
-    requirementTraceResult.textContent = `追踪加载失败：${error.message}`;
-  }
-});
-document.getElementById('load-audit-events').addEventListener('click', loadAuditEvents);
-document.querySelectorAll('.nav').forEach((button) => {
-  button.addEventListener('click', () => switchPanel(button.dataset.target));
+$('new-chat').addEventListener('click', newChat);
+$('toggle-left').addEventListener('click', () => toggleRail('rail-sessions', 'toggle-left'));
+$('toggle-right').addEventListener('click', () => toggleRail('rail-workbench', 'toggle-right'));
+
+document.querySelectorAll('.wb-tab').forEach((b) => b.addEventListener('click', () => setRailTab(b.dataset.tab)));
+$('refresh-pending').addEventListener('click', refreshPending);
+$('refresh-audit').addEventListener('click', loadAuditEvents);
+$('lib-all').addEventListener('click', () => { $('lib-q').value = ''; loadLibrary(''); });
+$('lib-search').addEventListener('submit', (e) => {
+  e.preventDefault();
+  loadLibrary($('lib-q').value.trim());
 });
 
-apiTokenInput.value = sessionStorage.getItem('requirement-agent-api-token') || '';
-addChatMessage('assistant', '你好，我是需求助手。直接告诉我你的业务想法，我会自动抽取需求、分析风险和相似项。');
-loadPendingReviews();
-loadAuditEvents();
-loadStatus();
+function toggleRail(id, btnId) {
+  const rail = $(id);
+  const btn = $(btnId);
+  const collapsed = rail.classList.toggle('collapsed');
+  btn.classList.toggle('active', !collapsed);
+}
+
+/* ---------------- Init ---------------- */
+async function init() {
+  setSendEnabled();
+  newChat();
+  renderSessions();
+  loadPendingReviews();
+  loadAuditEvents();
+  loadStatus();
+  setInterval(() => { if (!state.streaming) loadStatus(); }, 30000);
+}
+init();

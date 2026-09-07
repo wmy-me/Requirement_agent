@@ -42,24 +42,51 @@ class AnalyzeSkill(BaseSkill):
             from src.agents.analyze_agent import AnalysisResult, CandidateMatch
 
             payload = self._generate_json(prompt, system_prompt)
-            candidates = payload.get("candidates") or []
-            normalized_candidates = [
-                CandidateMatch(
-                    requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
-                    title=str(item.get("title") or "历史需求"),
-                    similarity=float(item.get("similarity") or 0.0),
-                    reason=str(item.get("reason") or "相似"),
+
+            # —— 候选归一化：similarity 夹到 [0,1]，并统计最高相似度 ——
+            normalized_candidates: list[CandidateMatch] = []
+            max_similarity = 0.0
+            for item in payload.get("candidates") or []:
+                try:
+                    similarity = float(item.get("similarity") or 0.0)
+                except (TypeError, ValueError):
+                    similarity = 0.0
+                similarity = max(0.0, min(1.0, similarity))
+                max_similarity = max(max_similarity, similarity)
+                normalized_candidates.append(
+                    CandidateMatch(
+                        requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
+                        title=str(item.get("title") or "历史需求"),
+                        similarity=similarity,
+                        reason=str(item.get("reason") or "相似"),
+                    )
                 )
-                for item in candidates
-            ]
+
+            # —— 以候选证据交叉校验，消除 LLM 布尔自相矛盾 / 幻觉 ——
+            duplicate = bool(payload.get("duplicate"))
+            related = bool(payload.get("related"))
+            conflict = bool(payload.get("conflict"))
+            # duplicate=true 但没有任何 ≥0.8 的相似候选 → 降为 false（防假阳性）
+            if duplicate and max_similarity < 0.8:
+                duplicate = False
+                related = related or max_similarity >= 0.6
+            # 有 ≥0.8 候选但 LLM 漏报 → 按证据补上
+            if not duplicate and max_similarity >= 0.8:
+                duplicate = True
+                related = True
+            if not related and max_similarity >= 0.6:
+                related = True
+            independent = not (duplicate or related or conflict)
+
             result = AnalysisResult(
-                duplicate=bool(payload.get("duplicate") or fallback.duplicate),
-                related=bool(payload.get("related") or fallback.related),
-                conflict=bool(payload.get("conflict") or fallback.conflict),
-                independent=bool(payload.get("independent") if "independent" in payload else fallback.independent),
+                duplicate=duplicate,
+                related=related,
+                conflict=conflict,
+                independent=independent,
                 reasoning=str(payload.get("reasoning") or fallback.reasoning),
                 candidates=normalized_candidates,
             )
             return result
         except Exception:
+            # 解析失败或模型未配置：整体回退启发式，不再逐位混用
             return fallback

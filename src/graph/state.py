@@ -1,33 +1,43 @@
-"""需求工作流的状态对象。"""
+"""需求工作流的 LangGraph 状态对象（TypedDict 通道）。"""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from typing import Any
-from uuid import uuid4
+from operator import add
+from typing import Annotated, Any, TypedDict
 
 
-@dataclass
-class RequirementGraphState:
-    """在 LangGraph 风格工作流中流转的状态容器。"""
+class RequirementState(TypedDict, total=False):
+    """在 LangGraph 图内流转的状态。未列字段也可按需存在，仅作增量合并。"""
 
-    trace_id: str = field(default_factory=lambda: uuid4().hex)
-    source_text: str = ""
-    source_type: str = "web"
-    requester_name: str | None = None
-    requirement_title: str = ""
-    summary: str = ""
-    tags: list[str] = field(default_factory=list)
-    candidates: list[dict[str, Any]] = field(default_factory=list)
-    analysis: dict[str, Any] = field(default_factory=dict)
-    risk: dict[str, Any] = field(default_factory=dict)
-    review_decision: str | None = None
-    review_comment: str | None = None
-    final_requirement: str = ""
-    requirement_key: str = ""
-    status: str = "pending"
-    current_step: str = "extract"
-    errors: list[str] = field(default_factory=list)
+    # —— 输入 ——
+    source_id: int | None
+    source_text: str
+    source_type: str
+    requester_name: str | None
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    # —— 文档规整（可选，RequirementService 已预先算好）——
+    standardized_text: str
+    segments: list[dict[str, Any]]
+    normalized_fields: dict[str, Any]
+
+    # —— 抽取结果（完整 ExtractedRequirement.model_dump，含领域/优先级/子需求）——
+    extracted: dict[str, Any]
+
+    # —— 检索与关系分析 ——
+    candidates: list[dict[str, Any]]
+    analysis: dict[str, Any]
+    risk: dict[str, Any]
+
+    # —— 决策（由 decision_rules 产出）——
+    decision: str  # manual_review | can_commit
+    next_action: str
+
+    # —— 审核/落库（决策图使用）——
+    review: dict[str, Any]
+    outcome: dict[str, Any]
+
+    # —— 运行时上下文：决策图注入 repos + session（不走 checkpointer，允许非序列化）——
+    ctx: dict[str, Any]
+
+    # —— 错误累积 ——
+    errors: Annotated[list[str], add]

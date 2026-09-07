@@ -1,4 +1,5 @@
 import os
+import uuid
 
 os.environ.setdefault("API_AUTH_TOKEN", "test-api-token")
 
@@ -17,14 +18,16 @@ def test_submit_requirement_api(monkeypatch) -> None:
     from src.config.settings import settings
 
     monkeypatch.setattr(settings.api_auth_token, "_secret_value", "test-api-token")
+    # 唯一 key，避免命中历史幂等记录（持久 DB 可能导致旧源已 committed）
+    unique = uuid.uuid4().hex
     response = client.post(
         "/api/v1/requirements/submit",
         headers=API_HEADERS,
         json={
             "source_type": "web",
-            "requester_id": "u-001",
+            "requester_id": f"u-{unique}",
             "requester_name": "alice",
-            "original_text": "用户登录支持短信验证码",
+            "original_text": f"接口冒烟-{unique}：希望报表按部门筛选导出",
         },
     )
     assert response.status_code == 200
