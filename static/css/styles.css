@@ -316,6 +316,9 @@ input, textarea { font-family: inherit; }
 .lib-search { display: flex; gap: 6px; padding: 10px 12px 2px; }
 .lib-search input { flex: 1; border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; font-size: 13px; outline: none; background: var(--surface-2); }
 .lib-search input:focus { border-color: var(--accent); background: var(--surface); }
+.doc-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 10px; }
+.doc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.doc-actions .btn { font-size: 12px; }
 .lib-detail { border-top: 1px solid var(--border); max-height: 46%; overflow-y: auto; padding: 10px 12px; flex: none; }
 .lib-detail .d-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 .timeline { list-style: none; margin: 8px 0 0; padding: 0 0 0 4px; }

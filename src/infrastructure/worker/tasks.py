@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.infrastructure.db.repositories import DocumentAssetRepository
 from src.infrastructure.embedding.embedding_service import EmbeddingService
 from src.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 from src.infrastructure.worker.outbox import OutboxRepository
@@ -43,6 +44,50 @@ class EmbeddingTask:
                 content = str(event.payload.get("content") or "")
                 vector = self.embedding_service.embed(content)
                 self.vector_repo.upsert(requirement_id, vector, source_text=content)
+                self.outbox_repo.mark_done(event)
+                results.append(f"processed:{event.id}:{event.aggregate_id}")
+            except Exception as exc:
+                failed = self.outbox_repo.mark_failed(event, error=str(exc), max_retries=max_retries)
+                results.append(f"{failed.status}:{event.id}:{event.aggregate_id}")
+        return results
+
+
+class DocumentChunkingTask:
+    """Background task that converts document text into fixed-size chunks and vector embeddings."""
+
+    def __init__(
+        self,
+        outbox_repo: OutboxRepository | None = None,
+        document_repo: DocumentAssetRepository | None = None,
+    ) -> None:
+        self.outbox_repo = outbox_repo or OutboxRepository()
+        self.document_repo = document_repo or DocumentAssetRepository()
+
+    def enqueue(self, *, document_id: int, content: str, chunk_size: int = 600, overlap: int = 120) -> str:
+        event = self.outbox_repo.enqueue(
+            aggregate_type="document_asset",
+            aggregate_id=str(document_id),
+            event_type="document_chunk_sync",
+            payload={
+                "document_id": document_id,
+                "content": content,
+                "chunk_size": chunk_size,
+                "overlap": overlap,
+            },
+        )
+        return f"queued:{event.id}:{event.aggregate_id}:{event.event_type}"
+
+    def process_pending(self, *, limit: int = 20, max_retries: int = 3) -> list[str]:
+        results: list[str] = []
+        claim = getattr(self.outbox_repo, "claim_pending", None)
+        events = claim(limit=limit, event_type="document_chunk_sync") if claim else self.outbox_repo.list_pending(limit)
+        for event in events:
+            try:
+                document_id = int(event.payload["document_id"])
+                content = str(event.payload.get("content") or "")
+                chunk_size = int(event.payload.get("chunk_size") or 600)
+                overlap = int(event.payload.get("overlap") or 120)
+                self.document_repo.add_chunks(document_id, content, chunk_size=chunk_size, overlap=overlap)
                 self.outbox_repo.mark_done(event)
                 results.append(f"processed:{event.id}:{event.aggregate_id}")
             except Exception as exc:

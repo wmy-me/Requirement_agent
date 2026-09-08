@@ -56,6 +56,7 @@
           <div class="wb-tabs">
             <button class="wb-tab active" data-tab="pending" type="button">待办<span id="pending-count" class="count-badge hidden">0</span></button>
             <button class="wb-tab" data-tab="library" type="button">需求库</button>
+            <button class="wb-tab" data-tab="documents" type="button">文档库</button>
             <button class="wb-tab" data-tab="audit" type="button">审计</button>
           </div>
 
@@ -78,6 +79,19 @@
             </div>
             <div id="library-list" class="item-scroll"></div>
             <div id="lib-detail" class="lib-detail hidden"></div>
+          </section>
+
+          <section id="tab-documents" class="wb-pane">
+            <form id="document-search" class="lib-search">
+              <input id="document-q" placeholder="搜索文档 / 证据词…" />
+              <button class="link-btn" type="submit">搜索</button>
+            </form>
+            <div class="pane-toolbar">
+              <span>文档库</span>
+              <button id="refresh-documents" class="link-btn" type="button">刷新</button>
+            </div>
+            <div id="document-list" class="item-scroll"></div>
+            <div id="document-detail" class="lib-detail hidden"></div>
           </section>
 
           <section id="tab-audit" class="wb-pane">

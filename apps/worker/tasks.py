@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from src.infrastructure.worker.tasks import EmbeddingTask
+from src.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
 from src.infrastructure.worker.outbox import OutboxRepository
 
 app = FastAPI(
@@ -22,6 +22,13 @@ async def healthcheck() -> dict[str, str]:
 @app.post("/tasks/embedding/process")
 async def process_embedding_events(limit: int = 20) -> dict[str, object]:
     task = EmbeddingTask()
+    results = task.process_pending(limit=limit)
+    return {"status": "ok", "results": results}
+
+
+@app.post("/tasks/document-chunk/process")
+async def process_document_chunk_events(limit: int = 20) -> dict[str, object]:
+    task = DocumentChunkingTask()
     results = task.process_pending(limit=limit)
     return {"status": "ok", "results": results}
 
@@ -50,3 +57,9 @@ def enqueue_embedding_sync(*, requirement_id: int = 1, requirement_key: str = "R
     """Queue a background embedding synchronization job."""
     task = EmbeddingTask()
     return task.enqueue(requirement_id=requirement_id, requirement_key=requirement_key, content=content)
+
+
+def enqueue_document_chunk_sync(*, document_id: int, content: str, chunk_size: int = 600, overlap: int = 120) -> str:
+    """Queue a background document chunking job."""
+    task = DocumentChunkingTask()
+    return task.enqueue(document_id=document_id, content=content, chunk_size=chunk_size, overlap=overlap)

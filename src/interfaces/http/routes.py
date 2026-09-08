@@ -13,6 +13,7 @@ from src.agents.extract_agent import ExtractAgent
 from src.agents.risk_agent import RiskAgent
 from src.application.decision_rules import next_action_for as decision_next_action
 from src.application.decision_rules import review_required as decision_review_required
+from src.application.memory_service import MemoryContextBuilder
 from src.application.requirement_service import RequirementService
 from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
@@ -20,6 +21,9 @@ from src.config.settings import settings
 from src.domain.requirement import RequirementSource
 from src.infrastructure.db.repositories import (
     AuditRepository,
+    ChatRepository,
+    DocumentAssetRepository,
+    MemoryRepository,
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
@@ -28,9 +32,13 @@ from src.infrastructure.db.session import check_database_connection
 from src.infrastructure.llm.openai_provider import LLMProvider
 from src.infrastructure.parser.document_parser import DocumentParser
 from src.infrastructure.storage.object_store import ObjectStorage
+from src.infrastructure.worker.tasks import DocumentChunkingTask
 from src.interfaces.http.schemas import (
     AgentChatRequest,
     AgentRunRequest,
+    ConversationCreateRequest,
+    ConversationMessageCreateRequest,
+    ConversationUpdateRequest,
     RequirementSubmitRequest,
     RequirementSubmitResponse,
     ReviewSubmitRequest,
@@ -44,11 +52,16 @@ review_service = ReviewService()
 source_repo = RequirementSourceRepository()
 version_repo = RequirementVersionRepository()
 audit_repo = AuditRepository()
+document_repo = DocumentAssetRepository()
+chat_repo = ChatRepository()
+memory_repo = MemoryRepository()
+memory_context_builder = MemoryContextBuilder(memory_repo)
 extract_agent = ExtractAgent()
 analyze_agent = AnalyzeAgent()
 risk_agent = RiskAgent()
 document_parser = DocumentParser()
 object_storage = ObjectStorage()
+document_chunk_task = DocumentChunkingTask()
 chat_sessions: dict[str, list[dict[str, object]]] = {}
 
 RISK_KEYS = (
@@ -58,10 +71,20 @@ RISK_KEYS = (
 )
 
 NARRATIVE_SYSTEM_PROMPT = (
-    "你是需求治理助手，正在与业务方对话。用户刚描述了一条业务需求，系统已完成结构化抽取、相似度检索、冲突分析和风险评估。"
-    "请用第一人称、口语化、亲切的中文，向用户总结你对这条需求的理解、发现的相似/重复项、风险结论，并给出下一步建议。"
-    "要求：总字数不超过 250 字；不要使用 markdown 标题、编号或代码块；不要罗列 JSON 字段；结尾自然地询问是否需要提交审核。"
+    "你是需求治理助手，正在与业务方对话。用户刚描述了一条需求，系统已完成结构化抽取、相似度检索、冲突与重复分析、风险评估，"
+    "并给出了是否需要人工审核的判断（next_action：manual_review 或 can_commit）。"
+    "请用第一人称、自然、清晰的中文，给出一段“最终结论”："
+    "1) 先点明这条需求主要涉及哪个领域/方向；"
+    "2) 结合检索/分析结果说明它与系统已有需求的关系：若命中相似项请直接点名 REQ 编号（如 REQ-000001）与判断（高度相似/关联/冲突）；没有则说明暂未发现重复；"
+    "3) 给出“综合分析结果”要点（可用“- ”短列表）：重复/关联/冲突结论、需要澄清的点、风险评估结论；"
+    "4) 结尾给出建议：manual_review 时建议补充澄清并进入人工评审，can_commit 时可作为独立需求继续处理。"
+    "要求：总字数不超过 300 字；不要使用 markdown 标题、代码块或 JSON；不要罗列字段名；不要以反问句结尾。"
 )
+
+
+def _actor_id_or_default(actor_id: str | None) -> str:
+    normalized = (actor_id or settings.api_actor_id or "api-user").strip()
+    return normalized or "api-user"
 
 
 def _sse(name: str, payload: object) -> str:
@@ -88,13 +111,15 @@ def _fallback_narrative(pipeline: dict[str, object]) -> str:
         except (TypeError, ValueError):
             return 0.0
 
-    duplicates = [c for c in candidates if _similarity(c) >= 0.8]
-    related = [c for c in candidates if 0.6 <= _similarity(c) < 0.8]
+    duplicates = [c for c in candidates if _similarity(c) >= 0.7]
+    related = [c for c in candidates if 0.45 <= _similarity(c) < 0.7]
     if analysis.get("duplicate") and duplicates:
         keys = "、".join(str(c.get("requirement_key") or "") for c in duplicates[:3])
         parts.append(f"⚠️ 我发现 {len(duplicates)} 条高度相似的存量需求（{keys}），建议先核对是否重复。")
     elif analysis.get("related") and related:
         parts.append(f"我注意到 {len(related)} 条相关联需求，可能需要一起评估依赖关系。")
+    elif candidates:
+        parts.append("检索到了少量弱相关候选，但相似度不足以直接判断为相关或重复，建议人工确认。")
     if analysis.get("conflict"):
         parts.append("⚠️ 与现有权限或状态逻辑可能存在冲突，建议谨慎评审。")
 
@@ -161,9 +186,29 @@ async def _narrative_chunks(pipeline: dict[str, object]) -> AsyncIterator[str]:
 
 async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
     """以 SSE 事件驱动完整 Agent 管线：状态 → 自然语言总结 → 结构化卡片。"""
+    actor_id = _actor_id_or_default(payload.actor_id)
     session_id = payload.session_id or uuid4().hex
+    conversation = chat_repo.get_conversation(session_id, actor_id=actor_id)
+    if conversation is None:
+        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
+        session_id = str(conversation["id"])
     history = chat_sessions.setdefault(session_id, [])
-    history.append({"role": "user", "content": payload.message})
+    client_message_id = payload.client_message_id or uuid4().hex
+    history.append({"role": "user", "content": payload.message, "client_message_id": client_message_id})
+
+    user_message = chat_repo.upsert_user_message(
+        conversation_id=session_id,
+        content=payload.message,
+        actor_id=actor_id,
+        client_message_id=client_message_id,
+    )
+    run = chat_repo.create_run(
+        conversation_id=session_id,
+        client_message_id=client_message_id,
+        status="running",
+        meta={"source_type": payload.source_type, "requester_name": payload.requester_name},
+    )
+    run_id = str(run["run_id"])
 
     run_text = payload.requirement_text or payload.message
     pipeline: dict[str, object] = {
@@ -171,11 +216,12 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         "steps": ["extract", "retrieve", "analyze", "risk", "review_decision"],
         "source_type": payload.source_type,
         "requester_name": payload.requester_name,
+        "analysis_mode": payload.analysis_mode,
     }
     narrative_parts: list[str] = []
 
     try:
-        yield _sse("session", {"session_id": session_id})
+        yield _sse("session", {"session_id": session_id, "run_id": run_id})
 
         yield _sse("step", {"step": "extract", "label": "正在理解你的需求…"})
         extracted = await run_in_threadpool(
@@ -199,14 +245,26 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         analysis = await run_in_threadpool(analyze_agent.analyze, extracted, candidates)
         analysis_payload = analysis.model_dump(mode="python")
         pipeline["analysis"] = analysis_payload
+        pipeline["analysis"]["candidates"] = [
+            {
+                **candidate,
+                "evidence": candidate.get("evidence") or [],
+                "score_label": "高" if float(candidate.get("similarity") or 0) >= 0.7 else "中" if float(candidate.get("similarity") or 0) >= 0.45 else "低",
+            }
+            for candidate in pipeline["analysis"].get("candidates") or []
+        ]
 
         yield _sse("step", {"step": "risk", "label": "正在评估风险…"})
         risk = await run_in_threadpool(risk_agent.assess, extracted)
         risk_payload = risk.model_dump(mode="python")
         pipeline["risk"] = risk_payload
 
+        pipeline["risk"]["confidence"] = round(float(pipeline["risk"].get("confidence") or 0.0), 2)
+
         pipeline["review_required"] = decision_review_required(analysis_payload, risk_payload)
         pipeline["next_action"] = decision_next_action(analysis_payload, risk_payload)
+
+        yield _sse("artifacts", {"artifacts": pipeline})
 
         yield _sse("narrative", {"start": True})
         try:
@@ -214,7 +272,6 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
                 narrative_parts.append(token)
                 yield _sse("narrative", {"t": token})
         except Exception:
-            # 流式总结失败不致命：若已无内容则回退到确定性结论
             pass
         if not narrative_parts:
             fallback_text = _fallback_narrative(pipeline)
@@ -223,21 +280,30 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
                 narrative_parts.append(piece)
                 yield _sse("narrative", {"t": piece})
 
+        assistant_content = "".join(narrative_parts)
         assistant_message: dict[str, object] = {
             "role": "assistant",
-            "content": "".join(narrative_parts),
+            "content": assistant_content,
             "artifacts": pipeline,
         }
         history.append(assistant_message)
-        yield _sse("artifacts", {"artifacts": pipeline})
-        yield _sse("done", {})
+        chat_repo.append_assistant_message(
+            conversation_id=session_id,
+            content=assistant_content,
+            artifacts=pipeline,
+            run_id=run_id,
+        )
+        chat_repo.update_run(run_id=run_id, status="completed", meta={"conversation_id": session_id, "assistant_message_id": user_message["id"]})
+        yield _sse("done", {"run_id": run_id})
     except asyncio.CancelledError:
+        chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")
         raise
     except Exception as exc:
         error_text = f"分析遇到问题：{exc}"
         history.append({"role": "assistant", "content": error_text, "artifacts": None})
+        chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
         yield _sse("error", {"message": str(exc)})
-        yield _sse("done", {})
+        yield _sse("done", {"run_id": run_id})
 
 
 @router.get("/")
@@ -366,6 +432,37 @@ async def ingest_requirement(
         metadata=metadata_payload,
     )
     response = requirement_service.submit_requirement(source)
+
+    if file is not None and stored is not None:
+        doc_asset = document_repo.save(
+            file_name=file.filename or "requirement-document.txt",
+            content_type=file.content_type or "application/octet-stream",
+            storage_uri=stored.uri,
+            checksum=stored.checksum,
+            size_bytes=stored.size,
+            source_type=source_type,
+            original_text=merged_text,
+            extracted_text=parsed.content if parsed is not None else merged_text,
+            metadata={
+                "input_mode": input_mode,
+                "normalized_fields": parsed.normalized_fields or {} if parsed is not None else {},
+                "segments": [
+                    {"index": seg.index, "kind": seg.kind, "text": seg.text, "field_name": seg.field_name}
+                    for seg in (parsed.segments or [])
+                ] if parsed is not None else [],
+                "source_id": response.get("source_id"),
+            },
+            source_id=response.get("source_id"),
+        )
+        if parsed is not None and parsed.content:
+            document_chunk_task.enqueue(
+                document_id=int(doc_asset["id"]),
+                content=parsed.content,
+                chunk_size=600,
+                overlap=120,
+            )
+            document_chunk_task.process_pending(limit=1)
+
     return RequirementSubmitResponse(
         message="Requirement submitted for review",
         source_type=source_type,
@@ -396,6 +493,50 @@ async def search_requirements(
     return {"items": retrieval_service.search(q.strip(), limit=limit, filters=filters)}
 
 
+@router.get("/api/v1/documents")
+async def list_documents(limit: int = Query(default=20, ge=1, le=50)) -> dict[str, object]:
+    return {"items": document_repo.list_documents(limit=limit)}
+
+
+@router.get("/api/v1/documents/{document_id}")
+async def get_document(document_id: int) -> dict[str, object]:
+    document = document_repo.get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return document
+
+
+@router.get("/api/v1/documents/{document_id}/chunks")
+async def get_document_chunks(
+    document_id: int,
+    limit: int = Query(default=20, ge=1, le=50),
+) -> dict[str, object]:
+    document = document_repo.get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return {"document_id": document_id, "items": document_repo.get_chunks(document_id, limit=limit)}
+
+
+@router.post("/api/v1/documents/{document_id}/reindex")
+async def reindex_document_chunks(document_id: int) -> dict[str, object]:
+    document = document_repo.get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    text = (document.get("extracted_text") or document.get("original_text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document text is empty")
+    result = document_chunk_task.enqueue(document_id=document_id, content=text, chunk_size=600, overlap=120)
+    return {"status": "queued", "result": result, "document_id": document_id}
+
+
+@router.get("/api/v1/documents/search")
+async def search_document_chunks(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=5, ge=1, le=20),
+) -> dict[str, object]:
+    return {"items": document_repo.search_chunks(q.strip(), limit=limit)}
+
+
 @router.post("/api/v1/agent/run")
 async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
     """与 /chat/stream 共享的分析管线（非流式，供回放/兼容）。"""
@@ -423,7 +564,13 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
 
 @router.post("/api/v1/agent/chat")
 async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
-    session_id = payload.session_id or uuid4().hex
+    actor_id = _actor_id_or_default(payload.actor_id)
+    session_id = payload.session_id or str(uuid4())
+    conversation = chat_repo.get_conversation(session_id, actor_id=actor_id)
+    if conversation is None:
+        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
+        session_id = str(conversation["id"])
+
     history = chat_sessions.setdefault(session_id, [])
     history.append({"role": "user", "content": payload.message})
 
@@ -445,7 +592,22 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
     )
     assistant_message = {"role": "assistant", "content": answer, "artifacts": pipeline}
     history.append(assistant_message)
-    return {"session_id": session_id, "message": assistant_message, "history": history}
+
+    client_message_id = payload.client_message_id or str(uuid4())
+    chat_repo.upsert_user_message(
+        conversation_id=session_id,
+        content=payload.message,
+        actor_id=actor_id,
+        client_message_id=client_message_id,
+    )
+    run = chat_repo.create_run(conversation_id=session_id, client_message_id=client_message_id, status="completed")
+    chat_repo.append_assistant_message(
+        conversation_id=session_id,
+        content=answer,
+        artifacts=pipeline,
+        run_id=str(run["run_id"]),
+    )
+    return {"session_id": session_id, "message": assistant_message, "history": chat_repo.get_messages(session_id)}
 
 
 @router.post("/api/v1/agent/chat/stream")
@@ -463,7 +625,127 @@ async def stream_agent_chat(payload: AgentChatRequest) -> StreamingResponse:
 
 @router.get("/api/v1/agent/chat/{session_id}")
 async def get_agent_chat_history(session_id: str) -> dict[str, object]:
-    return {"session_id": session_id, "history": chat_sessions.get(session_id, [])}
+    history = chat_repo.get_messages(session_id)
+    return {"session_id": session_id, "history": history or chat_sessions.get(session_id, [])}
+
+
+@router.get("/api/v1/conversations")
+async def list_conversations(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0), actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    return {"items": chat_repo.list_conversations(actor_id=normalized_actor_id, limit=limit, offset=offset)}
+
+
+@router.post("/api/v1/conversations")
+async def create_conversation(payload: ConversationCreateRequest) -> dict[str, object]:
+    actor_id = _actor_id_or_default(payload.actor_id)
+    conversation = chat_repo.create_conversation(actor_id=actor_id, title=payload.title)
+    return conversation
+
+
+@router.get("/api/v1/conversations/{conversation_id}/messages")
+async def get_conversation_messages(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return {"conversation_id": conversation_id, "items": chat_repo.get_messages(conversation_id)}
+
+
+@router.post("/api/v1/conversations/{conversation_id}/messages")
+async def add_conversation_message(conversation_id: str, payload: ConversationMessageCreateRequest) -> dict[str, object]:
+    actor_id = _actor_id_or_default(payload.actor_id)
+    conversation = chat_repo.get_conversation(conversation_id, actor_id=actor_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    message = chat_repo.upsert_user_message(
+        conversation_id=conversation_id,
+        content=payload.message,
+        actor_id=actor_id,
+        client_message_id=payload.client_message_id or str(uuid4()),
+    )
+    return {"message": message}
+
+
+@router.patch("/api/v1/conversations/{conversation_id}")
+async def update_conversation(conversation_id: str, payload: ConversationUpdateRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    conversation = chat_repo.update_conversation(
+        conversation_id,
+        title=payload.title,
+        summary=payload.summary,
+        status=payload.status,
+        actor_id=normalized_actor_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return conversation
+
+
+@router.delete("/api/v1/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, str]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    deleted = chat_repo.delete_conversation(conversation_id, actor_id=normalized_actor_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return {"status": "deleted", "conversation_id": conversation_id}
+
+
+@router.post("/api/v1/conversations/{conversation_id}/finalize")
+async def finalize_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    summary = "\n".join(msg["content"] for msg in chat_repo.get_messages(conversation_id) if msg["role"] in {"user", "assistant"})[:2000]
+    chat_repo.update_conversation(conversation_id, summary=summary, actor_id=normalized_actor_id)
+    return {"status": "finalized", "conversation_id": conversation_id, "summary": summary}
+
+
+@router.get("/api/v1/agent/runs/{run_id}")
+async def get_agent_run(run_id: str) -> dict[str, object]:
+    run = chat_repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    return run
+
+
+@router.get("/api/v1/memory")
+async def list_memory(actor_id: str | None = Query(default=None, max_length=120), limit: int = Query(default=20, ge=1, le=50)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    return {"items": memory_repo.list_memories(actor_id=normalized_actor_id, limit=limit)}
+
+
+@router.post("/api/v1/memory")
+async def upsert_memory(payload: dict[str, object]) -> dict[str, object]:
+    actor_id = _actor_id_or_default(str(payload.get("actor_id") or settings.api_actor_id or "api-user"))
+    note = memory_repo.insert_memory(
+        actor_id=actor_id,
+        kind=str(payload.get("kind") or "fact"),
+        content=str(payload.get("content") or "").strip(),
+        source_conversation_id=payload.get("source_conversation_id"),
+        source_message_id=int(payload["source_message_id"]) if payload.get("source_message_id") is not None else None,
+        ref_requirement_key=payload.get("ref_requirement_key"),
+        importance=int(payload.get("importance") or 1),
+        meta=dict(payload.get("meta") or {}),
+    )
+    if not note["content"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="memory content is required")
+    return note
+
+
+@router.post("/api/v1/memory/{memory_id}/delete")
+async def delete_memory(memory_id: int, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    note = memory_repo.update_status(memory_id, "deleted")
+    if note is None or note["actor_id"] != normalized_actor_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    return {"status": "deleted", "memory": note}
+
+
+@router.get("/api/v1/memory/context")
+async def get_memory_context(query: str = Query(min_length=1, max_length=200), actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    normalized_actor_id = _actor_id_or_default(actor_id)
+    return {"context": memory_context_builder.build_context(normalized_actor_id, query, limit=4)}
 
 
 @router.get("/api/v1/reviews/pending")

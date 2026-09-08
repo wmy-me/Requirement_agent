@@ -31,7 +31,7 @@ class RiskAgent:
         quality_risk = RiskAgent()._evaluate_quality(extracted)
         change_risk = RiskAgent()._evaluate_change(extracted)
         technical_impact_risk = RiskAgent()._evaluate_technical(extracted)
-        confidence = 0.8 if any(item in extracted.tags for item in ["登录", "权限", "支付", "审批"]) else 0.7
+        confidence = RiskAgent()._confidence_score(extracted)
 
         return RiskAssessment(
             quality_risk=quality_risk,
@@ -41,22 +41,44 @@ class RiskAgent:
         )
 
     def _evaluate_quality(self, extracted: ExtractedRequirement) -> str:
-        if len(extracted.requirements) >= 3 and extracted.priority == "high":
+        if not extracted.summary.strip():
+            return "medium"
+        if len(extracted.requirements) >= 4 and extracted.priority == "high":
+            return "high"
+        if len(extracted.requirements) >= 3:
             return "medium"
         if extracted.priority == "high":
             return "medium"
         return "low"
 
     def _evaluate_change(self, extracted: ExtractedRequirement) -> str:
-        if extracted.business_domain in {"auth", "workflow", "data"}:
+        if extracted.business_domain in {"auth", "workflow", "data", "reporting"}:
             return "medium"
-        if extracted.priority == "high":
+        if extracted.priority == "high" and len(extracted.requirements) >= 2:
             return "high"
         return "low"
 
     def _evaluate_technical(self, extracted: ExtractedRequirement) -> str:
-        if extracted.business_domain in {"auth", "data"}:
+        if extracted.business_domain in {"auth", "data", "integration"}:
             return "medium"
+        if len(extracted.tags) >= 4 or any(tag in extracted.tags for tag in ["导出", "筛选", "报表", "权限", "登录"]):
+            return "medium"
+        if "接口" in extracted.summary or "第三方" in extracted.summary:
+            return "high"
         if len(extracted.tags) >= 3:
             return "medium"
         return "low"
+
+    def _confidence_score(self, extracted: ExtractedRequirement) -> float:
+        confidence = 0.55
+        if extracted.summary.strip():
+            confidence += 0.1
+        if len(extracted.requirements) >= 2:
+            confidence += 0.1
+        if extracted.priority in {"high", "medium"}:
+            confidence += 0.05
+        if extracted.business_domain in {"auth", "workflow", "data", "integration", "reporting"}:
+            confidence += 0.05
+        if len(extracted.tags) >= 4:
+            confidence += 0.05
+        return round(min(confidence, 0.92), 2)

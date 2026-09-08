@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import io
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from pypdf import PdfReader
+except ImportError:  # pragma: no cover - optional dependency, handled gracefully
+    PdfReader = None
+
+try:
+    from docx import Document as DocxDocument
+except ImportError:  # pragma: no cover - optional dependency, handled gracefully
+    DocxDocument = None
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - optional dependency, handled gracefully
+    Image = None
 
 
 @dataclass(slots=True)
@@ -30,14 +47,15 @@ class DocumentParser:
     """Parses uploaded text-based files into plain requirement text."""
 
     def parse(self, file_name: str, payload: bytes) -> ParsedDocument:
-        raw_text = payload.decode("utf-8", errors="ignore").strip()
-        if not raw_text:
+        extension = Path(file_name).suffix.lower() or ".txt"
+        raw_text = self._extract_text(file_name, payload, extension)
+        if not raw_text.strip():
             raw_text = self._fallback_from_name(file_name)
+
         text = self.clean_text(raw_text)
         segments = self.segment(text)
         normalized_fields = self.normalize_fields(segments)
         title = Path(file_name).stem or "requirement-document"
-        extension = Path(file_name).suffix.lower() or ".txt"
         pages = max(1, len(raw_text.splitlines()) // 25 + 1)
         return ParsedDocument(
             title=title,
@@ -48,6 +66,86 @@ class DocumentParser:
             segments=segments,
             normalized_fields=normalized_fields,
         )
+
+    def _extract_text(self, file_name: str, payload: bytes, extension: str) -> str:
+        if extension == ".pdf":
+            return self._extract_pdf_text(file_name, payload)
+        if extension == ".docx":
+            return self._extract_docx_text(file_name, payload)
+        if extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
+            return self._extract_image_text(file_name, payload)
+        if extension in {".doc"}:
+            return f"[文件附件：{file_name}] 当前不支持老版 .doc 直接抽取，已保留原文件并等待二次处理。"
+
+        try:
+            decoded = payload.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            decoded = payload.decode("utf-8", errors="ignore").strip()
+        if decoded:
+            return decoded
+        return self._fallback_from_name(file_name)
+
+    def _extract_pdf_text(self, file_name: str, payload: bytes) -> str:
+        if PdfReader is None:
+            return f"[PDF附件：{file_name}] 已保存原文件，当前环境未安装 PDF 文本提取库，需后续补充 OCR/解析。"
+        try:
+            reader = PdfReader(io.BytesIO(payload))
+            pages: list[str] = []
+            for page in reader.pages:
+                extracted = page.extract_text() or ""
+                if extracted.strip():
+                    pages.append(extracted.strip())
+            if pages:
+                return "\n\n".join(pages)
+        except Exception:
+            pass
+        return f"[PDF附件：{file_name}] 已保留原文件，当前未能抽取正文文本，建议在后续做专业 PDF OCR。"
+
+    def _extract_docx_text(self, file_name: str, payload: bytes) -> str:
+        if DocxDocument is None:
+            return f"[Word附件：{file_name}] 已保留原文件，当前环境未安装 docx 解析库。"
+        try:
+            document = DocxDocument(io.BytesIO(payload))
+            paragraphs: list[str] = []
+            for paragraph in document.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    paragraphs.append(text)
+            for table in document.tables:
+                for row in table.rows:
+                    values = [cell.text.strip() for cell in row.cells]
+                    joined = " | ".join(part for part in values if part)
+                    if joined:
+                        paragraphs.append(joined)
+            text = "\n\n".join(paragraphs).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+        return f"[Word附件：{file_name}] 已保留原文件，当前无法读取正文内容，建议后续补充更强的文档抽取处理。"
+
+    def _extract_image_text(self, file_name: str, payload: bytes) -> str:
+        if Image is None:
+            return f"[图片附件：{file_name}] 已保留原文件，当前环境缺少图像处理库。"
+        try:
+            image = Image.open(io.BytesIO(payload))
+            width, height = image.size
+            info = image.format or "image"
+            text = f"[图片附件：{file_name}]，格式={info}，尺寸={width}×{height}。当前仅保留原图与元数据，未完成 OCR。"
+            try:
+                import pytesseract  # type: ignore
+                import shutil
+
+                if shutil.which("tesseract"):
+                    ocr_text = pytesseract.image_to_string(image)
+                    clean = self.clean_text(ocr_text)
+                    if clean:
+                        return clean
+            except Exception:
+                pass
+            return text
+        except Exception:
+            return f"[图片附件：{file_name}] 已保留原文件，但图像内容无法识别。"
 
     def clean_text(self, text: str) -> str:
         normalized = (

@@ -59,6 +59,7 @@ class AnalyzeSkill(BaseSkill):
                         title=str(item.get("title") or "历史需求"),
                         similarity=similarity,
                         reason=str(item.get("reason") or "相似"),
+                        evidence=[str(v) for v in item.get("evidence") or []],
                     )
                 )
 
@@ -66,15 +67,15 @@ class AnalyzeSkill(BaseSkill):
             duplicate = bool(payload.get("duplicate"))
             related = bool(payload.get("related"))
             conflict = bool(payload.get("conflict"))
-            # duplicate=true 但没有任何 ≥0.8 的相似候选 → 降为 false（防假阳性）
-            if duplicate and max_similarity < 0.8:
+            # duplicate=true 但没有任何 ≥0.7 的相似候选 → 降为 false（防假阳性）
+            if duplicate and max_similarity < 0.7:
                 duplicate = False
-                related = related or max_similarity >= 0.6
-            # 有 ≥0.8 候选但 LLM 漏报 → 按证据补上
-            if not duplicate and max_similarity >= 0.8:
+                related = related or max_similarity >= 0.45
+            # 有 ≥0.7 候选但 LLM 漏报 → 按证据补上
+            if not duplicate and max_similarity >= 0.7:
                 duplicate = True
                 related = True
-            if not related and max_similarity >= 0.6:
+            if not related and max_similarity >= 0.45:
                 related = True
             independent = not (duplicate or related or conflict)
 

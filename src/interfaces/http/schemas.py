@@ -83,13 +83,47 @@ class AgentChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=10_000)
     session_id: str | None = Field(default=None, max_length=120)
+    client_message_id: str | None = Field(default=None, max_length=200)
     requirement_text: str | None = Field(default=None, max_length=20_000)
     source_type: Literal["web", "email", "meeting", "manual"] = "web"
     requester_name: str | None = Field(default=None, max_length=120)
+    actor_id: str | None = Field(default=None, max_length=120)
+    analysis_mode: Literal["strict", "balanced", "broad"] = "strict"
 
-    @field_validator("message", "session_id", "requirement_text", "requester_name", mode="before")
+    @field_validator("message", "session_id", "client_message_id", "requirement_text", "requester_name", "actor_id", mode="before")
     @classmethod
     def normalize_optional_chat_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=200)
+    actor_id: str | None = Field(default=None, max_length=120)
+
+
+class ConversationUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=200)
+    summary: str | None = Field(default=None, max_length=2000)
+    status: Literal["active", "archived"] | None = None
+
+
+class ConversationMessageCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=10_000)
+    client_message_id: str | None = Field(default=None, max_length=200)
+    actor_id: str | None = Field(default=None, max_length=120)
+
+    @field_validator("message", "client_message_id", "actor_id", mode="before")
+    @classmethod
+    def normalize_message_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()

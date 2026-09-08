@@ -160,8 +160,8 @@ function appendSystem(text) {
   return art;
 }
 
-/* A pending assistant message with a live steps line, streaming text and artifacts. */
-function appendAssistantPending() {
+/* —— 分析消息：展示进行中的步骤与结构化分析卡片（不含最终结论文字）—— */
+function appendAnalysisMessage() {
   const art = document.createElement('article');
   art.className = 'msg assistant';
   art.innerHTML = `
@@ -178,54 +178,77 @@ function appendAssistantPending() {
   const holder = art.querySelector('.steps-holder');
   const stepsText = art.querySelector('.steps-text');
   const artifactBox = art.querySelector('.artifact');
-  let textNode = null;
-  let textBuffer = '';
-  let hasNarrative = false;
-  let finished = false;
+  let finalized = false;
+
+  const hideSteps = () => {
+    if (!finalized) { finalized = true; holder.style.display = 'none'; }
+  };
 
   const api = {
-    setStep(label) { if (!hasNarrative) stepsText.textContent = label; scrollBottom(); },
-    startNarrative() {
-      hasNarrative = true;
-      holder.classList.remove('steps-holder');
-      holder.innerHTML = '';
-      textNode = document.createTextNode('');
-      const caret = document.createElement('span');
-      caret.className = 'caret';
-      holder.appendChild(textNode);
-      holder.appendChild(caret);
-      scrollBottom();
-    },
-    token(t) {
-      if (!textNode) return;
-      textNode.appendData(t);
-      textBuffer += t;
-      scrollBottom();
-    },
+    setStep(label) { if (!finalized) { stepsText.textContent = label; scrollBottom(); } },
+    /* 卡片就绪：收起步骤行，只保留结构化分析卡片 */
     addArtifacts(pipeline) {
       if (!pipeline || typeof pipeline !== 'object') return;
+      hideSteps();
       const frag = buildArtifact(pipeline);
       if (frag) { artifactBox.appendChild(frag); scrollBottom(); }
     },
+    /* 无卡片时手动收尾步骤行 */
+    completeAnalysis() { hideSteps(); scrollBottom(); },
+    error(message) {
+      hideSteps();
+      const box = document.createElement('div');
+      box.className = 'bubble';
+      box.style.cssText = 'background:var(--danger-soft);color:var(--danger);border:0;margin-top:8px;';
+      box.textContent = '⚠ ' + (message || '请求失败，请重试');
+      artifactBox.appendChild(box);
+      scrollBottom();
+    },
+    art: art,
+  };
+  return api;
+}
+
+/* —— 最终结论消息：卡片之后独立的普通 AI 气泡，支持逐字流式 —— */
+function createFinalBubble() {
+  const art = document.createElement('article');
+  art.className = 'msg assistant';
+  art.innerHTML = `
+    <div class="avatar">✦</div>
+    <div class="msg-body"><div class="bubble"></div></div>`;
+  msgs.appendChild(art);
+  scrollBottom();
+
+  const bubble = art.querySelector('.bubble');
+  let textNode = document.createTextNode('');
+  const caret = document.createElement('span');
+  caret.className = 'caret';
+  bubble.appendChild(textNode);
+  bubble.appendChild(caret);
+  let buffer = '';
+  let done = false;
+
+  const api = {
+    token(t) {
+      if (done) return;
+      textNode.appendData(t);
+      buffer += t;
+      scrollBottom();
+    },
     finish() {
-      if (finished) return;
-      finished = true;
-      const finalText = textBuffer || (hasNarrative ? '' : '已理解需求。');
-      holder.classList.remove('steps-holder');
-      holder.innerHTML = md(finalText);
-      textNode = null;
-      textBuffer = '';
+      if (done) return;
+      done = true;
+      textNode.remove();
+      caret.remove();
+      bubble.innerHTML = md(buffer);
       scrollBottom();
     },
     error(message) {
-      holder.classList.remove('steps-holder');
-      holder.innerHTML = '';
-      const box = document.createElement('div');
-      box.className = 'bubble';
-      box.style.cssText = 'background:var(--danger-soft);color:var(--danger);border:0;';
-      box.textContent = '⚠ ' + (message || '请求失败，请重试');
-      art.querySelector('.msg-body').insertBefore(box, holder);
-      holder.style.display = 'none';
+      if (done) return;
+      done = true;
+      caret.remove();
+      bubble.style.cssText = 'background:var(--danger-soft);color:var(--danger);border:0;';
+      bubble.textContent = '⚠ ' + (message || '请求失败，请重试');
       scrollBottom();
     },
     art: art,
@@ -295,6 +318,7 @@ function buildArtifact(p) {
         <div class="cand-title">${esc(c.title || '历史需求')}</div>
         <div class="score"><span class="track"><span class="fill" style="width:${Math.max(2, Math.round((c.similarity || 0) * 100))}%"></span></span></div>
         <div class="reason">${esc(c.reason || '')}</div>
+        ${Array.isArray(c.evidence) && c.evidence.length ? `<div class="reason">证据：${c.evidence.map((e) => `<span class="chip">${esc(e)}</span>`).join(' ')}</div>` : ''}
       </div>`).join('');
   } else {
     b2.innerHTML = `<div class="empty-hint">未检索到存量相似需求</div>`;
@@ -320,6 +344,7 @@ function buildArtifact(p) {
   const risks = [['质量风险', risk.quality_risk], ['变更风险', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
   b4.innerHTML = `<div class="risk-line">${risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)} · ${levelText(lvl)}</span>`).join('')}</div>`;
   if (risk.confidence != null) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:6px">模型置信度 ${Math.round(risk.confidence * 100)}%</div>`);
+  if (pipeline.analysis_mode) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:4px">审核模式：${esc(pipeline.analysis_mode)}</div>`);
   frag.appendChild(c4);
 
   // 5) actions
@@ -402,13 +427,16 @@ async function runChat(text) {
   const snippet = firstLine(msg, 36);
 
   appendUser(msg);
-  const asst = appendAssistantPending();
+  // 一条“分析消息”（步骤 + 结构化卡片），最终结论另起一条独立气泡
+  const analysis = appendAnalysisMessage();
+  let final = null;
 
   const payload = {
     message: msg,
     session_id: state.sessionId || null,
     source_type: 'web',
     requester_name: '我',
+    analysis_mode: 'strict',
   };
 
   try {
@@ -426,17 +454,18 @@ async function runChat(text) {
       let data = {};
       try { data = ev.data ? JSON.parse(ev.data) : {}; } catch (e) { /* ignore */ }
       if (ev.event === 'session') state.sessionId = data.session_id || state.sessionId;
-      else if (ev.event === 'step') asst.setStep(data.label || '');
+      else if (ev.event === 'step') analysis.setStep(data.label || '');
+      else if (ev.event === 'artifacts') analysis.addArtifacts(data.artifacts);
       else if (ev.event === 'narrative') {
-        if (data.start) asst.startNarrative();
-        else if (data.t) asst.token(data.t);
-      } else if (ev.event === 'artifacts') asst.addArtifacts(data.artifacts);
-      else if (ev.event === 'error') asst.error(data.message);
-      else if (ev.event === 'done') asst.finish();
+        if (data.start) { if (!final) final = createFinalBubble(); }
+        else if (data.t) { if (!final) final = createFinalBubble(); final.token(data.t); }
+      } else if (ev.event === 'error') (final || analysis).error(data.message);
+      else if (ev.event === 'done') { if (final) final.finish(); else analysis.completeAnalysis(); }
     }
-    asst.finish();
+    if (final) final.finish();
+    else analysis.completeAnalysis();
   } catch (err) {
-    asst.error(err && err.message ? err.message : '网络异常，请重试');
+    (final || analysis).error(err && err.message ? err.message : '网络异常，请重试');
   } finally {
     state.streaming = false;
     setSendEnabled();
@@ -454,11 +483,16 @@ function renderHistory(history) {
     if (m.role === 'user') {
       appendUser(m.content || '');
     } else if (m.role === 'assistant') {
-      const art = appendAssistantPending();
-      art.startNarrative();
-      art.token(m.content || '');
-      if (m.artifacts && typeof m.artifacts === 'object') art.addArtifacts(m.artifacts);
-      art.finish();
+      // 回放顺序与实时一致：先卡片，再最终结论气泡
+      const analysis = appendAnalysisMessage();
+      if (m.artifacts && typeof m.artifacts === 'object' && Object.keys(m.artifacts).length) {
+        analysis.addArtifacts(m.artifacts);
+      } else {
+        analysis.completeAnalysis();
+      }
+      const final = createFinalBubble();
+      if (m.content) final.token(m.content);
+      final.finish();
     }
   });
   scrollBottom();
@@ -729,6 +763,115 @@ async function showRequirementDetail(key, name) {
   }
 }
 
+/* ---------------- Workbench: documents ---------------- */
+async function loadDocuments(query = '') {
+  const listEl = $('document-list');
+  try {
+    const res = await apiJson('/api/v1/documents?limit=50');
+    let items = res.items || [];
+    const q = (query || '').trim().toLowerCase();
+    if (q) {
+      items = items.filter((doc) => {
+        const hay = `${doc.file_name || ''} ${doc.extracted_text || ''} ${doc.original_text || ''}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    listEl.innerHTML = '';
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty-hint">暂无文档记录</div>';
+      return;
+    }
+    items.forEach((doc) => listEl.appendChild(buildDocumentItem(doc)));
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function buildDocumentItem(doc) {
+  const box = document.createElement('div');
+  box.className = 'wb-item';
+  box.innerHTML = `
+    <div class="w-title"></div>
+    <div class="w-meta">
+      <span class="src-tag">#${doc.id}</span>
+      <span class="status-tag active">${esc(doc.content_type || 'file')}</span>
+      <span style="margin-left:auto">${esc(doc.size_bytes ? (doc.size_bytes / 1024).toFixed(1) + ' KB' : '0 KB')}</span>
+    </div>
+    <div class="w-ext">
+      <div class="w-section"><div class="k">存储</div><div class="orig-text"></div></div>
+      <div class="w-section"><div class="k">摘要</div><div class="w-summary"></div></div>
+    </div>`;
+  box.querySelector('.w-title').textContent = doc.file_name || '未命名文档';
+  box.querySelector('.orig-text').textContent = doc.storage_uri || '';
+  box.querySelector('.w-summary').textContent = doc.extracted_text ? String(doc.extracted_text).slice(0, 180) : '已保留原始文件与固定切片索引。';
+  box.addEventListener('click', () => showDocumentDetail(doc.id));
+  return box;
+}
+
+async function showDocumentDetail(documentId) {
+  const detailEl = $('document-detail');
+  detailEl.classList.remove('hidden');
+  detailEl.innerHTML = '<div class="empty-hint">加载文档详情…</div>';
+  try {
+    const [doc, chunks] = await Promise.all([
+      apiJson('/api/v1/documents/' + documentId),
+      apiJson('/api/v1/documents/' + documentId + '/chunks?limit=20'),
+    ]);
+    const hits = chunks.items || [];
+    const metadata = doc.metadata || {};
+    const fields = metadata.normalized_fields ? Object.entries(metadata.normalized_fields) : [];
+    const html = `
+      <div class="d-title">${esc(doc.file_name || '文档')}</div>
+      <div class="doc-meta-row">
+        <span class="src-tag">${esc(doc.content_type || 'file')}</span>
+        <span class="status-tag">${esc(doc.source_type || 'web')}</span>
+        <span class="status-tag active">${esc(doc.size_bytes ? (doc.size_bytes / 1024).toFixed(1) + 'KB' : '0KB')}</span>
+      </div>
+      <div class="doc-actions">
+        <button type="button" class="btn ghost" data-action="reindex-doc">重建分片索引</button>
+        <button type="button" class="btn" data-action="open-source">查看来源</button>
+      </div>
+      <div class="section-label">字段归一</div>
+      ${fields.length ? `<div class="kv">${fields.map(([k, v]) => `<span class="field"><span class="k">${esc(k)}</span><span class="chip tagged">${esc(v)}</span></span>`).join('')}</div>` : '<div class="empty-hint">无标准字段</div>'}
+      <div class="section-label">来源地址</div>
+      <div class="orig-text" style="white-space:pre-wrap">${esc(doc.storage_uri || '')}</div>
+      <div class="section-label">证据切片</div>
+      <ul class="timeline">
+        ${hits.length ? hits.map((h) => `<li><div class="t-head">切片 #${h.chunk_index}</div><div class="t-sub">${h.metadata && h.metadata.source ? esc(h.metadata.source) : 'fixed-slice'} · ${h.chunk_text ? '长度 ' + h.chunk_text.length + ' 字' : ''}</div><pre>${esc(h.chunk_text || '')}</pre></li>`).join('') : '<li><span class="empty-hint">暂无切片命中</span></li>'}
+      </ul>`;
+    detailEl.innerHTML = html;
+    const reindexBtn = detailEl.querySelector('[data-action="reindex-doc"]');
+    const openBtn = detailEl.querySelector('[data-action="open-source"]');
+    if (reindexBtn) {
+      reindexBtn.addEventListener('click', async () => {
+        try {
+          const res = await apiJson('/api/v1/documents/' + documentId + '/reindex', { method: 'POST' });
+          toast('已重建文档切片索引：' + (res.result || 'queued'), 'ok');
+          await showDocumentDetail(documentId);
+        } catch (e) {
+          toast('重建索引失败：' + e.message, 'err');
+        }
+      });
+    }
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        const uri = doc.storage_uri || '';
+        if (!uri) {
+          toast('该文档未保存有效来源地址', 'err');
+          return;
+        }
+        if (uri.startsWith('file://')) {
+          toast('本地文件地址无法直接在浏览器中打开：' + uri, 'ok');
+          return;
+        }
+        window.open(uri, '_blank', 'noopener');
+      });
+    }
+  } catch (e) {
+    detailEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
 /* ---------------- Workbench: audit & status ---------------- */
 async function loadAuditEvents() {
   const listEl = $('audit-list');
@@ -779,8 +922,8 @@ async function uploadDocument(file) {
   setSendEnabled();
   const snippet = '📎 ' + file.name;
   appendUser(snippet);
-  const asst = appendAssistantPending();
-  asst.setStep('正在解析并理解文档…');
+  const analysis = appendAnalysisMessage();
+  analysis.setStep('正在解析并理解文档…');
   const form = new FormData();
   form.append('source_type', 'web');
   form.append('requester_id', 'chat');
@@ -788,14 +931,14 @@ async function uploadDocument(file) {
   form.append('file', file);
   try {
     const res = await apiJson('/api/v1/requirements/ingest', { method: 'POST', body: form });
-    asst.startNarrative();
-    asst.token(`已解析文档「${file.name}」并完成抽取 → 已进入待办审核队列。`);
-    asst.finish();
+    const final = createFinalBubble();
+    final.token(`已解析文档「${file.name}」并完成抽取 → 已进入待办审核队列。`);
+    final.finish();
     appendSystem(`来源 #${res.source_id || ''} 已入队（${res.status || ''}）。可到右侧「待办」查看或审核。`);
     refreshPending();
     setRailTab('pending');
   } catch (e) {
-    asst.error(e.message);
+    analysis.error(e.message);
   } finally {
     state.streaming = false;
     setSendEnabled();
@@ -833,11 +976,16 @@ $('toggle-right').addEventListener('click', () => toggleRail('rail-workbench', '
 
 document.querySelectorAll('.wb-tab').forEach((b) => b.addEventListener('click', () => setRailTab(b.dataset.tab)));
 $('refresh-pending').addEventListener('click', refreshPending);
+$('refresh-documents').addEventListener('click', loadDocuments);
 $('refresh-audit').addEventListener('click', loadAuditEvents);
 $('lib-all').addEventListener('click', () => { $('lib-q').value = ''; loadLibrary(''); });
 $('lib-search').addEventListener('submit', (e) => {
   e.preventDefault();
   loadLibrary($('lib-q').value.trim());
+});
+$('document-search').addEventListener('submit', (e) => {
+  e.preventDefault();
+  loadDocuments($('document-q').value.trim());
 });
 
 function toggleRail(id, btnId) {
@@ -853,6 +1001,7 @@ async function init() {
   newChat();
   renderSessions();
   loadPendingReviews();
+  loadDocuments();
   loadAuditEvents();
   loadStatus();
   setInterval(() => { if (!state.streaming) loadStatus(); }, 30000);

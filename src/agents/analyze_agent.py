@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from src.agents.extract_agent import ExtractedRequirement
@@ -13,6 +15,7 @@ class CandidateMatch(BaseModel):
     title: str
     similarity: float
     reason: str
+    evidence: list[str] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):
@@ -50,10 +53,10 @@ class AnalyzeAgent:
         for item in historical:
             title = str(item.get("requirement_name") or item.get("title") or "")
             summary = str(item.get("final_requirement") or item.get("summary") or "")
-            score = AnalyzeAgent()._score_similarity(extracted, title, summary)
-            if score >= 0.55:
+            score, evidence = AnalyzeAgent()._score_similarity(extracted, title, summary)
+            if score >= 0.35:
                 reason = "业务语义相近，存在重合功能面"
-                if score >= 0.8:
+                if score >= 0.7:
                     reason = "高度相似，可能为重复需求"
                 candidates.append(
                     CandidateMatch(
@@ -61,11 +64,12 @@ class AnalyzeAgent:
                         title=title or "历史需求",
                         similarity=round(score, 2),
                         reason=reason,
+                        evidence=evidence,
                     )
                 )
 
-        duplicate = any(candidate.similarity >= 0.8 for candidate in candidates)
-        related = any(candidate.similarity >= 0.6 for candidate in candidates)
+        duplicate = any(candidate.similarity >= 0.7 for candidate in candidates)
+        related = any(0.45 <= candidate.similarity < 0.7 for candidate in candidates)
         conflict = "权限" in " ".join(extracted.tags) and any("权限" in str(item.get("requirement_name") or "") for item in historical)
         independent = not duplicate and not related and not conflict
 
@@ -89,13 +93,43 @@ class AnalyzeAgent:
         )
 
     def _score_similarity(self, extracted: ExtractedRequirement, title: str, summary: str) -> float:
-        haystack = " ".join([extracted.requirement_title, extracted.summary, " ".join(extracted.tags), title, summary])
+        tokens = [token for token in extracted.tags if len(token) >= 2]
+        title_text = title.lower()
+        summary_text = summary.lower()
+        source_text = " ".join([extracted.requirement_title, extracted.summary, extracted.business_domain, " ".join(extracted.tags)]).lower()
+        target_text = f"{title} {summary}".lower()
+
+        evidence: list[str] = []
         score = 0.0
-        for token in extracted.tags:
-            if token in haystack:
-                score += 0.2
-        if extracted.business_domain in (title + summary).lower():
-            score += 0.2
-        if any(keyword in haystack for keyword in ["登录", "认证", "权限", "审批", "报表", "支付"]):
-            score += 0.15
-        return min(score, 1.0)
+        token_hits = [token for token in tokens if token in target_text]
+        if token_hits:
+            score += min(0.5, 0.12 * len(token_hits))
+            evidence.extend(token_hits[:4])
+        if extracted.business_domain and extracted.business_domain in target_text:
+            score += 0.12
+            evidence.append(f"domain:{extracted.business_domain}")
+        shared_keywords = [kw for kw in ["登录", "认证", "权限", "审批", "报表", "支付", "导出", "筛选", "查询", "导入", "短信", "验证码"] if kw in source_text and kw in target_text]
+        if shared_keywords:
+            score += min(0.25, 0.08 * len(shared_keywords))
+            evidence.extend(shared_keywords[:4])
+
+        seq_matches = self._ordered_phrase_overlap(extracted.requirement_title, title) + self._ordered_phrase_overlap(extracted.summary, summary)
+        if seq_matches:
+            score += min(0.2, 0.05 * seq_matches)
+            evidence.extend([f"phrase:{seq_matches}"])
+
+        if not token_hits and not shared_keywords and not seq_matches:
+            score *= 0.3
+        return min(score, 1.0), evidence
+
+    @staticmethod
+    def _ordered_phrase_overlap(left: str, right: str) -> int:
+        left_tokens = [token for token in re.split(r"\s+", left) if token]
+        right_tokens = [token for token in re.split(r"\s+", right) if token]
+        if not left_tokens or not right_tokens:
+            return 0
+        matches = 0
+        for token in left_tokens:
+            if token in right_tokens:
+                matches += 1
+        return matches

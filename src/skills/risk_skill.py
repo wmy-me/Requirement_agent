@@ -35,7 +35,7 @@ class RiskSkill(BaseSkill):
                 quality_risk=str(payload.get("quality_risk") or fallback.quality_risk),
                 change_risk=str(payload.get("change_risk") or fallback.change_risk),
                 technical_impact_risk=str(payload.get("technical_impact_risk") or fallback.technical_impact_risk),
-                confidence=float(payload.get("confidence") or fallback.confidence),
+                confidence=max(0.0, min(0.95, float(payload.get("confidence") or fallback.confidence))),
             )
             return result
         except Exception:
