@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -544,10 +545,10 @@ class RequirementVersionRepository:
                     """
                     INSERT INTO requirement_version (
                         requirement_id, parent_version_id, version_no, version_title, change_type,
-                        requirement_snapshot, change_summary, diff_payload, created_by, reviewed_by
+                        requirement_snapshot, change_summary, diff_payload, created_by, reviewed_by, feature_changes, parent_version_no
                     ) VALUES (
                         :requirement_id, :parent_version_id, :version_no, :version_title, :change_type,
-                        :requirement_snapshot, :change_summary, :diff_payload, :created_by, :reviewed_by
+                        :requirement_snapshot, :change_summary, :diff_payload, :created_by, :reviewed_by, :feature_changes, :parent_version_no
                     )
                     RETURNING id, requirement_id, version_no
                     """
@@ -563,6 +564,8 @@ class RequirementVersionRepository:
                     "diff_payload": json.dumps(version.diff_payload or {}),
                     "created_by": version.created_by,
                     "reviewed_by": version.reviewed_by,
+                    "feature_changes": json.dumps(getattr(version, "feature_changes", []) or []),
+                    "parent_version_no": getattr(version, "parent_version_no", None),
                 },
             ).mappings().one()
             if owns_session:
@@ -1035,6 +1038,102 @@ class RequirementReviewRepository:
             raise
 
 
+class RequirementFeatureRepository:
+    """Feature-level versioned requirement items."""
+
+    def list_active(self, requirement_id: int, *, session: Session | None = None) -> list[dict[str, object]]:
+        owns_session = session is None
+        session = session or SessionLocal()
+        rows = session.execute(
+            text(
+                """
+                SELECT id, requirement_id, feature_key, content, status, ordinal,
+                       origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance
+                FROM requirement_feature
+                WHERE requirement_id = :requirement_id AND status = 'active'
+                ORDER BY ordinal ASC, id ASC
+                """
+            ),
+            {"requirement_id": requirement_id},
+        ).mappings().all()
+        if owns_session:
+            session.close()
+        return [self._row_to_feature(row) for row in rows]
+
+    def create_features(
+        self,
+        requirement_id: int,
+        features: list[str],
+        *,
+        source_id: int | None,
+        requirement_key: str,
+        version_no: int,
+        session: Session,
+    ) -> list[dict[str, object]]:
+        created: list[dict[str, object]] = []
+        ordinal = 1
+        for content in [item.strip() for item in features if item and item.strip()]:
+            feature_key = f"F-{ordinal:03d}"
+            provenance = [
+                {
+                    "version_no": version_no,
+                    "source_id": source_id,
+                    "requirement_key": requirement_key,
+                    "kind": "add",
+                }
+            ]
+            row = session.execute(
+                text(
+                    """
+                    INSERT INTO requirement_feature (
+                        requirement_id, feature_key, content, status, ordinal,
+                        origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                    ) VALUES (
+                        :requirement_id, :feature_key, :content, 'active', :ordinal,
+                        :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                    )
+                    RETURNING id, requirement_id, feature_key, content, status, ordinal,
+                              origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance
+                    """
+                ),
+                {
+                    "requirement_id": requirement_id,
+                    "feature_key": feature_key,
+                    "content": content,
+                    "ordinal": ordinal,
+                    "origin_source_id": source_id,
+                    "origin_requirement_key": requirement_key,
+                    "origin_version_no": version_no,
+                    "provenance": json.dumps(provenance),
+                    "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                },
+            ).mappings().one()
+            created.append(self._row_to_feature(row))
+            ordinal += 1
+        return created
+
+    def join_active_features(self, requirement_id: int, *, session: Session | None = None) -> str:
+        features = self.list_active(requirement_id, session=session)
+        lines = [item["content"] for item in features if str(item.get("content") or "").strip()]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _row_to_feature(row: dict[str, object]) -> dict[str, object]:
+        return {
+            "id": int(row["id"]),
+            "requirement_id": int(row["requirement_id"]),
+            "feature_key": row["feature_key"],
+            "content": row["content"],
+            "status": row["status"],
+            "ordinal": int(row["ordinal"]),
+            "origin_source_id": row["origin_source_id"],
+            "origin_requirement_key": row["origin_requirement_key"],
+            "origin_version_no": int(row["origin_version_no"]),
+            "removed_version_no": row["removed_version_no"],
+            "provenance": list(row["provenance"] or []),
+        }
+
+
 class AuditRepository:
     """Persistence boundary for audit event records."""
 
@@ -1357,6 +1456,40 @@ class ChatRepository:
             ).mappings().first()
         return self._normalize_run_row(row) if row else None
 
+    def get_run_by_client(self, conversation_id: str, client_message_id: str) -> dict[str, object] | None:
+        """按 (conversation, client_message_id) 取最近一次 run（幂等重放用）。"""
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    FROM agent_run
+                    WHERE conversation_id = CAST(:conversation_id AS UUID) AND client_message_id = :client_message_id
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"conversation_id": conversation_id, "client_message_id": client_message_id},
+            ).mappings().first()
+        return self._normalize_run_row(row) if row else None
+
+    def get_assistant_message_for_run(self, run_id: str) -> dict[str, object] | None:
+        """返回某次 run 的 assistant 消息（用于断连后重放落库结果，避免重算/重复）。"""
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, conversation_id, role, content, artifacts, client_message_id, run_id, meta, created_at
+                    FROM agent_message
+                    WHERE run_id = CAST(:run_id AS UUID) AND role = 'assistant'
+                    ORDER BY id
+                    LIMIT 1
+                    """
+                ),
+                {"run_id": run_id},
+            ).mappings().first()
+        return self._normalize_message_row(row) if row else None
+
     def append_assistant_message(
         self,
         *,
@@ -1445,13 +1578,14 @@ class MemoryRepository:
         ref_requirement_key: str | None = None,
         importance: int = 1,
         meta: dict[str, object] | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, object]:
         with SessionLocal() as session:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO memory_note (actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta)
-                    VALUES (:actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB))
+                    INSERT INTO memory_note (actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta, embedding)
+                    VALUES (:actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB), CAST(:embedding AS vector))
                     RETURNING id, actor_id, kind, status, active, content, source_conversation_id, source_message_id, ref_requirement_key, superseded_by, importance, meta, created_at, updated_at
                     """
                 ),
@@ -1464,6 +1598,7 @@ class MemoryRepository:
                     "ref_requirement_key": ref_requirement_key,
                     "importance": importance,
                     "meta": json.dumps(meta or {}),
+                    "embedding": ("[" + ",".join(str(float(x)) for x in embedding) + "]") if embedding is not None else None,
                 },
             ).mappings().one()
             session.commit()
@@ -1522,6 +1657,45 @@ class MemoryRepository:
             ).mappings().first()
             session.commit()
         return self._normalize_memory_row(row) if row else None
+
+    def supersede(self, old_id: int, new_id: int) -> dict[str, object] | None:
+        """把一条 active 记忆标记为已被新记忆替代（保留审计）。"""
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    UPDATE memory_note
+                    SET status = 'superseded',
+                        active = FALSE,
+                        superseded_by = :new_id,
+                        updated_at = NOW()
+                    WHERE id = :old_id AND status = 'active'
+                    RETURNING id, actor_id, kind, status, active, content, source_conversation_id, source_message_id, ref_requirement_key, superseded_by, importance, meta, created_at, updated_at
+                    """
+                ),
+                {"old_id": old_id, "new_id": new_id},
+            ).mappings().first()
+            session.commit()
+        return self._normalize_memory_row(row) if row else None
+
+    def recall_vector(self, actor_id: str, query_vector: list[float], limit: int = 4) -> list[dict[str, object]]:
+        """按向量余弦相似度召回该 actor 的有效记忆（embedding 为 NULL 的行自动跳过）。"""
+        vec = "[" + ",".join(str(float(x)) for x in query_vector) + "]"
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, actor_id, kind, status, active, content, source_conversation_id, source_message_id,
+                           ref_requirement_key, superseded_by, importance, meta, created_at, updated_at
+                    FROM memory_note
+                    WHERE actor_id = :actor_id AND status = 'active'
+                    ORDER BY embedding <=> CAST(:query_vector AS vector)
+                    LIMIT :limit
+                    """
+                ),
+                {"actor_id": actor_id, "query_vector": vec, "limit": limit},
+            ).mappings().all()
+        return [self._normalize_memory_row(row) for row in rows]
 
     def _normalize_memory_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
         if row is None:

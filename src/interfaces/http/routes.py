@@ -13,7 +13,7 @@ from src.agents.extract_agent import ExtractAgent
 from src.agents.risk_agent import RiskAgent
 from src.application.decision_rules import next_action_for as decision_next_action
 from src.application.decision_rules import review_required as decision_review_required
-from src.application.memory_service import MemoryContextBuilder
+from src.application.memory_service import MemoryContextBuilder, MemoryExtractor
 from src.application.requirement_service import RequirementService
 from src.application.retrieval_service import RetrievalService
 from src.application.review_service import ReviewService
@@ -29,6 +29,7 @@ from src.infrastructure.db.repositories import (
 )
 from src.infrastructure.db.seed_data import seed_requirement_master
 from src.infrastructure.db.session import check_database_connection
+from src.infrastructure.embedding.embedding_service import EmbeddingService
 from src.infrastructure.llm.openai_provider import LLMProvider
 from src.infrastructure.parser.document_parser import DocumentParser
 from src.infrastructure.storage.object_store import ObjectStorage
@@ -56,6 +57,8 @@ document_repo = DocumentAssetRepository()
 chat_repo = ChatRepository()
 memory_repo = MemoryRepository()
 memory_context_builder = MemoryContextBuilder(memory_repo)
+memory_extractor = MemoryExtractor(memory_repo)
+embedding_service = EmbeddingService()
 extract_agent = ExtractAgent()
 analyze_agent = AnalyzeAgent()
 risk_agent = RiskAgent()
@@ -85,6 +88,24 @@ NARRATIVE_SYSTEM_PROMPT = (
 def _actor_id_or_default(actor_id: str | None) -> str:
     normalized = (actor_id or settings.api_actor_id or "api-user").strip()
     return normalized or "api-user"
+
+
+def _summarize_text(text: str) -> str:
+    """会话一句话摘要：LLM 优先，失败/未配置回退首段截断。"""
+    snippet = " ".join((text or "").split())
+    try:
+        provider = LLMProvider()
+        if provider.is_configured() and snippet:
+            summary = provider.generate(
+                f"请用一句话（不超过 80 字）概括下面这段对话的要点：\n{snippet[:2000]}",
+                system_prompt="你是会话摘要器，只输出摘要本身。",
+            )
+            summary = (summary or "").strip()
+            if summary:
+                return summary[:200]
+    except Exception:
+        pass
+    return snippet[:160] or "（空会话）"
 
 
 def _sse(name: str, payload: object) -> str:
@@ -136,7 +157,7 @@ def _fallback_narrative(pipeline: dict[str, object]) -> str:
     return "".join(parts)
 
 
-def _narrative_prompt(pipeline: dict[str, object]) -> str:
+def _narrative_prompt(pipeline: dict[str, object], memory_context: str | None = None) -> str:
     sections = {
         "抽取结果": pipeline.get("extracted"),
         "检索到的相似需求候选": pipeline.get("candidates"),
@@ -144,10 +165,13 @@ def _narrative_prompt(pipeline: dict[str, object]) -> str:
         "风险评估": pipeline.get("risk"),
     }
     blocks = [f"【{name}】\n{json.dumps(value, ensure_ascii=False, indent=2)}" for name, value in sections.items()]
-    return "请根据下面的结构化分析结果，给需求方一段口语化的总结。\n\n" + "\n\n".join(blocks)
+    prompt = "请根据下面的结构化分析结果，给需求方一段口语化的总结。\n\n" + "\n\n".join(blocks)
+    if memory_context:
+        prompt += "\n\n【跨会话长期记忆，仅用于语气/上下文参考，不要逐字复述】\n" + memory_context
+    return prompt
 
 
-async def _narrative_chunks(pipeline: dict[str, object]) -> AsyncIterator[str]:
+async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | None = None) -> AsyncIterator[str]:
     """将结构化结论转成自然语言流。有 LLM 则走真实流式；否则退化为分段输出。"""
     provider = LLMProvider()
     if not provider.is_configured():
@@ -164,7 +188,7 @@ async def _narrative_chunks(pipeline: dict[str, object]) -> AsyncIterator[str]:
     def _pump() -> None:
         try:
             for chunk in provider.generate_stream(
-                _narrative_prompt(pipeline), system_prompt=NARRATIVE_SYSTEM_PROMPT
+                _narrative_prompt(pipeline, memory_context=memory_context), system_prompt=NARRATIVE_SYSTEM_PROMPT
             ):
                 queue.put(("t", chunk))
             queue.put(("done", ""))
@@ -192,8 +216,24 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
     if conversation is None:
         conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
         session_id = str(conversation["id"])
-    history = chat_sessions.setdefault(session_id, [])
     client_message_id = payload.client_message_id or uuid4().hex
+    history = chat_sessions.setdefault(session_id, [])
+
+    # —— 已完成 run 重放：同一 client_message_id 重试/断连不再重算，直接回放落库结果 ——
+    if payload.client_message_id:
+        prior = chat_repo.get_run_by_client(session_id, payload.client_message_id)
+        if prior is not None and prior.get("status") == "completed":
+            assistant = chat_repo.get_assistant_message_for_run(str(prior["run_id"]))
+            if assistant is not None:
+                yield _sse("session", {"session_id": session_id, "run_id": str(prior["run_id"])})
+                if assistant.get("artifacts"):
+                    yield _sse("artifacts", {"artifacts": assistant["artifacts"]})
+                content = str(assistant.get("content") or "已完成分析。")
+                for i in range(0, len(content), 10):
+                    yield _sse("narrative", {"t": content[i : i + 10]})
+                yield _sse("done", {"run_id": str(prior["run_id"])})
+                return
+
     history.append({"role": "user", "content": payload.message, "client_message_id": client_message_id})
 
     user_message = chat_repo.upsert_user_message(
@@ -264,11 +304,14 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         pipeline["review_required"] = decision_review_required(analysis_payload, risk_payload)
         pipeline["next_action"] = decision_next_action(analysis_payload, risk_payload)
 
+        # 跨会话长期记忆：仅当命中才注入最终结论 prompt
+        memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
+
         yield _sse("artifacts", {"artifacts": pipeline})
 
         yield _sse("narrative", {"start": True})
         try:
-            async for token in _narrative_chunks(pipeline):
+            async for token in _narrative_chunks(pipeline, memory_context=memory_ctx):
                 narrative_parts.append(token)
                 yield _sse("narrative", {"t": token})
         except Exception:
@@ -692,13 +735,22 @@ async def delete_conversation(conversation_id: str, actor_id: str | None = Query
 
 @router.post("/api/v1/conversations/{conversation_id}/finalize")
 async def finalize_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """会话收尾：生成一句话摘要 + 触发长期记忆抽取。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    summary = "\n".join(msg["content"] for msg in chat_repo.get_messages(conversation_id) if msg["role"] in {"user", "assistant"})[:2000]
+    messages = chat_repo.get_messages(conversation_id)
+    transcript = "\n".join(str(msg["content"] or "") for msg in messages if msg["role"] in {"user", "assistant"})
+    summary = _summarize_text(transcript)
     chat_repo.update_conversation(conversation_id, summary=summary, actor_id=normalized_actor_id)
-    return {"status": "finalized", "conversation_id": conversation_id, "summary": summary}
+    memory = memory_extractor.extract_from_conversation(
+        actor_id=normalized_actor_id,
+        conversation_id=conversation_id,
+        messages=messages,
+        existing_notes=memory_repo.list_memories(actor_id=normalized_actor_id, limit=50),
+    )
+    return {"status": "finalized", "conversation_id": conversation_id, "summary": summary, "memory": memory}
 
 
 @router.get("/api/v1/agent/runs/{run_id}")
@@ -718,18 +770,27 @@ async def list_memory(actor_id: str | None = Query(default=None, max_length=120)
 @router.post("/api/v1/memory")
 async def upsert_memory(payload: dict[str, object]) -> dict[str, object]:
     actor_id = _actor_id_or_default(str(payload.get("actor_id") or settings.api_actor_id or "api-user"))
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="memory content is required")
+    embedding = None
+    try:
+        vector = embedding_service.embed(content)
+        if isinstance(vector, list) and vector:
+            embedding = [float(v) for v in vector]
+    except Exception:
+        embedding = None
     note = memory_repo.insert_memory(
         actor_id=actor_id,
         kind=str(payload.get("kind") or "fact"),
-        content=str(payload.get("content") or "").strip(),
+        content=content,
         source_conversation_id=payload.get("source_conversation_id"),
         source_message_id=int(payload["source_message_id"]) if payload.get("source_message_id") is not None else None,
         ref_requirement_key=payload.get("ref_requirement_key"),
         importance=int(payload.get("importance") or 1),
         meta=dict(payload.get("meta") or {}),
+        embedding=embedding,
     )
-    if not note["content"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="memory content is required")
     return note
 
 

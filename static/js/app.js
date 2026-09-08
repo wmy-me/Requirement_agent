@@ -29,6 +29,14 @@ function esc(v) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
 }
+function uuidv4() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 function firstLine(text, n) {
   const line = String(text || '').split('\n')[0].trim();
   return line.length > (n || 40) ? line.slice(0, n) + '…' : line;
@@ -425,6 +433,7 @@ async function runChat(text) {
   setSendEnabled();
   const needRecord = !state.sessionId;
   const snippet = firstLine(msg, 36);
+  const clientId = uuidv4();
 
   appendUser(msg);
   // 一条“分析消息”（步骤 + 结构化卡片），最终结论另起一条独立气泡
@@ -434,6 +443,7 @@ async function runChat(text) {
   const payload = {
     message: msg,
     session_id: state.sessionId || null,
+    client_message_id: clientId,
     source_type: 'web',
     requester_name: '我',
     analysis_mode: 'strict',
@@ -562,6 +572,11 @@ function renderSessions() {
 }
 function newChat() {
   if (state.streaming) return;
+  // 收尾上一个会话：后台 finalize（一句话摘要 + 沉淀长期记忆），不阻塞 UI
+  if (state.sessionId) {
+    apiJson('/api/v1/conversations/' + encodeURIComponent(state.sessionId) + '/finalize', { method: 'POST' })
+      .catch(() => { /* 记忆抽取失败不影响开新会话 */ });
+  }
   state.sessionId = null;
   clearChatInner();
   appendSystem('新对话已开启。直接说出业务需求，我会提取要点、检索相似需求并评估风险。');
