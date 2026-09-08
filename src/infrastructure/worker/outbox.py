@@ -15,6 +15,8 @@ from src.infrastructure.db.session import SessionLocal
 
 @dataclass(slots=True)
 class OutboxEvent:
+    """Outbox 事件：与业务写同一事务入队，供 worker 异步处理（如 embedding 同步）。"""
+
     aggregate_type: str
     aggregate_id: str
     event_type: str
@@ -27,7 +29,10 @@ class OutboxEvent:
 
 
 class OutboxRepository:
-    """Persists outbox events and provides worker-safe claim/retry transitions."""
+    """持久化 outbox 事件，提供 worker 安全认领/重试/死信流转。
+
+    事务约定：与业务状态更新共用同一 session 入队，保证“业务提交成功即事件已持久化”。
+    """
 
     def enqueue(
         self,
@@ -38,6 +43,7 @@ class OutboxRepository:
         payload: dict[str, Any] | None = None,
         session: Session | None = None,
     ) -> OutboxEvent:
+        """写入一条 pending 事件；传入 session 时与调用方业务同事务，否则自建。"""
         owns_session = session is None
         session = session or SessionLocal()
         event_payload = payload or {}
@@ -69,6 +75,11 @@ class OutboxRepository:
             raise
 
     def claim_pending(self, *, limit: int = 20, event_type: str | None = None) -> list[OutboxEvent]:
+        """以 `FOR UPDATE SKIP LOCKED` 认领待处理事件并置为 processing。
+
+        供多个 worker 并发安全消费：一条事件只被一个 worker 领走；失败后按
+        mark_failed 重试或转 dead_letter。
+        """
         event_filter = "AND event_type = :event_type" if event_type else ""
         values: dict[str, object] = {"limit": limit}
         if event_type:

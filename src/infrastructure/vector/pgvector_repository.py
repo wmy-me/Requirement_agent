@@ -181,4 +181,23 @@ class RequirementVectorRepository:
                 """
             )
             params.append(str(submitted_to))
+        requester = filters.get("requester")
+        if requester:
+            clauses.append(
+                """
+                AND EXISTS (
+                    SELECT 1
+                    FROM requirement_version v6
+                    JOIN requirement_version_source vs6 ON vs6.version_id = v6.id
+                    JOIN requirement_source s6 ON s6.id = vs6.source_id
+                    WHERE v6.requirement_id = rm.id
+                      AND (s6.requester_name = %s OR s6.requester_id = %s)
+                )
+                """
+            )
+            params.extend([str(requester), str(requester)])
+        has_version_ge = filters.get("has_version_ge")
+        if has_version_ge is not None:
+            clauses.append("AND rm.current_version >= %s")
+            params.append(int(has_version_ge))
         return " ".join(clauses), params

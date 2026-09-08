@@ -11,7 +11,11 @@ if TYPE_CHECKING:
 
 
 class ExtractSkill(BaseSkill):
-    """将原始需求文本抽取为结构化需求对象的技能。"""
+    """LLM 抽取技能。
+
+    Skill 只负责提示词、JSON 解析与字段归一化；
+    是否调用它、以及失败后的回退策略，由 ExtractAgent 决定。
+    """
 
     def extract(
         self,
@@ -20,6 +24,7 @@ class ExtractSkill(BaseSkill):
         source_type: str = "web",
         requester_name: str | None = None,
     ) -> ExtractedRequirement:
+        """调用模型抽取结构化需求；任何异常都回退到启发式结果。"""
         from src.agents.extract_agent import ExtractAgent, ExtractedRequirement
 
         fallback = ExtractAgent._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
@@ -47,6 +52,7 @@ class ExtractSkill(BaseSkill):
 
         try:
             payload = self._generate_json(prompt, system_prompt)
+            # 只对缺失字段做兜底，不覆盖模型已经给出的有效业务字段。
             result = ExtractedRequirement.model_validate({
                 "requirement_title": payload.get("requirement_title") or fallback.requirement_title,
                 "summary": payload.get("summary") or fallback.summary,
@@ -60,4 +66,5 @@ class ExtractSkill(BaseSkill):
             })
             return result
         except Exception:
+            # JSON 无法解析、字段不合法、模型超时等场景都不阻断主流程。
             return fallback

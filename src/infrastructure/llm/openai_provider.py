@@ -21,9 +21,11 @@ class LLMProvider:
         self.embedding_model = settings.embedding_model
 
     def is_configured(self) -> bool:
+        """当前激活 provider（openai/deepseek）是否具备 key 与 base_url。"""
         return bool(self.api_key) and bool(self.base_url)
 
     def generate(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        """非流式补全：返回完整生成文本。未配置时返回提示文案（由上层决定是否回退）。"""
         if not self.is_configured():
             return f"{self.provider_name} is not configured. Set API key and base URL first."
 
@@ -98,6 +100,7 @@ class LLMProvider:
                     yield content
 
     def embed(self, text: str) -> list[float]:
+        """调用 embedding 模型返回向量；未配置时返回 1536 维全零占位。"""
         if not self.is_configured():
             return [0.0] * 1536
 

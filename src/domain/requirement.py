@@ -59,8 +59,10 @@ class RequirementVersion:
     requirement_snapshot: str
     change_summary: str
     parent_version_id: int | None = None
+    parent_version_no: int | None = None
     id: int | None = None
     diff_payload: dict[str, object] = field(default_factory=dict)
+    feature_changes: list[dict[str, object]] = field(default_factory=list)
     created_by: str = "system"
     reviewed_by: str = "system"
 

@@ -12,13 +12,18 @@ if TYPE_CHECKING:
 
 
 class AnalyzeSkill(BaseSkill):
-    """对新需求与历史需求进行重复、关联、冲突和独立性判断的技能。"""
+    """LLM 关系分析技能。
+
+    它接收抽取结果和检索候选，返回结构化关系判断；
+    同时会用本地证据阈值对模型输出做二次校验，压制假阳性。
+    """
 
     def analyze(
         self,
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
     ) -> AnalysisResult:
+        """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。"""
         from src.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
 
         fallback = AnalyzeAgent._heuristic_analyze(extracted, historical_requirements)
@@ -43,7 +48,7 @@ class AnalyzeSkill(BaseSkill):
 
             payload = self._generate_json(prompt, system_prompt)
 
-            # —— 候选归一化：similarity 夹到 [0,1]，并统计最高相似度 ——
+            # 统一 similarity 到 [0,1]，避免模型返回百分数或脏值污染后续判定。
             normalized_candidates: list[CandidateMatch] = []
             max_similarity = 0.0
             for item in payload.get("candidates") or []:
@@ -63,7 +68,7 @@ class AnalyzeSkill(BaseSkill):
                     )
                 )
 
-            # —— 以候选证据交叉校验，消除 LLM 布尔自相矛盾 / 幻觉 ——
+            # 用候选证据反向约束布尔结论，避免 duplicate=true 但无有效证据的幻觉。
             duplicate = bool(payload.get("duplicate"))
             related = bool(payload.get("related"))
             conflict = bool(payload.get("conflict"))
@@ -89,5 +94,5 @@ class AnalyzeSkill(BaseSkill):
             )
             return result
         except Exception:
-            # 解析失败或模型未配置：整体回退启发式，不再逐位混用
+            # 不做“半模型半规则”混用，失败时整体回退，保证结果语义稳定。
             return fallback

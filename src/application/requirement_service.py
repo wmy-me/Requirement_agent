@@ -12,7 +12,12 @@ from src.infrastructure.parser.document_parser import DocumentParser
 
 
 class RequirementService:
-    """对需求提交、查询和结构化分析的应用层边界。"""
+    """需求提交与查询的应用层边界。
+
+    职责：把一条来源需求写入 requirement_source，跑 LangGraph 分析图
+    （抽取→检索→冲突/重复分析→风险→决策），并把结构化结果回填到来源元数据、
+    置为待审核。HTTP 路由与 MCP 都经由本服务，不直接操作领域逻辑。
+    """
 
     def __init__(
         self,
@@ -31,6 +36,16 @@ class RequirementService:
         self.document_parser = document_parser or DocumentParser()
 
     def submit_requirement(self, source: RequirementSource) -> dict[str, object]:
+        """提交并分析一条需求来源。
+
+        幂等：requirement_source 以 idempotency_key 唯一；若该来源已处理过
+        （processing_status 非 received/failed），直接返回现状，不重复分析。
+
+        流程：保存来源 → 清洗/分段规整文本 → 跑 LangGraph 分析图 →
+        将 extracted/analysis/risk/retrieval_filters 回填 metadata →
+        置 pending_review。返回结构含 source_id、status、analysis、risk 等，
+        供调用方（HTTP/MCP/前端卡片）直接展示。
+        """
         saved_source = self.source_repo.save(source)
         if saved_source.processing_status not in {"received", "failed"}:
             return {
@@ -102,14 +117,22 @@ class RequirementService:
         }
 
     def list_requirements(self) -> list[dict[str, object]]:
-        rows = self.master_repo.list()
+        """返回主需求列表（含领域/当前版本/功能行数/来源人/最近提交时间）。
+
+        供“需求库”表格视图使用；按 master 表带来源上下文聚合，最多 100 条。
+        """
+        rows = self.master_repo.list_with_source_context(limit=100)
         return [
             {
-                "requirement_key": item.requirement_key,
-                "requirement_name": item.requirement_name,
-                "final_requirement": item.final_requirement,
-                "status": item.status,
-                "business_domain": "general",
+                "requirement_key": item["requirement_key"],
+                "requirement_name": item["requirement_name"],
+                "final_requirement": item["final_requirement"],
+                "status": item["status"],
+                "business_domain": item["business_domains"][0] if item.get("business_domains") else "general",
+                "current_version": item.get("current_version", 0),
+                "feature_count": item.get("feature_count", 0),
+                "requester_names": item.get("requester_names", []),
+                "latest_source_submitted_at": item.get("latest_source_submitted_at"),
             }
             for item in rows
         ]

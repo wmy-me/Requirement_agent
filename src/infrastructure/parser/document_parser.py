@@ -47,6 +47,10 @@ class DocumentParser:
     """Parses uploaded text-based files into plain requirement text."""
 
     def parse(self, file_name: str, payload: bytes) -> ParsedDocument:
+        """解析上传文档为规整文本 + 分段 + 规整字段。
+
+        按扩展名分发（pdf/docx/txt 等）；解析失败或空内容时退化为按文件名兜底。
+        """
         extension = Path(file_name).suffix.lower() or ".txt"
         raw_text = self._extract_text(file_name, payload, extension)
         if not raw_text.strip():

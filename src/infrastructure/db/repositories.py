@@ -1,4 +1,21 @@
-"""Repository interfaces and database-backed implementations for business data."""
+"""Repository interfaces and database-backed implementations for business data.
+
+文件总览（按类）：
+- RequirementSourceRepository / MasterRepository / VersionRepository：
+  需求来源、主需求、版本与溯源的基本读写。
+- DocumentAssetRepository：上传文档 asset + 分块 + 向量搜索。
+- RequirementReviewRepository：人工审核记录。
+- RequirementFeatureRepository：功能条目（feature）级版本治理、diff 与检索。
+- AuditRepository：审计事件留痕。
+- ChatRepository：对话/消息/Agent run（含 client_message_id 幂等与 run 状态机）。
+- MemoryRepository：跨会话长期记忆（actor 隔离、superseded/deleted 治理、向量召回）。
+
+通用约定：
+- 所有方法接受可选 `session`。**未传入时自建 session 并负责提交/回滚/关闭；**
+  传入时把事务所有权交给调用方（不 commit/close），供 LangGraph 决策图等原子流程复用。
+- 需要幂等的写入都以“业务唯一键 + ON CONFLICT（与部分唯一索引对齐的 WHERE 谓词）”
+  实现，避免重试产生重复数据。
+"""
 
 from __future__ import annotations
 
@@ -23,6 +40,12 @@ class RequirementSourceRepository:
     """原始需求来源的持久化边界。"""
 
     def save(self, source: RequirementSource, session: Session | None = None) -> RequirementSource:
+        """写入/更新一条需求来源。
+
+        幂等：以 idempotency_key 唯一（ON CONFLICT 更新），重复提交返回同一条来源，
+        不重复入队分析。session 所有权：未传入时本方法自建并负责提交/回滚/关闭；
+        传入 session 时由调用方负责事务。
+        """
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -88,6 +111,10 @@ class RequirementSourceRepository:
         metadata: dict[str, object] | None = None,
         session: Session | None = None,
     ) -> None:
+        """推进来源处理状态（received→…→pending_review→committed/rejected 等）。
+
+        可携带 metadata 一并覆盖（如分析结果、溯源 trace）。
+        """
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -123,6 +150,7 @@ class RequirementSourceRepository:
         processing_status: str = "extracting",
         session: Session | None = None,
     ) -> None:
+        """回填规整/清洗后的文本与分段元数据，并把来源标记为 extracting。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -154,6 +182,7 @@ class RequirementSourceRepository:
             raise
 
     def get_by_id(self, source_id: int, session: Session | None = None) -> RequirementSource | None:
+        """按主键取来源对象；不存在返回 None。"""
         owns_session = session is None
         session = session or SessionLocal()
         row = session.execute(
@@ -182,6 +211,7 @@ class RequirementSourceRepository:
         )
 
     def get_by_idempotency_key(self, idempotency_key: str) -> RequirementSource | None:
+        """按幂等键查来源，用于判断“是否已处理过”，避免重复分析。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -207,6 +237,7 @@ class RequirementSourceRepository:
         )
 
     def list_by_status(self, processing_status: str, limit: int = 20) -> list[dict[str, object]]:
+        """按处理状态列出来源（如 pending_review 待审核队列），最近更新优先。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -241,6 +272,7 @@ class RequirementSourceRepository:
         ]
 
     def get_detail(self, source_id: int) -> dict[str, object] | None:
+        """取来源详情（含 metadata/analysis 等），供审核面板与溯源展示。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -272,6 +304,7 @@ class RequirementSourceRepository:
         }
 
     def get_trace(self, source_id: int) -> dict[str, object] | None:
+        """组装来源一级溯源：来源详情 + 文档规整/结构化提取/分析/风险 + 关联 REQ 映射。"""
         source = self.get_detail(source_id)
         if source is None:
             return None
@@ -328,6 +361,10 @@ class RequirementMasterRepository:
     """规范化主需求的持久化边界。"""
 
     def save(self, requirement: RequirementMaster, session: Session | None = None) -> RequirementMaster:
+        """写入/更新主需求（REQ 主体、当前版本、乐观锁版本）。
+
+        乐观锁：调用方在并发合并时应基于 lock_version 校验，冲突需人工重审。
+        """
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -391,6 +428,7 @@ class RequirementMasterRepository:
         )
 
     def allocate_key(self, session: Session | None = None) -> str:
+        """从序列分配下一个 REQ 编号（REQ-{6 位}），保证全局唯一。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -449,6 +487,7 @@ class RequirementMasterRepository:
         ]
 
     def list_with_source_context(self, limit: int = 100) -> list[dict[str, object]]:
+        """聚合主需求 + 来源上下文（领域/来源渠道/输入人/密级/最新提交时间/功能数），供列表与检索使用。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -456,6 +495,7 @@ class RequirementMasterRepository:
                     SELECT m.id, m.requirement_key, m.requirement_name, m.final_requirement,
                            m.current_version, m.status, m.lock_version,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.source_type), NULL) AS source_types,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(s.requester_name, s.requester_id)), NULL) AS requester_names,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
                                s.metadata->>'department',
                                s.metadata #>> '{standardized_document,normalized_fields,department}'
@@ -469,14 +509,17 @@ class RequirementMasterRepository:
                                s.metadata->>'sensitivity_level',
                                s.metadata #>> '{standardized_document,normalized_fields,sensitivity_level}'
                            )), NULL) AS sensitivity_levels,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT f.content), NULL) AS feature_contents,
+                           COUNT(DISTINCT CASE WHEN f.status = 'active' THEN f.id END) AS feature_count,
                            MIN(s.submitted_at) AS first_source_submitted_at,
                            MAX(s.submitted_at) AS latest_source_submitted_at
                     FROM requirement_master m
                     LEFT JOIN requirement_version v ON v.requirement_id = m.id
                     LEFT JOIN requirement_version_source vs ON vs.version_id = v.id
                     LEFT JOIN requirement_source s ON s.id = vs.source_id
+                    LEFT JOIN requirement_feature f ON f.requirement_id = m.id
                     GROUP BY m.id, m.requirement_key, m.requirement_name, m.final_requirement,
-                             m.current_version, m.status, m.lock_version
+                            m.current_version, m.status, m.lock_version
                     ORDER BY m.updated_at DESC
                     LIMIT :limit
                     """
@@ -493,9 +536,12 @@ class RequirementMasterRepository:
                 "status": row["status"],
                 "lock_version": int(row["lock_version"]),
                 "source_types": list(row["source_types"] or []),
+                "requester_names": list(row["requester_names"] or []),
                 "departments": list(row["departments"] or []),
                 "business_domains": list(row["business_domains"] or []),
                 "sensitivity_levels": list(row["sensitivity_levels"] or []),
+                "feature_contents": list(row["feature_contents"] or []),
+                "feature_count": int(row["feature_count"] or 0),
                 "first_source_submitted_at": row["first_source_submitted_at"].isoformat()
                 if row["first_source_submitted_at"]
                 else None,
@@ -582,6 +628,7 @@ class RequirementVersionRepository:
             raise
 
     def link_source(self, version_id: int, source_id: int, session: Session | None = None) -> None:
+        """记录“版本 ← 来源”关联（relation_type='source'），幂等（重复关联忽略）。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -641,24 +688,27 @@ class RequirementVersionRepository:
         return RequirementVersion(
             requirement_id=int(row["requirement_id"]),
             parent_version_id=row["parent_version_id"],
+            parent_version_no=row.get("parent_version_no"),
             version_no=int(row["version_no"]),
             version_title=str(row["version_title"]),
             change_type=str(row["change_type"]),
             requirement_snapshot=str(row["requirement_snapshot"]),
             change_summary=str(row["change_summary"]),
             diff_payload=dict(row["diff_payload"] or {}),
+            feature_changes=list(row.get("feature_changes") or []),
             created_by=str(row["created_by"]),
             reviewed_by=str(row["reviewed_by"]),
         )
 
     def list_by_requirement_key(self, requirement_key: str) -> list[dict[str, object]]:
+        """按 REQ 编号列出版本历史（含 diff_payload、feature_changes），供版本时间线展示。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
                     """
-                    SELECT v.id, v.requirement_id, v.parent_version_id, v.version_no,
+                    SELECT v.id, v.requirement_id, v.parent_version_id, v.parent_version_no, v.version_no,
                            v.version_title, v.change_type, v.requirement_snapshot,
-                           v.change_summary, v.diff_payload, v.created_by, v.reviewed_by,
+                           v.change_summary, v.diff_payload, v.feature_changes, v.created_by, v.reviewed_by,
                            v.created_at
                     FROM requirement_version v
                     JOIN requirement_master m ON m.id = v.requirement_id
@@ -673,12 +723,14 @@ class RequirementVersionRepository:
                 "id": int(row["id"]),
                 "requirement_id": int(row["requirement_id"]),
                 "parent_version_id": row["parent_version_id"],
+                "parent_version_no": row["parent_version_no"],
                 "version_no": int(row["version_no"]),
                 "version_title": row["version_title"],
                 "change_type": row["change_type"],
                 "requirement_snapshot": row["requirement_snapshot"],
                 "change_summary": row["change_summary"],
                 "diff_payload": dict(row["diff_payload"] or {}),
+                "feature_changes": list(row["feature_changes"] or []),
                 "created_by": row["created_by"],
                 "reviewed_by": row["reviewed_by"],
                 "created_at": row["created_at"].isoformat() if row["created_at"] else None,
@@ -687,6 +739,7 @@ class RequirementVersionRepository:
         ]
 
     def trace_by_requirement_key(self, requirement_key: str) -> dict[str, object] | None:
+        """按 REQ 编号做版本级溯源：需求主体 + 每个版本的快照/来源链条。"""
         with SessionLocal() as session:
             master = session.execute(
                 text(
@@ -705,8 +758,8 @@ class RequirementVersionRepository:
             rows = session.execute(
                 text(
                     """
-                    SELECT v.id AS version_id, v.version_no, v.version_title, v.change_type,
-                           v.requirement_snapshot, v.change_summary, v.diff_payload,
+                    SELECT v.id AS version_id, v.version_no, v.parent_version_no, v.version_title, v.change_type,
+                           v.requirement_snapshot, v.change_summary, v.diff_payload, v.feature_changes,
                            v.created_by, v.reviewed_by, v.created_at AS version_created_at,
                            s.id AS source_id, s.source_type, s.source_event_id,
                            s.requester_id, s.requester_name, s.original_text,
@@ -730,11 +783,13 @@ class RequirementVersionRepository:
                 {
                     "version_id": version_id,
                     "version_no": int(row["version_no"]),
+                    "parent_version_no": row["parent_version_no"],
                     "version_title": row["version_title"],
                     "change_type": row["change_type"],
                     "requirement_snapshot": row["requirement_snapshot"],
                     "change_summary": row["change_summary"],
                     "diff_payload": dict(row["diff_payload"] or {}),
+                    "feature_changes": list(row["feature_changes"] or []),
                     "created_by": row["created_by"],
                     "reviewed_by": row["reviewed_by"],
                     "created_at": row["version_created_at"].isoformat() if row["version_created_at"] else None,
@@ -1039,9 +1094,15 @@ class RequirementReviewRepository:
 
 
 class RequirementFeatureRepository:
-    """Feature-level versioned requirement items."""
+    """功能条目（feature）级版本治理。
+
+    一条 REQ 的最终描述 = 其 active features 的有序拼接；每个 feature 记录来源
+    （origin_source_id / origin_requirement_key / origin_version_no）、生效区间
+    （removed_version_no）与变更史（provenance），从而支持“最终描述 + 行级溯源 + 版本 diff”。
+    """
 
     def list_active(self, requirement_id: int, *, session: Session | None = None) -> list[dict[str, object]]:
+        """列出某 REQ 当前生效的 feature（按 ordinal 排序），是“最终描述”的事实来源。"""
         owns_session = session is None
         session = session or SessionLocal()
         rows = session.execute(
@@ -1070,10 +1131,11 @@ class RequirementFeatureRepository:
         version_no: int,
         session: Session,
     ) -> list[dict[str, object]]:
+        """新建 REQ 时把来源的功能行整体落为 features（每个新 feature 记 provenance=add）。"""
         created: list[dict[str, object]] = []
         ordinal = 1
         for content in [item.strip() for item in features if item and item.strip()]:
-            feature_key = f"F-{ordinal:03d}"
+            feature_key = self._next_feature_key(requirement_id, ordinal=ordinal, version_no=version_no, session=session)
             provenance = [
                 {
                     "version_no": version_no,
@@ -1112,10 +1174,499 @@ class RequirementFeatureRepository:
             ordinal += 1
         return created
 
+    def sync_features(
+        self,
+        requirement_id: int,
+        features: list[str],
+        *,
+        source_id: int | None,
+        requirement_key: str,
+        version_no: int,
+        session: Session,
+    ) -> list[dict[str, object]]:
+        """无人工 overrides 时，按“当前来源功能行 vs 现有 active features”做保守同步。
+
+        同 ordinal 内容不变→keep；变化→modify；新行→add；现有行在新来源中被移除→delete。
+        返回本版本的 feature 变更清单，供 diff 与审计使用。
+        """
+        normalized = [item.strip() for item in features if item and item.strip()]
+        existing = self.list_active(requirement_id, session=session)
+        by_ordinal = {int(item["ordinal"]): item for item in existing}
+        changes: list[dict[str, object]] = []
+
+        for ordinal, content in enumerate(normalized, start=1):
+            current = by_ordinal.get(ordinal)
+            if current is None:
+                feature_key = self._next_feature_key(
+                    requirement_id,
+                    ordinal=ordinal,
+                    version_no=version_no,
+                    session=session,
+                )
+                provenance = [
+                    {
+                        "version_no": version_no,
+                        "source_id": source_id,
+                        "requirement_key": requirement_key,
+                        "kind": "add",
+                    }
+                ]
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO requirement_feature (
+                            requirement_id, feature_key, content, status, ordinal,
+                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                        ) VALUES (
+                            :requirement_id, :feature_key, :content, 'active', :ordinal,
+                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                        )
+                        """
+                    ),
+                    {
+                        "requirement_id": requirement_id,
+                        "feature_key": feature_key,
+                        "content": content,
+                        "ordinal": ordinal,
+                        "origin_source_id": source_id,
+                        "origin_requirement_key": requirement_key,
+                        "origin_version_no": version_no,
+                        "provenance": json.dumps(provenance),
+                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    },
+                )
+                changes.append({"op": "add", "feature_key": feature_key, "content": content})
+                continue
+
+            provenance = list(current.get("provenance") or [])
+            if str(current.get("content") or "").strip() != content:
+                provenance.append(
+                    {
+                        "version_no": version_no,
+                        "source_id": source_id,
+                        "requirement_key": requirement_key,
+                        "kind": "modify",
+                    }
+                )
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET content = :content,
+                            status = 'active',
+                            removed_version_no = NULL,
+                            provenance = CAST(:provenance AS JSONB),
+                            content_hash = :content_hash,
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": current["id"],
+                        "content": content,
+                        "provenance": json.dumps(provenance),
+                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    },
+                )
+                changes.append(
+                    {
+                        "op": "modify",
+                        "feature_key": current["feature_key"],
+                        "before": current["content"],
+                        "after": content,
+                    }
+                )
+            else:
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET ordinal = :ordinal,
+                            status = 'active',
+                            removed_version_no = NULL,
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": current["id"], "ordinal": ordinal},
+                )
+
+        for leftover in existing:
+            if int(leftover["ordinal"]) <= len(normalized):
+                continue
+            provenance = list(leftover.get("provenance") or [])
+            provenance.append(
+                {
+                    "version_no": version_no,
+                    "source_id": source_id,
+                    "requirement_key": requirement_key,
+                    "kind": "delete",
+                }
+            )
+            session.execute(
+                text(
+                    """
+                    UPDATE requirement_feature
+                    SET status = 'deleted',
+                        removed_version_no = :removed_version_no,
+                        provenance = CAST(:provenance AS JSONB),
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": leftover["id"],
+                    "removed_version_no": version_no,
+                    "provenance": json.dumps(provenance),
+                },
+            )
+            changes.append(
+                {
+                    "op": "delete",
+                    "feature_key": leftover["feature_key"],
+                    "content": leftover["content"],
+                }
+            )
+
+        return changes
+
     def join_active_features(self, requirement_id: int, *, session: Session | None = None) -> str:
         features = self.list_active(requirement_id, session=session)
         lines = [item["content"] for item in features if str(item.get("content") or "").strip()]
         return "\n".join(lines).strip()
+
+    def apply_overrides(
+        self,
+        requirement_id: int,
+        overrides: list[dict[str, object]],
+        *,
+        source_id: int | None,
+        requirement_key: str,
+        version_no: int,
+        session: Session,
+    ) -> list[dict[str, object]]:
+        """合并模式：按人工给出的 add/modify/delete/keep 逐条裁决 feature 变更。
+
+        keep 只保留现状；add 新增行；modify 改内容并记 provenance；delete 软删并写 removed_version_no。
+        用于审核时人工明确处理“与既有 feature 冲突/修改既有行”的场景。
+        """
+        current_items = self.list_active(requirement_id, session=session)
+        current_by_key = {str(item["feature_key"]): item for item in current_items}
+        changes: list[dict[str, object]] = []
+        max_ordinal = max((int(item["ordinal"]) for item in current_items), default=0)
+
+        for raw in overrides:
+            feature_key = str(raw.get("feature_key") or "").strip()
+            op = str(raw.get("op") or "keep").strip().lower()
+            content = str(raw.get("content") or "").strip()
+            current = current_by_key.get(feature_key) if feature_key else None
+
+            if op == "keep":
+                continue
+            if op == "add":
+                max_ordinal += 1
+                next_key = feature_key or self._next_feature_key(
+                    requirement_id,
+                    ordinal=max_ordinal,
+                    version_no=version_no,
+                    session=session,
+                )
+                provenance = [
+                    {
+                        "version_no": version_no,
+                        "source_id": source_id,
+                        "requirement_key": requirement_key,
+                        "kind": "add",
+                    }
+                ]
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO requirement_feature (
+                            requirement_id, feature_key, content, status, ordinal,
+                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                        ) VALUES (
+                            :requirement_id, :feature_key, :content, 'active', :ordinal,
+                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                        )
+                        """
+                    ),
+                    {
+                        "requirement_id": requirement_id,
+                        "feature_key": next_key,
+                        "content": content,
+                        "ordinal": max_ordinal,
+                        "origin_source_id": source_id,
+                        "origin_requirement_key": requirement_key,
+                        "origin_version_no": version_no,
+                        "provenance": json.dumps(provenance),
+                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    },
+                )
+                changes.append({"op": "add", "feature_key": next_key, "content": content})
+                continue
+
+            if current is None:
+                raise ValueError(f"feature_key={feature_key} not found for override")
+
+            provenance = list(current.get("provenance") or [])
+            provenance.append(
+                {
+                    "version_no": version_no,
+                    "source_id": source_id,
+                    "requirement_key": requirement_key,
+                    "kind": op,
+                }
+            )
+            if op == "modify":
+                if not content:
+                    raise ValueError(f"feature_key={feature_key} modify requires content")
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET content = :content,
+                            provenance = CAST(:provenance AS JSONB),
+                            content_hash = :content_hash,
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": current["id"],
+                        "content": content,
+                        "provenance": json.dumps(provenance),
+                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    },
+                )
+                changes.append(
+                    {
+                        "op": "modify",
+                        "feature_key": feature_key,
+                        "before": current["content"],
+                        "after": content,
+                    }
+                )
+                continue
+
+            if op == "delete":
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET status = 'deleted',
+                            removed_version_no = :removed_version_no,
+                            provenance = CAST(:provenance AS JSONB),
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": current["id"],
+                        "removed_version_no": version_no,
+                        "provenance": json.dumps(provenance),
+                    },
+                )
+                changes.append({"op": "delete", "feature_key": feature_key, "content": current["content"]})
+                continue
+
+            raise ValueError(f"unsupported feature override op={op}")
+
+        return changes
+
+    def list_by_requirement_key(
+        self,
+        requirement_key: str,
+        *,
+        at_version: int | None = None,
+        include_deleted: bool = False,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        owns_session = session is None
+        session = session or SessionLocal()
+        if at_version is None and not include_deleted:
+            status_clause = "AND f.status = 'active'"
+            version_clause = ""
+            values: dict[str, object] = {"requirement_key": requirement_key}
+        else:
+            status_clause = ""
+            version_clause = """
+                AND f.origin_version_no <= :at_version
+                AND (f.removed_version_no IS NULL OR f.removed_version_no > :at_version)
+            """ if at_version is not None else ""
+            values = {"requirement_key": requirement_key, "at_version": at_version}
+            if include_deleted:
+                version_clause = ""
+        rows = session.execute(
+            text(
+                """
+                SELECT f.id, f.requirement_id, f.feature_key, f.content, f.status, f.ordinal,
+                       f.origin_source_id, f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance
+                FROM requirement_feature f
+                JOIN requirement_master m ON m.id = f.requirement_id
+                WHERE m.requirement_key = :requirement_key
+                """ + status_clause + version_clause + """
+                ORDER BY f.ordinal ASC, f.id ASC
+                """
+            ),
+            values,
+        ).mappings().all()
+        if owns_session:
+            session.close()
+        return [self._row_to_feature(row) for row in rows]
+
+    def diff_by_requirement_key(
+        self,
+        requirement_key: str,
+        *,
+        from_version: int | None,
+        to_version: int | None,
+        session: Session | None = None,
+    ) -> dict[str, object]:
+        """按版本区间计算 feature 级 diff（added/removed/modified/unchanged），供版本对比展示。
+
+        to_version 为空时取当前版本；from_version 为空时取上一版本。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            if to_version is None:
+                current = session.execute(
+                    text(
+                        """
+                        SELECT current_version
+                        FROM requirement_master
+                        WHERE requirement_key = :requirement_key
+                        """
+                    ),
+                    {"requirement_key": requirement_key},
+                ).scalar_one_or_none()
+                if current is None:
+                    raise ValueError("requirement not found")
+                to_version = int(current)
+            if from_version is None:
+                from_version = max(1, int(to_version) - 1)
+
+            left = self.list_by_requirement_key(requirement_key, at_version=from_version, session=session)
+            right = self.list_by_requirement_key(requirement_key, at_version=to_version, session=session)
+            left_by_key = {str(item["feature_key"]): item for item in left}
+            right_by_key = {str(item["feature_key"]): item for item in right}
+
+            added = [item for key, item in right_by_key.items() if key not in left_by_key]
+            removed = [item for key, item in left_by_key.items() if key not in right_by_key]
+            modified = []
+            unchanged = 0
+            for key, after in right_by_key.items():
+                before = left_by_key.get(key)
+                if before is None:
+                    continue
+                if str(before["content"]) != str(after["content"]):
+                    modified.append(
+                        {
+                            "feature_key": key,
+                            "before": before["content"],
+                            "after": after["content"],
+                        }
+                    )
+                else:
+                    unchanged += 1
+            return {
+                "requirement_key": requirement_key,
+                "from_version": from_version,
+                "to_version": to_version,
+                "added": added,
+                "removed": removed,
+                "modified": modified,
+                "unchanged": unchanged,
+            }
+        finally:
+            if owns_session:
+                session.close()
+
+    def search_features(
+        self,
+        query: str,
+        *,
+        status: str | None = None,
+        requester: str | None = None,
+        has_version_ge: int | None = None,
+        limit: int = 20,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        """feature 行级检索：按功能内容匹配，支持状态/输入人/版本号下限筛选。
+
+        返回精确到“哪条功能在哪个 REQ 的哪个版本”，供功能溯源与表格明细使用。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        values: dict[str, object] = {
+            "query": f"%{query.strip()}%",
+            "limit": limit,
+        }
+        clauses = ["f.content ILIKE :query"]
+        if status:
+            clauses.append("f.status = :status")
+            values["status"] = status
+        if requester:
+            clauses.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM requirement_version v2
+                    JOIN requirement_version_source vs2 ON vs2.version_id = v2.id
+                    JOIN requirement_source s2 ON s2.id = vs2.source_id
+                    WHERE v2.requirement_id = m.id
+                      AND (s2.requester_name = :requester OR s2.requester_id = :requester)
+                )
+                """
+            )
+            values["requester"] = requester
+        if has_version_ge is not None:
+            clauses.append("m.current_version >= :has_version_ge")
+            values["has_version_ge"] = has_version_ge
+        rows = session.execute(
+            text(
+                """
+                SELECT f.id, f.feature_key, f.content, f.status, f.ordinal, f.origin_source_id,
+                       f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance,
+                       m.requirement_key, m.requirement_name, m.current_version, m.status AS requirement_status
+                FROM requirement_feature f
+                JOIN requirement_master m ON m.id = f.requirement_id
+                WHERE """ + " AND ".join(clauses) + """
+                ORDER BY m.updated_at DESC, f.ordinal ASC
+                LIMIT :limit
+                """
+            ),
+            values,
+        ).mappings().all()
+        if owns_session:
+            session.close()
+        return [
+            {
+                **self._row_to_feature(row),
+                "requirement_key": row["requirement_key"],
+                "requirement_name": row["requirement_name"],
+                "current_version": int(row["current_version"]),
+                "requirement_status": row["requirement_status"],
+            }
+            for row in rows
+        ]
+
+    def _next_feature_key(self, requirement_id: int, *, ordinal: int, version_no: int, session: Session) -> str:
+        base = f"F-{ordinal:03d}"
+        exists = session.execute(
+            text(
+                """
+                SELECT 1
+                FROM requirement_feature
+                WHERE requirement_id = :requirement_id AND feature_key = :feature_key
+                """
+            ),
+            {"requirement_id": requirement_id, "feature_key": base},
+        ).first()
+        if not exists:
+            return base
+        return f"F-{version_no:03d}-{ordinal:03d}"
 
     @staticmethod
     def _row_to_feature(row: dict[str, object]) -> dict[str, object]:
@@ -1135,9 +1686,10 @@ class RequirementFeatureRepository:
 
 
 class AuditRepository:
-    """Persistence boundary for audit event records."""
+    """Persistence boundary for audit event records（审计事件写入/查询）。"""
 
     def record(self, event: AuditEvent, session: Session | None = None) -> AuditEvent:
+        """写入一条审计事件（谁·何时·对什么做了什么·前后数据·结果），用于全程留痕与合规回溯。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -1200,6 +1752,7 @@ class AuditRepository:
         ]
 
     def list_dicts(self, limit: int = 50) -> list[dict[str, object]]:
+        """按时间倒序返回审计事件 dict 列表，供审计面板/回放展示。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(

@@ -6,9 +6,14 @@ from src.skills.base_skill import BaseSkill
 
 
 class RiskSkill(BaseSkill):
-    """对需求的质量风险、变更风险和技术影响风险进行评估的技能。"""
+    """LLM 风险评估技能。
+
+    与 RiskAgent 的关系同样是“Skill 负责模型输出，Agent 负责入口与回退”；
+    模型返回异常时直接回退到启发式结果，不阻塞审核决策。
+    """
 
     def assess(self, extracted: object) -> object:
+        """评估风险并把 confidence 约束在前端可展示的安全区间。"""
         from src.agents.extract_agent import ExtractedRequirement
         from src.agents.risk_agent import RiskAgent, RiskAssessment
 
@@ -35,6 +40,7 @@ class RiskSkill(BaseSkill):
                 quality_risk=str(payload.get("quality_risk") or fallback.quality_risk),
                 change_risk=str(payload.get("change_risk") or fallback.change_risk),
                 technical_impact_risk=str(payload.get("technical_impact_risk") or fallback.technical_impact_risk),
+                # 置信度只作为解释信号，限制在 0~0.95，避免错误的 100% 绝对表达。
                 confidence=max(0.0, min(0.95, float(payload.get("confidence") or fallback.confidence))),
             )
             return result

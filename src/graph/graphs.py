@@ -23,7 +23,11 @@ from src.graph.state import RequirementState
 
 
 def build_analysis_graph():
-    """分析图：抽取 → 检索 → 冲突/重复分析 → 风险 → 是否需要人工审核。"""
+    """分析图：抽取 → 检索 → 冲突/重复分析 → 风险 → 是否需要人工审核。
+
+    顺序固定：先召回候选，再做关系分析；风险永远在 decide 前执行，
+    保证前端与审核队列拿到的是完整分析面板。
+    """
     graph = StateGraph(RequirementState)
     graph.add_node("extract", extract_node)
     graph.add_node("retrieve", retrieve_node)
@@ -40,7 +44,10 @@ def build_analysis_graph():
 
 
 def build_decision_graph():
-    """决策图：记录审核 → 按 decision 路由 → commit 落库 / reject。"""
+    """决策图：记录审核 → 按 decision 路由 → commit 落库 / reject。
+
+    图本身不持有事务；调用方 ReviewService 负责 session、commit 与 rollback。
+    """
     graph = StateGraph(RequirementState)
     graph.add_node("record", record_review_node)
     graph.add_node("commit", commit_requirement_node)
@@ -70,7 +77,10 @@ def run_analysis(
     segments: list[dict[str, Any]] | None = None,
     normalized_fields: dict[str, Any] | None = None,
 ) -> RequirementState:
-    """便捷入口：跑一遍分析图并返回最终 state。"""
+    """便捷入口：跑一遍分析图并返回最终 state。
+
+    允许 RequirementService 预先传入标准化文档与字段，避免在图内重复清洗。
+    """
     initial: dict[str, Any] = {
         "source_id": source_id,
         "source_text": source_text,

@@ -10,7 +10,11 @@ RISK_KEYS = ("quality_risk", "change_risk", "technical_impact_risk")
 
 
 def review_required(analysis: dict[str, object], risk: dict[str, object]) -> bool:
-    """命中重复/冲突，或存在中高风险且结论不够确定时需要人工审核。"""
+    """判断是否必须进入人工审核。
+
+    规则刻意偏保守：重复、冲突、高风险直接拦截；
+    若只是“存在关联”但同时伴随至少两个中风险，也要求人工确认依赖与影响面。
+    """
     high_risk = any(risk.get(key) == "high" for key in RISK_KEYS)
     medium_risk = sum(1 for key in RISK_KEYS if risk.get(key) == "medium")
     related = bool(analysis.get("related"))
@@ -23,5 +27,5 @@ def review_required(analysis: dict[str, object], risk: dict[str, object]) -> boo
 
 
 def next_action_for(analysis: dict[str, object], risk: dict[str, object]) -> str:
-    """返回 manual_review | can_commit。"""
+    """把审核判定转换为统一动作枚举，供 HTTP、SSE 与 LangGraph 复用。"""
     return "manual_review" if review_required(analysis, risk) else "can_commit"

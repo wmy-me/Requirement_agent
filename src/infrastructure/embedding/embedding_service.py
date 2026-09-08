@@ -14,6 +14,11 @@ class EmbeddingService:
         self.provider = provider or LLMProvider()
 
     def embed(self, text: str) -> list[float]:
+        """返回文本的 1536 维向量。
+
+        模型可用则走真实 embedding；不可用/失败时退化为基于文本哈希的确定性伪向量，
+        保证检索不中断（伪向量仅用于占位，语义召回会退化为关键词）。
+        """
         if not text:
             return [0.0] * 1536
         if self.provider.is_configured():

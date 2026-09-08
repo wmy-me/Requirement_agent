@@ -10,7 +10,11 @@ from src.skills.extract_skill import ExtractSkill
 
 
 class ExtractedRequirement(BaseModel):
-    """从原始需求文本中抽取出的结构化需求对象。"""
+    """抽取阶段产出的标准需求载体。
+
+    该对象会贯穿检索、关系分析、风险评估、审核落库与对话回放；
+    `requirements` 表示按功能条目拆分后的候选行，后续版本管理直接复用它做 feature 初稿。
+    """
 
     requirement_title: str
     summary: str
@@ -24,7 +28,11 @@ class ExtractedRequirement(BaseModel):
 
 
 class ExtractAgent:
-    """在持久化与评审前执行需求抽取的 Agent。"""
+    """需求抽取入口。
+
+    Agent 只负责“入口编排 + 降级策略”：优先调用 LLM Skill；
+    未配置模型或模型返回非法 JSON 时，回退到本地启发式抽取，保证提交链路不断。
+    """
 
     _domain_keywords: dict[str, set[str]] = {
         "auth": {"登录", "认证", "权限", "账号", "验证码", "密码"},
@@ -44,6 +52,7 @@ class ExtractAgent:
         source_type: str = "web",
         requester_name: str | None = None,
     ) -> ExtractedRequirement:
+        """把原文转换成结构化需求，不写数据库。"""
         if not self.skill.provider.is_configured():
             return self._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
         return self.skill.extract(raw_text, source_type=source_type, requester_name=requester_name)
@@ -55,6 +64,7 @@ class ExtractAgent:
         source_type: str = "web",
         requester_name: str | None = None,
     ) -> ExtractedRequirement:
+        """本地兜底抽取：尽量给出稳定标题、摘要、领域、标签和功能行。"""
         cleaned = (raw_text or "").strip()
         if not cleaned:
             cleaned = "新需求：补充需求说明。"
@@ -80,6 +90,7 @@ class ExtractAgent:
         )
 
     def _extract_title(self, raw_text: str, lines: list[str]) -> str:
+        """优先取首行作为标题，避免摘要截断后丢失业务主语。"""
         if lines:
             first = lines[0].rstrip("：:")
             if len(first) <= 80:
@@ -95,6 +106,7 @@ class ExtractAgent:
         return sentence[:197].rstrip() + "..."
 
     def _extract_requirements(self, lines: list[str]) -> list[str]:
+        """把来源文本按“可独立理解的一行功能”整理为 feature 候选。"""
         requirements: list[str] = []
         for line in lines:
             normalized = line.strip("-·•* ")
@@ -105,6 +117,7 @@ class ExtractAgent:
         return requirements[:8]
 
     def _detect_domain(self, raw_text: str) -> str:
+        """按保守关键词命中领域；宁可落到 general，也不臆造业务域。"""
         lower = raw_text.lower()
         for name, keywords in self._domain_keywords.items():
             if any(keyword in lower for keyword in (k.lower() for k in keywords)):
@@ -112,6 +125,7 @@ class ExtractAgent:
         return "general"
 
     def _extract_tags(self, raw_text: str, domain: str) -> list[str]:
+        """标签主要服务于相似度分析与风险规则，不追求完整本体。"""
         base = {domain}
         for token in ("登录", "审批", "报表", "支付", "通知", "导入", "导出", "权限"):
             if token in raw_text:
@@ -119,6 +133,7 @@ class ExtractAgent:
         return sorted(base)
 
     def _detect_priority(self, raw_text: str) -> Literal["low", "medium", "high"]:
+        """优先级只做粗分层，供审核与风险规则参考。"""
         lowered = raw_text.lower()
         if any(keyword in lowered for keyword in ["高优先级", "urgency", "紧急", "重大", "关键", "合规"]):
             return "high"

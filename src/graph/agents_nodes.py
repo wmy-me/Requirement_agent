@@ -22,7 +22,10 @@ def extract_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
-    """基于抽取结果检索已有相似/相关需求。"""
+    """基于抽取结果检索已有相似/相关需求。
+
+    这里只做候选召回，不直接下业务判断；是否算重复/关联由 analyze_node 决定。
+    """
     extracted = state.get("extracted") or {}
     query = extracted.get("summary") or extracted.get("raw_text") or state.get("source_text") or ""
     candidates = RetrievalAgent().retrieve(query, limit=5)
@@ -30,6 +33,7 @@ def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extracted_model(state: dict[str, Any]) -> ExtractedRequirement:
+    """把状态中的 dict 还原为强类型对象，统一后续节点输入。"""
     return ExtractedRequirement.model_validate(state.get("extracted") or {})
 
 
@@ -49,7 +53,10 @@ def risk_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def decide_node(state: dict[str, Any]) -> dict[str, Any]:
-    """综合分析+风险给出是否需要人工审核的决策。"""
+    """综合分析+风险给出是否需要人工审核的决策。
+
+    该节点只产出状态，不写库；HTTP 路由、RequirementService 与 SSE 回放都复用同一决策规则。
+    """
     analysis = state.get("analysis") or {}
     risk = state.get("risk") or {}
     action = next_action_for(analysis, risk)

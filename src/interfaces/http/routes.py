@@ -24,6 +24,7 @@ from src.infrastructure.db.repositories import (
     ChatRepository,
     DocumentAssetRepository,
     MemoryRepository,
+    RequirementFeatureRepository,
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
@@ -54,6 +55,7 @@ source_repo = RequirementSourceRepository()
 version_repo = RequirementVersionRepository()
 audit_repo = AuditRepository()
 document_repo = DocumentAssetRepository()
+feature_repo = RequirementFeatureRepository()
 chat_repo = ChatRepository()
 memory_repo = MemoryRepository()
 memory_context_builder = MemoryContextBuilder(memory_repo)
@@ -519,21 +521,44 @@ async def search_requirements(
     q: str = Query(min_length=1, max_length=200),
     limit: int = Query(default=10, ge=1, le=20),
     channel: str | None = Query(default=None, max_length=60),
+    requester: str | None = Query(default=None, max_length=120),
     department: str | None = Query(default=None, max_length=120),
     business_domain: str | None = Query(default=None, max_length=120),
     sensitivity_level: str | None = Query(default=None, max_length=60),
+    has_version_ge: int | None = Query(default=None, ge=1),
     submitted_from: str | None = Query(default=None, max_length=40),
     submitted_to: str | None = Query(default=None, max_length=40),
 ) -> dict[str, object]:
     filters = {
         "channel": (channel or "").strip() or None,
+        "requester": (requester or "").strip() or None,
         "department": (department or "").strip() or None,
         "business_domain": (business_domain or "").strip() or None,
         "sensitivity_level": (sensitivity_level or "").strip() or None,
+        "has_version_ge": has_version_ge,
         "submitted_from": (submitted_from or "").strip() or None,
         "submitted_to": (submitted_to or "").strip() or None,
     }
     return {"items": retrieval_service.search(q.strip(), limit=limit, filters=filters)}
+
+
+@router.get("/api/v1/requirements/features/search")
+async def search_requirement_features(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=20, ge=1, le=50),
+    status: str | None = Query(default=None, max_length=20),
+    requester: str | None = Query(default=None, max_length=120),
+    has_version_ge: int | None = Query(default=None, ge=1),
+) -> dict[str, object]:
+    return {
+        "items": retrieval_service.search_features(
+            q.strip(),
+            status=(status or "").strip() or None,
+            requester=(requester or "").strip() or None,
+            has_version_ge=has_version_ge,
+            limit=limit,
+        )
+    }
 
 
 @router.get("/api/v1/documents")
@@ -835,6 +860,37 @@ async def list_requirement_versions(requirement_key: str) -> dict[str, object]:
     return {"items": version_repo.list_by_requirement_key(requirement_key)}
 
 
+@router.get("/api/v1/requirements/{requirement_key}/features")
+async def list_requirement_features(
+    requirement_key: str,
+    at_version: int | None = Query(default=None, ge=1),
+    include_deleted: bool = Query(default=False),
+) -> dict[str, object]:
+    return {
+        "items": feature_repo.list_by_requirement_key(
+            requirement_key,
+            at_version=at_version,
+            include_deleted=include_deleted,
+        )
+    }
+
+
+@router.get("/api/v1/requirements/{requirement_key}/diff")
+async def get_requirement_diff(
+    requirement_key: str,
+    from_version: int | None = Query(default=None, ge=1),
+    to_version: int | None = Query(default=None, ge=1),
+) -> dict[str, object]:
+    try:
+        return feature_repo.diff_by_requirement_key(
+            requirement_key,
+            from_version=from_version,
+            to_version=to_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.get("/api/v1/requirements/{requirement_key}/trace")
 async def get_requirement_trace(requirement_key: str) -> dict[str, object]:
     trace = version_repo.trace_by_requirement_key(requirement_key)
@@ -855,9 +911,11 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
             source_id=payload.source_id,
             decision=payload.decision,
             reviewer_id=settings.api_actor_id,
+            target_requirement_key=payload.target_requirement_key,
             reviewer_name=payload.reviewer_name,
             comment=payload.comment,
             edited_requirement=payload.edited_requirement,
+            feature_overrides=payload.feature_overrides,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

@@ -41,11 +41,13 @@ class ReviewSubmitRequest(BaseModel):
 
     source_id: int = Field(gt=0)
     decision: Literal["approved", "rejected", "returned"]
+    target_requirement_key: str | None = Field(default=None, max_length=80)
     reviewer_name: str | None = Field(default=None, max_length=120)
     comment: str | None = Field(default=None, max_length=5_000)
     edited_requirement: str | None = Field(default=None, max_length=20_000)
+    feature_overrides: list[dict[str, object]] = Field(default_factory=list)
 
-    @field_validator("reviewer_name", "comment", "edited_requirement", mode="before")
+    @field_validator("target_requirement_key", "reviewer_name", "comment", "edited_requirement", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:

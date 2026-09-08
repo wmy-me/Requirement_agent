@@ -730,6 +730,8 @@ function buildLibraryItem(it) {
       <span class="src-tag">${esc(it.requirement_key || '')}</span>
       <span class="status-tag ${it.status === 'active' ? 'active' : ''}">${esc(it.status || '')}</span>
       ${it.business_domain ? `<span class="status-tag">${esc(it.business_domain)}</span>` : ''}
+      ${it.current_version != null ? `<span class="status-tag">V${esc(it.current_version)}</span>` : ''}
+      ${it.feature_count != null ? `<span class="status-tag">${esc(it.feature_count)} 条功能</span>` : ''}
       ${it.score != null ? `<span style="margin-left:auto">相似 ${Math.round(it.score * 100)}%</span>` : ''}
     </div>`;
   box.querySelector('.w-title').textContent = name;
@@ -742,20 +744,41 @@ async function showRequirementDetail(key, name) {
   detailEl.classList.remove('hidden');
   detailEl.innerHTML = `<div class="empty-hint">加载版本与溯源…</div>`;
   try {
-    const [vers, trace] = await Promise.all([
+    const [vers, trace, features, diff] = await Promise.all([
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/versions'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/trace'),
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/features'),
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/diff'),
     ]);
     const req = (trace.requirement || {});
+    const featureItems = features.items || [];
+    const diffItems = diff || {};
     let html = `<div class="d-title"></div>`;
     if (req.final_requirement) html += `<p style="font-size:12px;color:var(--text-2);margin:2px 0 8px"></p>`;
-    html += `<div class="section-label">版本历史</div><ul class="timeline"></ul>`;
+    html += `<div class="section-label">当前功能明细</div><ul class="timeline feature-lines"></ul>`;
+    html += `<div class="section-label">版本 Diff</div><ul class="timeline diff-lines"></ul>`;
+    html += `<div class="section-label">版本历史</div><ul class="timeline version-lines"></ul>`;
     detailEl.innerHTML = html;
     detailEl.querySelector('.d-title').textContent = `${key} · ${name || ''}`;
     if (req.final_requirement) detailEl.querySelector('p').textContent = req.final_requirement;
-    const tl = detailEl.querySelector('.timeline');
+    const featureLine = detailEl.querySelector('.feature-lines');
+    const diffLine = detailEl.querySelector('.diff-lines');
+    const versionLine = detailEl.querySelector('.version-lines');
+    if (!featureItems.length) {
+      featureLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无功能条目</span></li>`;
+    }
+    featureItems.forEach((f) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<div class="t-head">${esc(f.feature_key || '')}</div><div class="t-sub">引入 V${esc(f.origin_version_no || '')}${f.origin_source_id ? ` · source #${esc(f.origin_source_id)}` : ''}</div><pre>${esc(f.content || '')}</pre>`;
+      featureLine.appendChild(li);
+    });
+    const diffHtml = [];
+    (diffItems.added || []).forEach((item) => diffHtml.push(`<li><div class="t-head">新增 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
+    (diffItems.modified || []).forEach((item) => diffHtml.push(`<li><div class="t-head">修改 ${esc(item.feature_key || '')}</div><div class="t-sub">Before → After</div><pre>${esc(item.before || '')}\n---\n${esc(item.after || '')}</pre></li>`));
+    (diffItems.removed || []).forEach((item) => diffHtml.push(`<li><div class="t-head">删除 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
+    diffLine.innerHTML = diffHtml.length ? diffHtml.join('') : `<li style="border:0;padding-left:0"><span class="empty-hint">当前相邻版本无差异</span></li>`;
     const versions = vers.items || trace.versions || [];
-    if (!versions.length) tl.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无版本记录</span></li>`;
+    if (!versions.length) versionLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无版本记录</span></li>`;
     versions.forEach((v) => {
       const li = document.createElement('li');
       const head = document.createElement('div');
@@ -771,7 +794,7 @@ async function showRequirementDetail(key, name) {
         pre.textContent = v.requirement_snapshot;
         li.appendChild(pre);
       }
-      tl.appendChild(li);
+      versionLine.appendChild(li);
     });
   } catch (e) {
     detailEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;

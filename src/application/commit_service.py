@@ -1,4 +1,9 @@
-"""用于需求事务写入的提交服务。"""
+"""用于需求事务写入的提交服务。
+
+注意：当前生产主流程已由 LangGraph 决策图的 commit 节点（src/graph/commit_nodes.py）
+负责“审核通过→版本/主需求/审计/outbox”落库；本类为保留的独立提交实现，
+目前无生产引用（如需使用，请确认与决策图一致，避免双写）。
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ from src.infrastructure.db.repositories import AuditRepository, RequirementMaste
 
 
 class CommitService:
-    """协调需求创建、版本记录和审计日志的事务流程。"""
+    """协调需求创建、版本记录和审计日志的事务流程（独立于 LangGraph 决策图）。"""
 
     def __init__(
         self,
@@ -27,6 +32,11 @@ class CommitService:
         trace_id: str,
         actor_id: str = "system",
     ) -> dict[str, object]:
+        """保存主需求 + 版本，并写一条 requirement_committed 审计事件。
+
+        注意：本方法逐条调用 repo（各自开启/提交 session），
+        并非严格单事务；若需要原子提交请改走 LangGraph 决策图。
+        """
         saved_requirement = self.master_repo.save(requirement)
         saved_version = self.version_repo.save(version)
         self.audit_repo.record(

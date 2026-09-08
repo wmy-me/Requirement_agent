@@ -11,6 +11,8 @@ from src.skills.analyze_skill import AnalyzeSkill
 
 
 class CandidateMatch(BaseModel):
+    """单个历史候选与当前需求的关系证据。"""
+
     requirement_key: str
     title: str
     similarity: float
@@ -19,6 +21,12 @@ class CandidateMatch(BaseModel):
 
 
 class AnalysisResult(BaseModel):
+    """重复/关联/冲突分析的标准输出。
+
+    四个布尔量必须互相一致：`independent` 只能在其余判断都未命中时成立。
+    `candidates` 是审核与前端展示的证据面板，不是所有检索命中都会进入这里。
+    """
+
     duplicate: bool = False
     related: bool = False
     conflict: bool = False
@@ -28,7 +36,11 @@ class AnalysisResult(BaseModel):
 
 
 class AnalyzeAgent:
-    """负责对需求与历史项进行关系判断的分类 Agent。"""
+    """需求关系分析入口。
+
+    Agent 负责把抽取结果与历史候选接起来，并在 LLM 不可用时回退到启发式规则；
+    Skill 负责真正的提示词与 JSON 归一化。
+    """
 
     def __init__(self, skill: AnalyzeSkill | None = None) -> None:
         self.skill = skill or AnalyzeSkill()
@@ -38,6 +50,7 @@ class AnalyzeAgent:
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
     ) -> AnalysisResult:
+        """判断当前需求与历史需求是重复、关联、冲突还是独立。"""
         if not self.skill.provider.is_configured():
             return self._heuristic_analyze(extracted, historical_requirements)
         return self.skill.analyze(extracted, historical_requirements)
@@ -47,6 +60,10 @@ class AnalyzeAgent:
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
     ) -> AnalysisResult:
+        """本地证据规则。
+
+        只把达到阈值的候选放入分析结果，避免“检索命中”被误读成“业务相关”。
+        """
         candidates: list[CandidateMatch] = []
         historical = historical_requirements or []
 
@@ -68,6 +85,7 @@ class AnalyzeAgent:
                     )
                 )
 
+        # 0.7 以上才视为重复倾向；0.45~0.7 视为需要人工确认的关联信号。
         duplicate = any(candidate.similarity >= 0.7 for candidate in candidates)
         related = any(0.45 <= candidate.similarity < 0.7 for candidate in candidates)
         conflict = "权限" in " ".join(extracted.tags) and any("权限" in str(item.get("requirement_name") or "") for item in historical)
@@ -93,6 +111,11 @@ class AnalyzeAgent:
         )
 
     def _score_similarity(self, extracted: ExtractedRequirement, title: str, summary: str) -> float:
+        """返回相似度与证据列表。
+
+        分数来自标签、领域、共享业务关键词和短语重合四层证据；
+        若没有任何证据，则强制衰减，避免弱向量候选在 UI 中看起来“很像”。
+        """
         tokens = [token for token in extracted.tags if len(token) >= 2]
         title_text = title.lower()
         summary_text = summary.lower()
@@ -124,6 +147,7 @@ class AnalyzeAgent:
 
     @staticmethod
     def _ordered_phrase_overlap(left: str, right: str) -> int:
+        """粗粒度短语重合统计，辅助中文短句场景下的启发式判定。"""
         left_tokens = [token for token in re.split(r"\s+", left) if token]
         right_tokens = [token for token in re.split(r"\s+", right) if token]
         if not left_tokens or not right_tokens:
