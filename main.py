@@ -28,6 +28,10 @@ async def add_security_headers(request: Request, call_next):
         "Content-Security-Policy",
         "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'",
     )
+    # 前端资源不缓存重验证，避免浏览器沿用旧版 JS（历史会话加载失败通常源于旧缓存）
+    path = request.url.path
+    if path == "/ui" or path.endswith(".js") or path.endswith(".css"):
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 

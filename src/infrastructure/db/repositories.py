@@ -1912,6 +1912,7 @@ class ChatRepository:
         content: str,
         actor_id: str = "api-user",
         client_message_id: str | None = None,
+        meta: dict[str, object] | None = None,
     ) -> dict[str, object]:
         with SessionLocal() as session:
             row = session.execute(
@@ -1929,7 +1930,7 @@ class ChatRepository:
                     "conversation_id": conversation_id,
                     "content": content,
                     "client_message_id": client_message_id,
-                    "meta": json.dumps({"actor_id": actor_id}),
+                    "meta": json.dumps({**(meta or {}), "actor_id": actor_id}),
                 },
             ).mappings().one()
             session.commit()

@@ -14,13 +14,17 @@ const pendingCount = $('pending-count');
 const modelChip = $('model-chip');
 const dbPill = $('db-pill');
 const llmPill = $('llm-pill');
+const attachList = $('attach-list');
 
 const STREAM_URL = '/api/v1/agent/chat/stream';
+const STREAM_URL_FILES = '/api/v1/agent/chat/stream-with-files';
 const SESSIONS_KEY = 'ra.sessions.v1';
 
 const state = {
   sessionId: null,
   streaming: false,
+  pendingFiles: [],
+  convos: [],
 };
 
 /* ---------------- helpers ---------------- */
@@ -147,13 +151,26 @@ function parseBlock(block) {
 }
 
 /* ---------------- Chat: DOM builders ---------------- */
-function appendUser(text) {
+function appendUser(text, files) {
   const art = document.createElement('article');
   art.className = 'msg user';
   art.innerHTML = `
     <div class="msg-body"><div class="bubble"></div></div>
     <div class="avatar">我</div>`;
-  art.querySelector('.bubble').innerHTML = md(text);
+  const bubble = art.querySelector('.bubble');
+  if (files && files.length) {
+    bubble.innerHTML = `<div class="u-files"></div>` + (text ? `<div class="u-text"></div>` : '');
+    if (text) bubble.querySelector('.u-text').innerHTML = md(text);
+    const filesEl = bubble.querySelector('.u-files');
+    files.forEach((f) => {
+      const chip = document.createElement('span');
+      chip.className = 'attach-chip' + (f.error ? ' err' : '');
+      chip.innerHTML = `📎 <span class="a-name">${esc(f.name || f.title || '文件')}</span>${f.error ? '（读取失败）' : ''}`;
+      filesEl.appendChild(chip);
+    });
+  } else {
+    bubble.innerHTML = md(text);
+  }
   msgs.appendChild(art);
   return art;
 }
@@ -352,7 +369,7 @@ function buildArtifact(p) {
   const risks = [['质量风险', risk.quality_risk], ['变更风险', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
   b4.innerHTML = `<div class="risk-line">${risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)} · ${levelText(lvl)}</span>`).join('')}</div>`;
   if (risk.confidence != null) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:6px">模型置信度 ${Math.round(risk.confidence * 100)}%</div>`);
-  if (pipeline.analysis_mode) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:4px">审核模式：${esc(pipeline.analysis_mode)}</div>`);
+  if (p.analysis_mode) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:4px">审核模式：${esc(p.analysis_mode)}</div>`);
   frag.appendChild(c4);
 
   // 5) actions
@@ -417,7 +434,7 @@ async function doSubmitRequirement(p) {
 
 /* ---------------- Streaming chat ---------------- */
 function setSendEnabled() {
-  sendBtn.disabled = state.streaming || !inputEl.value.trim();
+  sendBtn.disabled = state.streaming || (!inputEl.value.trim() && !state.pendingFiles.length);
 }
 
 function resizeInput() {
@@ -425,36 +442,47 @@ function resizeInput() {
   inputEl.style.height = Math.min(160, inputEl.scrollHeight) + 'px';
 }
 
-async function runChat(text) {
+async function runChat(text, files) {
   const msg = String(text || '').trim();
-  if (!msg || state.streaming) return;
+  const attached = Array.isArray(files) ? files : [];
+  if ((!msg && !attached.length) || state.streaming) return;
 
   state.streaming = true;
   setSendEnabled();
   const needRecord = !state.sessionId;
-  const snippet = firstLine(msg, 36);
   const clientId = uuidv4();
 
-  appendUser(msg);
+  appendUser(msg, attached.map((f) => ({ name: f.name, size: f.size })));
   // 一条“分析消息”（步骤 + 结构化卡片），最终结论另起一条独立气泡
   const analysis = appendAnalysisMessage();
   let final = null;
 
-  const payload = {
-    message: msg,
-    session_id: state.sessionId || null,
-    client_message_id: clientId,
-    source_type: 'web',
-    requester_name: '我',
-    analysis_mode: 'strict',
-  };
-
   try {
-    const resp = await fetch(STREAM_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    let resp;
+    if (attached.length) {
+      const form = new FormData();
+      form.append('message', msg);
+      form.append('session_id', state.sessionId || '');
+      form.append('client_message_id', clientId);
+      form.append('requester_name', '我');
+      form.append('analysis_mode', 'strict');
+      attached.forEach((f) => form.append('files', f.file || f, f.name));
+      resp = await fetch(STREAM_URL_FILES, { method: 'POST', body: form });
+    } else {
+      const payload = {
+        message: msg,
+        session_id: state.sessionId || null,
+        client_message_id: clientId,
+        source_type: 'web',
+        requester_name: '我',
+        analysis_mode: 'strict',
+      };
+      resp = await fetch(STREAM_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
     if (!resp.ok) {
       let detail = resp.statusText;
       try { const b = await resp.json(); detail = b.detail || detail; } catch (e) { /* ignore */ }
@@ -478,9 +506,17 @@ async function runChat(text) {
     (final || analysis).error(err && err.message ? err.message : '网络异常，请重试');
   } finally {
     state.streaming = false;
+    state.pendingFiles = [];
+    renderAttachList();
     setSendEnabled();
-    if (needRecord && state.sessionId) upsertSession(state.sessionId, snippet);
-    renderSessions();
+    if (needRecord && state.sessionId) {
+      // 首轮对话结束：触发 finalize（LLM 一句话摘要）作为会话默认名，不阻塞 UI
+      const sid = state.sessionId;
+      apiJson('/api/v1/conversations/' + encodeURIComponent(sid) + '/finalize', { method: 'POST' })
+        .catch(() => { /* 摘要失败不影响本次对话 */ })
+        .then(() => loadConversations());
+    }
+    loadConversations();
     scrollBottom();
     refreshPending();
   }
@@ -491,7 +527,8 @@ function renderHistory(history) {
   clearChatInner();
   (history || []).forEach((m) => {
     if (m.role === 'user') {
-      appendUser(m.content || '');
+      const files = (m.meta && Array.isArray(m.meta.files)) ? m.meta.files : null;
+      appendUser(m.content || '', files);
     } else if (m.role === 'assistant') {
       // 回放顺序与实时一致：先卡片，再最终结论气泡
       const analysis = appendAnalysisMessage();
@@ -532,26 +569,62 @@ function clearChatInner() {
   msgs.innerHTML = '';
 }
 
-/* ---------------- Sessions (localStorage) ---------------- */
+/* ---------------- Sessions (database-backed, localStorage as cache) ---------------- */
 function getSessions() {
   try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)) || []; } catch (e) { return []; }
 }
 function saveSessions(list) {
   try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list.slice(0, 40))); } catch (e) { /* ignore */ }
 }
-function upsertSession(id, title) {
-  const list = getSessions().filter((s) => s.id !== id);
-  list.unshift({ id, title, ts: Date.now() });
-  saveSessions(list);
+function convTitle(c) {
+  // 默认名优先用 LLM 摘要；用户改过名（title 不再是「新对话」）则显示 title，摘要不会覆盖。
+  return (c && c.title && c.title !== '新对话') ? c.title : ((c && c.summary) || '新对话');
+}
+function isoToTs(iso) {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  return Number.isNaN(t) ? Date.now() : t;
+}
+async function loadConversations() {
+  try {
+    const res = await apiJson('/api/v1/conversations?limit=100');
+    state.convos = res.items || [];
+    saveSessions(state.convos.map((c) => ({ id: c.id, title: convTitle(c), ts: isoToTs(c.updated_at) })));
+  } catch (e) {
+    // 后端不可达时回退 localStorage 缓存，保证至少能看到本地会话
+    state.convos = getSessions().map((s) => ({ id: s.id, title: s.title, summary: null, updated_at: new Date(s.ts).toISOString() }));
+  }
+  renderSessions();
 }
 function removeSession(id) {
-  saveSessions(getSessions().filter((s) => s.id !== id));
+  apiJson('/api/v1/conversations/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(loadConversations)
+    .catch(() => {
+      saveSessions(getSessions().filter((s) => s.id !== id));
+      renderSessions();
+    });
   if (state.sessionId === id) newChat();
-  else renderSessions();
+}
+async function renameSession(id) {
+  const conv = state.convos.find((c) => c.id === id);
+  const current = convTitle(conv);
+  const name = window.prompt('给这个会话重命名：', current);
+  if (name == null) return; // 取消
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  try {
+    await apiJson('/api/v1/conversations/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmed }),
+    });
+    await loadConversations();
+  } catch (e) {
+    toast('重命名失败：' + e.message, 'err');
+  }
 }
 function renderSessions() {
   sessionList.innerHTML = '';
-  const sessions = getSessions();
+  const sessions = state.convos;
   if (!sessions.length) {
     const li = document.createElement('li');
     li.className = '';
@@ -559,23 +632,25 @@ function renderSessions() {
     sessionList.appendChild(li);
     return;
   }
-  sessions.forEach((s) => {
+  sessions.forEach((c) => {
     const li = document.createElement('li');
-    if (state.sessionId === s.id) li.classList.add('active');
-    li.innerHTML = `<div class="s-title"></div><div class="s-time"></div><button class="s-del" type="button" title="删除">×</button>`;
-    li.querySelector('.s-title').textContent = s.title || '对话';
-    li.querySelector('.s-time').textContent = fmtAgo(s.ts);
-    li.querySelector('.s-del').addEventListener('click', (e) => { e.stopPropagation(); removeSession(s.id); });
-    li.addEventListener('click', () => loadSession(s.id));
+    if (state.sessionId === c.id) li.classList.add('active');
+    li.innerHTML = `<div class="s-title"></div><div class="s-time"></div><button class="s-rename" type="button" title="重命名">✏️</button><button class="s-del" type="button" title="删除">×</button>`;
+    li.querySelector('.s-title').textContent = convTitle(c);
+    li.querySelector('.s-time').textContent = fmtAgo(isoToTs(c.updated_at));
+    li.querySelector('.s-rename').addEventListener('click', (e) => { e.stopPropagation(); renameSession(c.id); });
+    li.querySelector('.s-del').addEventListener('click', (e) => { e.stopPropagation(); removeSession(c.id); });
+    li.addEventListener('click', () => loadSession(c.id));
     sessionList.appendChild(li);
   });
 }
 function newChat() {
   if (state.streaming) return;
-  // 收尾上一个会话：后台 finalize（一句话摘要 + 沉淀长期记忆），不阻塞 UI
+  // 收尾上一个会话：后台 finalize（一句话摘要 + 沉淀长期记忆），完成后刷新列表显示摘要名
   if (state.sessionId) {
     apiJson('/api/v1/conversations/' + encodeURIComponent(state.sessionId) + '/finalize', { method: 'POST' })
-      .catch(() => { /* 记忆抽取失败不影响开新会话 */ });
+      .catch(() => { /* 记忆抽取失败不影响开新会话 */ })
+      .then(() => loadConversations());
   }
   state.sessionId = null;
   clearChatInner();
@@ -953,44 +1028,17 @@ async function loadStatus() {
   } catch (e) { setPill(llmPill, false, 'LLM 不可达'); }
 }
 
-/* ---------------- File upload -> pending queue ---------------- */
-async function uploadDocument(file) {
-  if (!file || state.streaming) return;
-  state.streaming = true;
-  setSendEnabled();
-  const snippet = '📎 ' + file.name;
-  appendUser(snippet);
-  const analysis = appendAnalysisMessage();
-  analysis.setStep('正在解析并理解文档…');
-  const form = new FormData();
-  form.append('source_type', 'web');
-  form.append('requester_id', 'chat');
-  form.append('requester_name', '我');
-  form.append('file', file);
-  try {
-    const res = await apiJson('/api/v1/requirements/ingest', { method: 'POST', body: form });
-    const final = createFinalBubble();
-    final.token(`已解析文档「${file.name}」并完成抽取 → 已进入待办审核队列。`);
-    final.finish();
-    appendSystem(`来源 #${res.source_id || ''} 已入队（${res.status || ''}）。可到右侧「待办」查看或审核。`);
-    refreshPending();
-    setRailTab('pending');
-  } catch (e) {
-    analysis.error(e.message);
-  } finally {
-    state.streaming = false;
-    setSendEnabled();
-  }
-}
-
 /* ---------------- Wire events ---------------- */
 composerForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
-  if (!text || state.streaming) return;
+  if ((!text && !state.pendingFiles.length) || state.streaming) return;
+  const files = state.pendingFiles.splice(0);
   inputEl.value = '';
   resizeInput();
-  runChat(text);
+  renderAttachList();
+  setSendEnabled();
+  runChat(text, files);
 });
 
 inputEl.addEventListener('keydown', (e) => {
@@ -1003,10 +1051,44 @@ inputEl.addEventListener('input', () => { setSendEnabled(); resizeInput(); });
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
-  const f = fileInput.files && fileInput.files[0];
-  if (f) uploadDocument(f);
+  const selected = Array.from(fileInput.files || []);
+  selected.forEach((f) => {
+    const key = f.name + '|' + f.size;
+    if (!state.pendingFiles.some((p) => (p.name + '|' + p.size) === key)) {
+      state.pendingFiles.push({ file: f, name: f.name, size: f.size });
+    }
+  });
   fileInput.value = '';
+  renderAttachList();
+  setSendEnabled();
 });
+
+function fmtFileSize(bytes) {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderAttachList() {
+  attachList.innerHTML = '';
+  if (!state.pendingFiles.length) {
+    attachList.classList.add('hidden');
+    return;
+  }
+  attachList.classList.remove('hidden');
+  state.pendingFiles.forEach((p, idx) => {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.innerHTML = `📎 <span class="a-name" title="${esc(p.name)}">${esc(p.name)}</span><span class="a-size">${fmtFileSize(p.size)}</span><button type="button" class="a-remove" title="移除">×</button>`;
+    chip.querySelector('.a-remove').addEventListener('click', () => {
+      state.pendingFiles.splice(idx, 1);
+      renderAttachList();
+      setSendEnabled();
+    });
+    attachList.appendChild(chip);
+  });
+}
 
 $('new-chat').addEventListener('click', newChat);
 $('toggle-left').addEventListener('click', () => toggleRail('rail-sessions', 'toggle-left'));
@@ -1037,7 +1119,7 @@ function toggleRail(id, btnId) {
 async function init() {
   setSendEnabled();
   newChat();
-  renderSessions();
+  loadConversations();
   loadPendingReviews();
   loadDocuments();
   loadAuditEvents();

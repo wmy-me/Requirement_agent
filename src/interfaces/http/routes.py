@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from queue import Queue
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
@@ -74,6 +75,9 @@ RISK_KEYS = (
     ("变更", "change_risk"),
     ("技术影响", "technical_impact_risk"),
 )
+
+# 单个文档送入分析管线的正文上限（字符），防止长文档超 token / 拖慢响应
+MAX_FILE_CHARS = 6000
 
 NARRATIVE_SYSTEM_PROMPT = (
     "你是需求治理助手，正在与业务方对话。用户刚描述了一条需求，系统已完成结构化抽取、相似度检索、冲突与重复分析、风险评估，"
@@ -174,7 +178,11 @@ def _narrative_prompt(pipeline: dict[str, object], memory_context: str | None = 
 
 
 async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | None = None) -> AsyncIterator[str]:
-    """将结构化结论转成自然语言流。有 LLM 则走真实流式；否则退化为分段输出。"""
+    """将结构化结论转成自然语言流。有 LLM 则走真实流式；否则退化为分段输出。
+
+    生产者在线程池读取 LLM 流，消费者在事件循环用 get_nowait + sleep 轮询，
+    避免阻塞默认执行器线程（防止客户端断连时线程泄漏、进而拖垮其它请求）。
+    """
     provider = LLMProvider()
     if not provider.is_configured():
         # 未配置 LLM 时直接给出确定性结论（逐段输出以模拟节奏）
@@ -183,7 +191,7 @@ async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | N
             yield text[i : i + 10]
         return
 
-    # 生产线程写入线程安全的 stdlib Queue，事件循环经 asyncio.to_thread 读取，
+    # 生产线程写入线程安全的 stdlib Queue，事件循环轮询读取，
     # 避免跨线程使用 asyncio.Queue（其唤醒语义不保证线程安全）。
     queue: Queue[tuple[str, str]] = Queue()
 
@@ -200,65 +208,132 @@ async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | N
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, _pump)
     while True:
-        kind, value = await asyncio.to_thread(queue.get)
-        if kind == "t":
-            yield value
-            continue  # 继续读取下一个 token
-        if kind == "done":
-            return
-        # kind == "err"：交给上层兜底处理
-        raise RuntimeError(value)
+        # 非阻塞轮询：不占用共享执行器线程，避免断连时泄漏导致线程池枯竭
+        while True:
+            try:
+                kind, value = queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "t":
+                yield value
+            elif kind == "done":
+                return
+            elif kind == "err":
+                # 走兜底文案，避免无限转圈
+                fallback = _fallback_narrative(pipeline)
+                for i in range(0, len(fallback), 10):
+                    yield fallback[i : i + 10]
+                return
+        await asyncio.sleep(0.05)
 
 
 async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
-    """以 SSE 事件驱动完整 Agent 管线：状态 → 自然语言总结 → 结构化卡片。"""
+    """以 SSE 事件驱动完整 Agent 管线：状态 → 自然语言总结 → 结构化卡片（纯文本）。"""
     actor_id = _actor_id_or_default(payload.actor_id)
-    session_id = payload.session_id or uuid4().hex
-    conversation = chat_repo.get_conversation(session_id, actor_id=actor_id)
-    if conversation is None:
-        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
-        session_id = str(conversation["id"])
-    client_message_id = payload.client_message_id or uuid4().hex
-    history = chat_sessions.setdefault(session_id, [])
+    session_id, client_message_id, history = await _resolve_chat_context(
+        session_id=payload.session_id, client_message_id=payload.client_message_id, actor_id=actor_id
+    )
 
     # —— 已完成 run 重放：同一 client_message_id 重试/断连不再重算，直接回放落库结果 ——
-    if payload.client_message_id:
-        prior = chat_repo.get_run_by_client(session_id, payload.client_message_id)
-        if prior is not None and prior.get("status") == "completed":
-            assistant = chat_repo.get_assistant_message_for_run(str(prior["run_id"]))
-            if assistant is not None:
-                yield _sse("session", {"session_id": session_id, "run_id": str(prior["run_id"])})
-                if assistant.get("artifacts"):
-                    yield _sse("artifacts", {"artifacts": assistant["artifacts"]})
-                content = str(assistant.get("content") or "已完成分析。")
-                for i in range(0, len(content), 10):
-                    yield _sse("narrative", {"t": content[i : i + 10]})
-                yield _sse("done", {"run_id": str(prior["run_id"])})
-                return
+    replayed = await _try_replay(session_id, client_message_id)
+    if replayed:
+        async for frame in replayed:
+            yield frame
+        return
 
     history.append({"role": "user", "content": payload.message, "client_message_id": client_message_id})
-
-    user_message = chat_repo.upsert_user_message(
-        conversation_id=session_id,
-        content=payload.message,
+    run_text = payload.requirement_text or payload.message
+    async for frame in _stream_chat_pipeline(
+        session_id=session_id,
         actor_id=actor_id,
         client_message_id=client_message_id,
+        user_content=payload.message,
+        user_meta=None,
+        run_text=run_text,
+        source_type=payload.source_type,
+        requester_name=payload.requester_name,
+        analysis_mode=payload.analysis_mode,
+        history=history,
+    ):
+        yield frame
+
+
+async def _resolve_chat_context(
+    *,
+    session_id: str | None,
+    client_message_id: str | None,
+    actor_id: str,
+) -> tuple[str, str, list[dict[str, object]]]:
+    """解析并确保会话存在，返回 (session_id, client_message_id, history)。"""
+    resolved_session = session_id or uuid4().hex
+    conversation = chat_repo.get_conversation(resolved_session, actor_id=actor_id)
+    if conversation is None:
+        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
+        resolved_session = str(conversation["id"])
+    resolved_client = client_message_id or uuid4().hex
+    history = chat_sessions.setdefault(resolved_session, [])
+    return resolved_session, resolved_client, history
+
+
+async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[str] | None:
+    """若该 client_message_id 已有完成的 run，回放落库结果；否则返回 None 继续新流程。"""
+    if not client_message_id:
+        return None
+    prior = chat_repo.get_run_by_client(session_id, client_message_id)
+    if prior is None or prior.get("status") != "completed":
+        return None
+    assistant = chat_repo.get_assistant_message_for_run(str(prior["run_id"]))
+    if assistant is None:
+        return None
+
+    async def _replay() -> AsyncIterator[str]:
+        yield _sse("session", {"session_id": session_id, "run_id": str(prior["run_id"])})
+        if assistant.get("artifacts"):
+            yield _sse("artifacts", {"artifacts": assistant["artifacts"]})
+        content = str(assistant.get("content") or "已完成分析。")
+        for i in range(0, len(content), 10):
+            yield _sse("narrative", {"t": content[i : i + 10]})
+        yield _sse("done", {"run_id": str(prior["run_id"])})
+
+    return _replay()
+
+
+async def _stream_chat_pipeline(
+    *,
+    session_id: str,
+    actor_id: str,
+    client_message_id: str,
+    user_content: str,
+    user_meta: dict[str, object] | None,
+    run_text: str,
+    source_type: str,
+    requester_name: str | None,
+    analysis_mode: Literal["strict", "balanced", "broad"],
+    history: list[dict[str, object]],
+) -> AsyncIterator[str]:
+    """共享的 Agent 分析管线（extract → retrieve → analyze → risk → narrative），
+    纯文本与「文件+文字」两种入口复用。产出 SSE 事件并落库。"""
+    user_message = chat_repo.upsert_user_message(
+        conversation_id=session_id,
+        content=user_content,
+        actor_id=actor_id,
+        client_message_id=client_message_id,
+        meta=user_meta,
     )
     run = chat_repo.create_run(
         conversation_id=session_id,
         client_message_id=client_message_id,
         status="running",
-        meta={"source_type": payload.source_type, "requester_name": payload.requester_name},
+        meta={"source_type": source_type, "requester_name": requester_name},
     )
     run_id = str(run["run_id"])
 
-    run_text = payload.requirement_text or payload.message
     pipeline: dict[str, object] = {
         "status": "ok",
         "steps": ["extract", "retrieve", "analyze", "risk", "review_decision"],
-        "source_type": payload.source_type,
-        "requester_name": payload.requester_name,
-        "analysis_mode": payload.analysis_mode,
+        "source_type": source_type,
+        "requester_name": requester_name,
+        "analysis_mode": analysis_mode,
     }
     narrative_parts: list[str] = []
 
@@ -269,8 +344,8 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         extracted = await run_in_threadpool(
             extract_agent.extract,
             run_text,
-            source_type=payload.source_type,
-            requester_name=payload.requester_name,
+            source_type=source_type,
+            requester_name=requester_name,
         )
         extracted_payload = extracted.model_dump(mode="python")
         pipeline["extracted"] = extracted_payload
@@ -349,6 +424,110 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
         yield _sse("error", {"message": str(exc)})
         yield _sse("done", {"run_id": run_id})
+
+
+async def _collect_files(run_text: str, files: list[UploadFile] | None) -> tuple[str, list[dict[str, object]]]:
+    """读取并解析上传文件，合并正文与文字为整个 run_text；返回 (run_text, files_meta)。
+
+    单个文件解析失败不中断整体，仅在 meta 中标记 error，由前端提示。
+    """
+    files_meta: list[dict[str, object]] = []
+    merged = run_text
+    for upload in files or []:
+        meta: dict[str, object] = {
+            "name": upload.filename or "文件",
+            "size": 0,
+            "title": "",
+            "pages": 1,
+        }
+        try:
+            payload = await upload.read()
+            meta["size"] = len(payload)
+            parsed = document_parser.parse(upload.filename or "requirement-document.txt", payload)
+            meta["title"] = parsed.title
+            meta["pages"] = parsed.pages
+            content = (parsed.content or "")[:MAX_FILE_CHARS]
+            if parsed.content and len(parsed.content) > MAX_FILE_CHARS:
+                meta["truncated"] = True
+            section = f"【文档：{parsed.title}】\n{content}"
+            merged = f"{merged}\n\n{section}".strip() if merged else section
+        except Exception as exc:  # noqa: BLE001 - 单个文件失败不拖垮整次请求
+            meta["error"] = True
+            meta["error_message"] = str(exc)
+        files_meta.append(meta)
+    return merged, files_meta
+
+
+async def _chat_stream_files_events(
+    *,
+    message: str,
+    session_id: str | None,
+    client_message_id: str | None,
+    requester_name: str | None,
+    analysis_mode: Literal["strict", "balanced", "broad"],
+    files: list[UploadFile] | None,
+) -> AsyncIterator[str]:
+    """「多文件 + 文字」组合流式聊天：解析文件并合并正文与文字，交给共享管线。"""
+    actor_id = _actor_id_or_default(None)
+    resolved_session, resolved_client, history = await _resolve_chat_context(
+        session_id=session_id, client_message_id=client_message_id, actor_id=actor_id
+    )
+
+    # 已完成 run 重放：同一 client_message_id 重试/断连不再重算
+    replayed = await _try_replay(resolved_session, resolved_client)
+    if replayed:
+        async for frame in replayed:
+            yield frame
+        return
+
+    run_text, files_meta = await _collect_files(message, files)
+    # 纯文件提问时 message 为空，历史里展示文件摘要即可
+    user_content = message or (f"📎 已上传 {len(files_meta)} 个文档" if files_meta else "")
+    history.append({"role": "user", "content": user_content, "client_message_id": resolved_client})
+    async for frame in _stream_chat_pipeline(
+        session_id=resolved_session,
+        actor_id=actor_id,
+        client_message_id=resolved_client,
+        user_content=user_content,
+        user_meta={"files": files_meta} if files_meta else None,
+        run_text=run_text,
+        source_type="web",
+        requester_name=requester_name,
+        analysis_mode=analysis_mode,
+        history=history,
+    ):
+        yield frame
+
+
+@router.post("/api/v1/agent/chat/stream-with-files")
+async def stream_agent_chat_with_files(
+    message: str = Form(default=""),
+    session_id: str | None = Form(default=None),
+    client_message_id: str | None = Form(default=None),
+    requester_name: str | None = Form(default=None),
+    analysis_mode: str = Form(default="strict"),
+    files: list[UploadFile] = File(default=[]),
+) -> StreamingResponse:
+    """豆包式多文件 + 文字组合聊天（multipart/form-data，SSE 响应）。
+
+    各文件由后端解析，正文与输入文字合并后进入完整 Agent 管线。
+    """
+    return StreamingResponse(
+        _chat_stream_files_events(
+            message=message,
+            session_id=session_id,
+            client_message_id=client_message_id,
+            requester_name=requester_name,
+            analysis_mode=analysis_mode,
+            files=files,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/")

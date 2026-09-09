@@ -39,9 +39,10 @@
           <div id="messages" class="messages"></div>
 
           <div class="composer-wrap">
+            <div id="attach-list" class="attach-list hidden"></div>
             <form id="composer" class="composer" autocomplete="off">
-              <input id="file-input" type="file" hidden accept=".pdf,.doc,.docx,.txt,.md" />
-              <button type="button" id="attach-btn" class="composer-btn" title="上传需求文档（pdf/word/txt）">📎</button>
+              <input id="file-input" type="file" hidden multiple accept=".pdf,.doc,.docx,.txt,.md" />
+              <button type="button" id="attach-btn" class="composer-btn" title="选择需求文档（可多选，发送时一起分析）">📎</button>
               <textarea id="input" rows="1" placeholder="说出你的业务需求，例如：希望登录页支持手机号 + 短信验证码，连续输错三次需锁定并记录审计日志…"></textarea>
               <button type="submit" id="send-btn" class="send-btn" title="发送" disabled>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
@@ -109,6 +110,6 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=20260909-3"></script>
   </body>
 </html>

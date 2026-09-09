@@ -123,7 +123,14 @@ input, textarea { font-family: inherit; }
   border: 0; background: transparent; color: var(--text-3); font-size: 14px;
   opacity: 0;
 }
-.session-list li:hover .s-del { opacity: 1; }
+.session-list li .s-rename {
+  position: absolute; right: 28px; top: 50%; transform: translateY(-50%);
+  border: 0; background: transparent; color: var(--text-3); font-size: 12px;
+  opacity: 0; line-height: 1;
+}
+.session-list li:hover .s-del,
+.session-list li:hover .s-rename { opacity: 1; }
+.session-list li .s-rename:hover { color: var(--accent-ink); }
 .session-list li .s-del:hover { color: var(--danger); }
 
 /* ---------------- Chat ---------------- */
@@ -244,6 +251,25 @@ input, textarea { font-family: inherit; }
 
 /* Composer */
 .composer-wrap { padding: 8px 18px 6px; }
+.attach-list {
+  max-width: 860px; margin: 0 auto 6px; display: flex; flex-wrap: wrap; gap: 6px;
+}
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 10px;
+  padding: 4px 8px; font-size: 12px; color: var(--text-2);
+}
+.attach-chip .a-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;
+}
+.attach-chip .a-size { flex: none; color: var(--text-3); }
+.attach-chip .a-remove {
+  flex: none; width: 16px; height: 16px; border: 0; border-radius: 50%; cursor: pointer;
+  background: transparent; color: var(--text-3); line-height: 1; font-size: 13px; padding: 0;
+  display: grid; place-items: center;
+}
+.attach-chip .a-remove:hover { background: var(--danger-soft); color: var(--danger); }
+.attach-chip.err { border-color: var(--danger-soft); color: var(--danger); }
 .composer {
   max-width: 860px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px;

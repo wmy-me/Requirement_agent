@@ -75,7 +75,7 @@ class LLMProvider:
             f"{self.base_url}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0),
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
         ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
