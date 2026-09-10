@@ -29,7 +29,6 @@ from src.infrastructure.db.repositories import (
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
-from src.infrastructure.db.seed_data import seed_requirement_master
 from src.infrastructure.db.session import check_database_connection
 from src.infrastructure.embedding.embedding_service import EmbeddingService
 from src.infrastructure.llm.openai_provider import LLMProvider
@@ -532,39 +531,39 @@ async def stream_agent_chat_with_files(
 
 @router.get("/")
 async def root() -> dict[str, str]:
+    """服务入口：返回 API 名称与运行状态。"""
     return {"message": "Requirement Agent API", "status": "ok"}
 
 
 @router.get("/health")
 async def healthcheck() -> dict[str, str]:
+    """基础存活探活：固定返回 {"status": "ok"}。"""
     return {"status": "ok"}
 
 
 @router.get("/api/v1/health/db")
 async def database_health() -> dict[str, object]:
+    """数据库连通性检查：返回 {"database": bool, "status": ...}。"""
     ok, _ = check_database_connection()
     return {"database": ok, "status": "ok" if ok else "unavailable"}
 
 
 @router.get("/api/v1/health/llm")
 async def llm_health() -> dict[str, object]:
+    """LLM 配置检查：返回是否配置及所用 provider / model。"""
     provider = LLMProvider()
     return {"configured": provider.is_configured(), "provider": provider.provider_name, "model": provider.model}
 
 
-@router.post("/api/v1/admin/seed")
-async def seed_demo_data() -> dict[str, object]:
-    inserted = seed_requirement_master()
-    return {"status": "ok", "inserted": inserted}
-
-
 @router.get("/api/v1/requirements")
 async def list_requirements() -> dict[str, list[dict[str, object]]]:
+    """需求列表：返回存量需求数组 {"items": [...]}。"""
     return {"items": requirement_service.list_requirements()}
 
 
 @router.post("/api/v1/requirements/submit", response_model=RequirementSubmitResponse)
 async def submit_requirement(payload: RequirementSubmitRequest) -> RequirementSubmitResponse:
+    """提交文本需求进入评审流程：返回提交状态与 source_id。"""
     source = RequirementSource(
         idempotency_key=payload.source_type + ":" + (payload.requester_id or "anonymous") + ":" + payload.original_text,
         source_type=payload.source_type,
@@ -594,6 +593,7 @@ async def ingest_requirement(
     metadata: str | None = Form(default=None),
     file: UploadFile | None = File(default=None),
 ) -> RequirementSubmitResponse:
+    """multipart 摄取需求：支持纯文本、文件或二者混合，返回提交状态与 source_id。"""
     normalized_text = (original_text or "").strip()
     parsed = None
     stored = None
@@ -708,6 +708,7 @@ async def search_requirements(
     submitted_from: str | None = Query(default=None, max_length=40),
     submitted_to: str | None = Query(default=None, max_length=40),
 ) -> dict[str, object]:
+    """语义搜索需求：按关键词与可选过滤条件（渠道/提出人/领域/敏感级/版本/时间窗）检索，返回 {"items": [...]}。"""
     filters = {
         "channel": (channel or "").strip() or None,
         "requester": (requester or "").strip() or None,
@@ -729,6 +730,7 @@ async def search_requirement_features(
     requester: str | None = Query(default=None, max_length=120),
     has_version_ge: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
+    """检索需求特性：按关键词与可选的状态/提出人/版本过滤，返回 {"items": [...]}。"""
     return {
         "items": retrieval_service.search_features(
             q.strip(),
@@ -742,11 +744,13 @@ async def search_requirement_features(
 
 @router.get("/api/v1/documents")
 async def list_documents(limit: int = Query(default=20, ge=1, le=50)) -> dict[str, object]:
+    """文档列表：分页返回已入库文档 {"items": [...]}。"""
     return {"items": document_repo.list_documents(limit=limit)}
 
 
 @router.get("/api/v1/documents/{document_id}")
 async def get_document(document_id: int) -> dict[str, object]:
+    """按 document_id 查询单个文档；不存在返回 404。"""
     document = document_repo.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
@@ -758,6 +762,7 @@ async def get_document_chunks(
     document_id: int,
     limit: int = Query(default=20, ge=1, le=50),
 ) -> dict[str, object]:
+    """按 document_id 分页获取该文档的切片，返回 {"document_id", "items": [...]}。"""
     document = document_repo.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
@@ -766,6 +771,7 @@ async def get_document_chunks(
 
 @router.post("/api/v1/documents/{document_id}/reindex")
 async def reindex_document_chunks(document_id: int) -> dict[str, object]:
+    """重新切分并索引文档正文：返回 {"status": "queued", "document_id", ...}。"""
     document = document_repo.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
@@ -781,6 +787,7 @@ async def search_document_chunks(
     q: str = Query(min_length=1, max_length=200),
     limit: int = Query(default=5, ge=1, le=20),
 ) -> dict[str, object]:
+    """全文检索文档切片：按关键词返回命中切片 {"items": [...]}。"""
     return {"items": document_repo.search_chunks(q.strip(), limit=limit)}
 
 
@@ -811,6 +818,7 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
 
 @router.post("/api/v1/agent/chat")
 async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
+    """非流式 Agent 对话：执行完整分析管线并落库，返回 {"session_id", "message", "history"}。"""
     actor_id = _actor_id_or_default(payload.actor_id)
     session_id = payload.session_id or str(uuid4())
     conversation = chat_repo.get_conversation(session_id, actor_id=actor_id)
@@ -859,6 +867,7 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
 
 @router.post("/api/v1/agent/chat/stream")
 async def stream_agent_chat(payload: AgentChatRequest) -> StreamingResponse:
+    """流式 Agent 对话：以 SSE 事件输出状态、总结与结构化卡片。"""
     return StreamingResponse(
         _chat_stream_events(payload),
         media_type="text/event-stream",
@@ -872,18 +881,21 @@ async def stream_agent_chat(payload: AgentChatRequest) -> StreamingResponse:
 
 @router.get("/api/v1/agent/chat/{session_id}")
 async def get_agent_chat_history(session_id: str) -> dict[str, object]:
+    """按会话 id 获取历史消息，返回 {"session_id", "history": [...]}。"""
     history = chat_repo.get_messages(session_id)
     return {"session_id": session_id, "history": history or chat_sessions.get(session_id, [])}
 
 
 @router.get("/api/v1/conversations")
 async def list_conversations(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0), actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """会话列表：按 actor 分页返回会话 {"items": [...]}。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     return {"items": chat_repo.list_conversations(actor_id=normalized_actor_id, limit=limit, offset=offset)}
 
 
 @router.post("/api/v1/conversations")
 async def create_conversation(payload: ConversationCreateRequest) -> dict[str, object]:
+    """新建会话：按标题与 actor 创建，返回会话对象。"""
     actor_id = _actor_id_or_default(payload.actor_id)
     conversation = chat_repo.create_conversation(actor_id=actor_id, title=payload.title)
     return conversation
@@ -891,6 +903,7 @@ async def create_conversation(payload: ConversationCreateRequest) -> dict[str, o
 
 @router.get("/api/v1/conversations/{conversation_id}/messages")
 async def get_conversation_messages(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """按会话 id 分页读取消息，返回 {"conversation_id", "items": [...]}。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
     if conversation is None:
@@ -900,6 +913,7 @@ async def get_conversation_messages(conversation_id: str, actor_id: str | None =
 
 @router.post("/api/v1/conversations/{conversation_id}/messages")
 async def add_conversation_message(conversation_id: str, payload: ConversationMessageCreateRequest) -> dict[str, object]:
+    """向会话追加一条用户消息，返回落库后的消息对象 {"message": ...}。"""
     actor_id = _actor_id_or_default(payload.actor_id)
     conversation = chat_repo.get_conversation(conversation_id, actor_id=actor_id)
     if conversation is None:
@@ -915,6 +929,7 @@ async def add_conversation_message(conversation_id: str, payload: ConversationMe
 
 @router.patch("/api/v1/conversations/{conversation_id}")
 async def update_conversation(conversation_id: str, payload: ConversationUpdateRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """更新会话标题/摘要/状态；会话不存在返回 404，成功返回更新后的会话对象。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     conversation = chat_repo.update_conversation(
         conversation_id,
@@ -930,6 +945,7 @@ async def update_conversation(conversation_id: str, payload: ConversationUpdateR
 
 @router.delete("/api/v1/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, str]:
+    """删除会话：成功返回 {"status": "deleted"}，不存在返回 404。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     deleted = chat_repo.delete_conversation(conversation_id, actor_id=normalized_actor_id)
     if not deleted:
@@ -959,6 +975,7 @@ async def finalize_conversation(conversation_id: str, actor_id: str | None = Que
 
 @router.get("/api/v1/agent/runs/{run_id}")
 async def get_agent_run(run_id: str) -> dict[str, object]:
+    """按 run_id 查询单次 Agent 运行记录；不存在返回 404。"""
     run = chat_repo.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
@@ -967,12 +984,14 @@ async def get_agent_run(run_id: str) -> dict[str, object]:
 
 @router.get("/api/v1/memory")
 async def list_memory(actor_id: str | None = Query(default=None, max_length=120), limit: int = Query(default=20, ge=1, le=50)) -> dict[str, object]:
+    """长期记忆列表：按 actor 分页返回 {"items": [...]}。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     return {"items": memory_repo.list_memories(actor_id=normalized_actor_id, limit=limit)}
 
 
 @router.post("/api/v1/memory")
 async def upsert_memory(payload: dict[str, object]) -> dict[str, object]:
+    """写入一条长期记忆：按 actor 落库并生成向量，返回记忆对象。"""
     actor_id = _actor_id_or_default(str(payload.get("actor_id") or settings.api_actor_id or "api-user"))
     content = str(payload.get("content") or "").strip()
     if not content:
@@ -1000,6 +1019,7 @@ async def upsert_memory(payload: dict[str, object]) -> dict[str, object]:
 
 @router.post("/api/v1/memory/{memory_id}/delete")
 async def delete_memory(memory_id: int, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """软删除一条记忆：成功返回 {"status": "deleted"}，越权或不存在返回 404。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     note = memory_repo.update_status(memory_id, "deleted")
     if note is None or note["actor_id"] != normalized_actor_id:
@@ -1009,17 +1029,20 @@ async def delete_memory(memory_id: int, actor_id: str | None = Query(default=Non
 
 @router.get("/api/v1/memory/context")
 async def get_memory_context(query: str = Query(min_length=1, max_length=200), actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """构建长期记忆上下文：按 query 检索相关记忆，返回 {"context": ...}。"""
     normalized_actor_id = _actor_id_or_default(actor_id)
     return {"context": memory_context_builder.build_context(normalized_actor_id, query, limit=4)}
 
 
 @router.get("/api/v1/reviews/pending")
 async def list_pending_reviews(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, object]:
+    """待人工评审列表：返回 pending_review 状态的需求 {"items": [...]}。"""
     return {"items": source_repo.list_by_status("pending_review", limit=limit)}
 
 
 @router.get("/api/v1/reviews/{source_id}/detail")
 async def get_review_detail(source_id: int) -> dict[str, object]:
+    """评审详情：按 source_id 返回需求与相关分析的完整信息；不存在返回 404。"""
     detail = source_repo.get_detail(source_id)
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="review source not found")
@@ -1028,6 +1051,7 @@ async def get_review_detail(source_id: int) -> dict[str, object]:
 
 @router.get("/api/v1/sources/{source_id}/trace")
 async def get_source_trace(source_id: int) -> dict[str, object]:
+    """需求来源追踪：按 source_id 返回来源链路；不存在返回 404。"""
     trace = source_repo.get_trace(source_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source not found")
@@ -1036,6 +1060,7 @@ async def get_source_trace(source_id: int) -> dict[str, object]:
 
 @router.get("/api/v1/requirements/{requirement_key}/versions")
 async def list_requirement_versions(requirement_key: str) -> dict[str, object]:
+    """需求版本列表：按 requirement_key 返回全部版本 {"items": [...]}。"""
     return {"items": version_repo.list_by_requirement_key(requirement_key)}
 
 
@@ -1045,6 +1070,7 @@ async def list_requirement_features(
     at_version: int | None = Query(default=None, ge=1),
     include_deleted: bool = Query(default=False),
 ) -> dict[str, object]:
+    """需求特性列表：按 requirement_key（可选指定版本/是否含已删除）返回 {"items": [...]}。"""
     return {
         "items": feature_repo.list_by_requirement_key(
             requirement_key,
@@ -1060,6 +1086,7 @@ async def get_requirement_diff(
     from_version: int | None = Query(default=None, ge=1),
     to_version: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
+    """需求版本差异：对比 from_version 与 to_version 的字段差异；版本不存在返回 404。"""
     try:
         return feature_repo.diff_by_requirement_key(
             requirement_key,
@@ -1072,6 +1099,7 @@ async def get_requirement_diff(
 
 @router.get("/api/v1/requirements/{requirement_key}/trace")
 async def get_requirement_trace(requirement_key: str) -> dict[str, object]:
+    """需求溯源链路：按 requirement_key 返回版本演变轨迹；不存在返回 404。"""
     trace = version_repo.trace_by_requirement_key(requirement_key)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requirement not found")
@@ -1080,11 +1108,13 @@ async def get_requirement_trace(requirement_key: str) -> dict[str, object]:
 
 @router.get("/api/v1/audit/events")
 async def list_audit_events(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, object]:
+    """审计事件列表：按时间倒序分页返回操作日志 {"items": [...]}。"""
     return {"items": audit_repo.list_dicts(limit=limit)}
 
 
 @router.post("/api/v1/reviews/submit")
 async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, object]:
+    """提交评审结论：记录决策并生成/更新需求与特性；冲突时返回 409。"""
     try:
         return review_service.submit_decision(
             source_id=payload.source_id,

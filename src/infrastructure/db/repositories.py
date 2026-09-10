@@ -409,6 +409,7 @@ class RequirementMasterRepository:
             raise
 
     def get_by_id(self, requirement_id: int) -> RequirementMaster | None:
+        """按主键取主需求对象；不存在返回 None。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -445,6 +446,7 @@ class RequirementMasterRepository:
             raise
 
     def get_by_key(self, requirement_key: str, session: Session | None = None) -> RequirementMaster | None:
+        """按 REQ 编号取主需求对象；不存在返回 None。"""
         owns_session = session is None
         session = session or SessionLocal()
         row = session.execute(
@@ -468,6 +470,7 @@ class RequirementMasterRepository:
         )
 
     def list(self) -> list[RequirementMaster]:
+        """列出最近更新的主需求（最多 50 条），返回 RequirementMaster 列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -553,6 +556,7 @@ class RequirementMasterRepository:
         ]
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, object]]:
+        """按名称/最终需求内容模糊搜索主需求，返回精简字段列表。"""
         clause = "%" + query + "%"
         with SessionLocal() as session:
             rows = session.execute(
@@ -583,6 +587,7 @@ class RequirementVersionRepository:
     """需求版本快照的持久化边界。"""
 
     def save(self, version: RequirementVersion, session: Session | None = None) -> RequirementVersion:
+        """写入一条需求版本快照，回填自增 id 与 requirement_id。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -652,6 +657,7 @@ class RequirementVersionRepository:
             raise
 
     def list_by_requirement(self, requirement_id: int) -> list[RequirementVersion]:
+        """按主需求 id 列出全部版本快照（版本号倒序），返回 RequirementVersion 列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -676,6 +682,7 @@ class RequirementVersionRepository:
         ]
 
     def get_latest_by_requirement(self, requirement_id: int) -> RequirementVersion | None:
+        """取某主需求的最新版本快照；不存在返回 None。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -849,6 +856,7 @@ class DocumentAssetRepository:
         metadata: dict[str, object] | None = None,
         source_id: int | None = None,
     ) -> dict[str, object]:
+        """落库一条上传文档 asset（含校验字段），返回规范化后的 asset 行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -881,6 +889,7 @@ class DocumentAssetRepository:
         return self._normalize_asset_row(row)
 
     def list_documents(self, limit: int = 20) -> list[dict[str, object]]:
+        """按创建时间倒序列出上传文档 asset，返回规范化行列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -897,6 +906,7 @@ class DocumentAssetRepository:
         return [self._normalize_asset_row(row) for row in rows]
 
     def get_document(self, document_id: int) -> dict[str, object] | None:
+        """按 id 取上传文档 asset；不存在返回 None。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -912,6 +922,7 @@ class DocumentAssetRepository:
         return self._normalize_asset_row(row) if row else None
 
     def add_chunks(self, document_id: int, text: str, *, chunk_size: int = 600, overlap: int = 80) -> list[dict[str, object]]:
+        """将文本固定切片后逐块写入 document_chunk（含向量），返回保存的分块列表。"""
         chunks = self._chunk_text(text, chunk_size=chunk_size, overlap=overlap)
         if not chunks:
             return []
@@ -940,6 +951,7 @@ class DocumentAssetRepository:
         return saved
 
     def search_chunks(self, query: str, limit: int = 5) -> list[dict[str, object]]:
+        """按向量相似度检索文档分块，返回带文档信息与相似度分数的候选列表。"""
         normalized = (query or "").strip()
         if not normalized:
             return []
@@ -963,6 +975,7 @@ class DocumentAssetRepository:
         return [self._normalize_chunk_search_row(row) for row in rows]
 
     def get_chunks(self, document_id: int, limit: int = 20) -> list[dict[str, object]]:
+        """按文档 id 列出全部分块（chunk_index 升序），返回规范化行列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -1057,6 +1070,7 @@ class RequirementReviewRepository:
     """人工审核决策的持久化边界。"""
 
     def save(self, review: RequirementReview, session: Session | None = None) -> RequirementReview:
+        """写入一条人工审核记录（分析快照/决策/审阅人/编辑后需求）。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -1331,6 +1345,7 @@ class RequirementFeatureRepository:
         return changes
 
     def join_active_features(self, requirement_id: int, *, session: Session | None = None) -> str:
+        """把某 REQ 当前生效的 feature 内容按 ordinal 顺序拼接成“最终描述”文本。"""
         features = self.list_active(requirement_id, session=session)
         lines = [item["content"] for item in features if str(item.get("content") or "").strip()]
         return "\n".join(lines).strip()
@@ -1482,6 +1497,7 @@ class RequirementFeatureRepository:
         include_deleted: bool = False,
         session: Session | None = None,
     ) -> list[dict[str, object]]:
+        """按 REQ 编号列 feature，支持指定版本生效区间或包含已删除项。"""
         owns_session = session is None
         session = session or SessionLocal()
         if at_version is None and not include_deleted:
@@ -1729,6 +1745,7 @@ class AuditRepository:
             raise
 
     def list(self) -> list[AuditEvent]:
+        """按时间倒序返回最近 100 条审计事件（AuditEvent 对象）。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -1795,6 +1812,7 @@ class ChatRepository:
         summary: str | None = None,
         meta: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """新建一条对话（默认标题“新对话”），返回规范化后的对话行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -1815,6 +1833,7 @@ class ChatRepository:
         return self._normalize_conversation_row(row)
 
     def get_conversation(self, conversation_id: str, actor_id: str = "api-user") -> dict[str, object] | None:
+        """按 id 与 actor 取对话；不存在返回 None。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -1829,6 +1848,7 @@ class ChatRepository:
         return self._normalize_conversation_row(row) if row else None
 
     def list_conversations(self, actor_id: str = "api-user", limit: int = 20, offset: int = 0) -> list[dict[str, object]]:
+        """按 actor 列出对话（含消息数），最近更新优先，支持分页。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -1857,6 +1877,7 @@ class ChatRepository:
         meta: dict[str, object] | None = None,
         actor_id: str = "api-user",
     ) -> dict[str, object] | None:
+        """按需更新对话的 title/summary/status/meta 字段，返回更新后的对话行。"""
         fields: list[str] = []
         values: dict[str, object] = {"conversation_id": conversation_id, "actor_id": actor_id}
         if title is not None:
@@ -1880,6 +1901,7 @@ class ChatRepository:
         return self._normalize_conversation_row(row) if row else None
 
     def delete_conversation(self, conversation_id: str, actor_id: str = "api-user") -> bool:
+        """按 id 与 actor 删除一条对话，返回是否实际删除。"""
         with SessionLocal() as session:
             result = session.execute(
                 text(
@@ -1891,6 +1913,7 @@ class ChatRepository:
         return result.rowcount > 0
 
     def get_messages(self, conversation_id: str) -> list[dict[str, object]]:
+        """按对话 id 取全部消息（时间升序），返回规范化消息列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -1914,6 +1937,7 @@ class ChatRepository:
         client_message_id: str | None = None,
         meta: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """写入一条用户消息（按 client_message_id 幂等），返回规范化后的消息行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -1945,6 +1969,7 @@ class ChatRepository:
         error: str | None = None,
         meta: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        """创建/更新一次 Agent run（按 client_message_id 幂等），返回规范化后的 run 行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -1978,6 +2003,7 @@ class ChatRepository:
         error: str | None = None,
         meta: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
+        """更新一次 run 的状态/错误/元数据，返回更新后的 run 行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -1997,6 +2023,7 @@ class ChatRepository:
         return self._normalize_run_row(row) if row else None
 
     def get_run(self, run_id: str) -> dict[str, object] | None:
+        """按 run_id 取 run；不存在返回 None。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -2052,6 +2079,7 @@ class ChatRepository:
         artifacts: dict[str, object] | None,
         run_id: str | None = None,
     ) -> dict[str, object]:
+        """追写一条 assistant 消息（可关联 run_id），返回规范化后的消息行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -2134,6 +2162,7 @@ class MemoryRepository:
         meta: dict[str, object] | None = None,
         embedding: list[float] | None = None,
     ) -> dict[str, object]:
+        """插入一条 actor 维度的长期记忆（可带 embedding 供向量召回），返回规范化记忆行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -2159,6 +2188,7 @@ class MemoryRepository:
         return self._normalize_memory_row(row)
 
     def list_memories(self, actor_id: str = "api-user", limit: int = 20) -> list[dict[str, object]]:
+        """列出该 actor 未删除的记忆（importance 优先），返回规范化记忆列表。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -2176,6 +2206,7 @@ class MemoryRepository:
         return [self._normalize_memory_row(row) for row in rows]
 
     def recall(self, actor_id: str, query: str, limit: int = 4) -> list[dict[str, object]]:
+        """按文本关键词（ILIKE）召回该 actor 的 active 记忆，作为无向量场景的兜底。"""
         q = (query or "").strip()
         if not q:
             return []
@@ -2197,6 +2228,7 @@ class MemoryRepository:
         return [self._normalize_memory_row(row) for row in rows]
 
     def update_status(self, memory_id: int, status: str) -> dict[str, object] | None:
+        """更新某条记忆的状态并同步 active 标志，返回更新后的记忆行。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
