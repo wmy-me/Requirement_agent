@@ -228,7 +228,10 @@ class RetrievalService:
 
     @staticmethod
     def _parse_time(value: str) -> datetime:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        """解析时间串为展示时区的 aware datetime，naive 视为展示时区本地时间。"""
+        from src.common.time import parse_display_time
+
+        return parse_display_time(value)
 
     @staticmethod
     def _is_user_submitted_requirement(requirement_key: str) -> bool:

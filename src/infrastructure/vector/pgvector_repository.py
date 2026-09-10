@@ -8,6 +8,7 @@ from typing import Any
 import psycopg
 from pgvector.psycopg import register_vector
 
+from src.common.time import as_utc_iso, parse_display_time
 from src.config.settings import settings
 
 
@@ -16,6 +17,10 @@ class RequirementVectorRepository:
 
     def __init__(self, dsn: str | None = None) -> None:
         self.dsn = dsn or settings.psycopg_dsn
+
+    def _connect(self) -> psycopg.Connection:
+        """建立连接：固定 UTC 会话时区，与 SQLAlchemy 引擎口径一致（NOW() 落库 UTC）。"""
+        return psycopg.connect(self.dsn, options="-c timezone=UTC")
 
     def search(
         self,
@@ -26,7 +31,7 @@ class RequirementVectorRepository:
         if not query_vector:
             return []
         where_clause, params = self._build_metadata_filter(filters)
-        with psycopg.connect(self.dsn) as conn:
+        with self._connect() as conn:
             register_vector(conn)
             with conn.cursor() as cur:
                 cur.execute(
@@ -82,7 +87,7 @@ class RequirementVectorRepository:
         return results
 
     def upsert(self, requirement_id: int, embedding: list[float], *, source_text: str) -> dict[str, object]:
-        with psycopg.connect(self.dsn) as conn:
+        with self._connect() as conn:
             register_vector(conn)
             with conn.cursor() as cur:
                 cur.execute(
@@ -166,7 +171,7 @@ class RequirementVectorRepository:
                 )
                 """
             )
-            params.append(str(submitted_from))
+            params.append(as_utc_iso(parse_display_time(str(submitted_from))))
         submitted_to = filters.get("submitted_to")
         if submitted_to:
             clauses.append(
@@ -180,7 +185,7 @@ class RequirementVectorRepository:
                 )
                 """
             )
-            params.append(str(submitted_to))
+            params.append(as_utc_iso(parse_display_time(str(submitted_to))))
         requester = filters.get("requester")
         if requester:
             clauses.append(

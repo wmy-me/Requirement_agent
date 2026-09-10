@@ -26,6 +26,7 @@ import hashlib
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.time import as_display_iso
 from src.domain.requirement import (
     AuditEvent,
     RequirementMaster,
@@ -265,8 +266,8 @@ class RequirementSourceRepository:
                 "original_payload": dict(row["original_payload"] or {}),
                 "metadata": dict(row["metadata"] or {}),
                 "processing_status": row["processing_status"],
-                "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
-                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "submitted_at": as_display_iso(row["submitted_at"]),
+                "updated_at": as_display_iso(row["updated_at"]),
             }
             for row in rows
         ]
@@ -299,8 +300,8 @@ class RequirementSourceRepository:
             "original_payload": dict(row["original_payload"] or {}),
             "metadata": dict(row["metadata"] or {}),
             "processing_status": row["processing_status"],
-            "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "submitted_at": as_display_iso(row["submitted_at"]),
+            "updated_at": as_display_iso(row["updated_at"]),
         }
 
     def get_trace(self, source_id: int) -> dict[str, object] | None:
@@ -350,7 +351,7 @@ class RequirementSourceRepository:
                     "version_title": row["version_title"],
                     "change_type": row["change_type"],
                     "relation_type": row["relation_type"],
-                    "version_created_at": row["version_created_at"].isoformat() if row["version_created_at"] else None,
+                    "version_created_at": as_display_iso(row["version_created_at"]),
                 }
                 for row in rows
             ],
@@ -545,12 +546,8 @@ class RequirementMasterRepository:
                 "sensitivity_levels": list(row["sensitivity_levels"] or []),
                 "feature_contents": list(row["feature_contents"] or []),
                 "feature_count": int(row["feature_count"] or 0),
-                "first_source_submitted_at": row["first_source_submitted_at"].isoformat()
-                if row["first_source_submitted_at"]
-                else None,
-                "latest_source_submitted_at": row["latest_source_submitted_at"].isoformat()
-                if row["latest_source_submitted_at"]
-                else None,
+                "first_source_submitted_at": as_display_iso(row["first_source_submitted_at"]),
+                "latest_source_submitted_at": as_display_iso(row["latest_source_submitted_at"]),
             }
             for row in rows
         ]
@@ -740,7 +737,7 @@ class RequirementVersionRepository:
                 "feature_changes": list(row["feature_changes"] or []),
                 "created_by": row["created_by"],
                 "reviewed_by": row["reviewed_by"],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "created_at": as_display_iso(row["created_at"]),
             }
             for row in rows
         ]
@@ -799,7 +796,7 @@ class RequirementVersionRepository:
                     "feature_changes": list(row["feature_changes"] or []),
                     "created_by": row["created_by"],
                     "reviewed_by": row["reviewed_by"],
-                    "created_at": row["version_created_at"].isoformat() if row["version_created_at"] else None,
+                    "created_at": as_display_iso(row["version_created_at"]),
                     "sources": [],
                 },
             )
@@ -819,7 +816,7 @@ class RequirementVersionRepository:
                     "structured_requirement": metadata.get("extracted") or {},
                     "relation_type": row["relation_type"],
                     "processing_status": row["processing_status"],
-                    "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                    "submitted_at": as_display_iso(row["submitted_at"]),
                 }
             )
 
@@ -832,8 +829,8 @@ class RequirementVersionRepository:
                 "current_version": int(master["current_version"]),
                 "status": master["status"],
                 "lock_version": int(master["lock_version"]),
-                "created_at": master["created_at"].isoformat() if master["created_at"] else None,
-                "updated_at": master["updated_at"].isoformat() if master["updated_at"] else None,
+                "created_at": as_display_iso(master["created_at"]),
+                "updated_at": as_display_iso(master["updated_at"]),
             },
             "versions": list(versions_by_id.values()),
         }
@@ -921,9 +918,9 @@ class DocumentAssetRepository:
             ).mappings().first()
         return self._normalize_asset_row(row) if row else None
 
-    def add_chunks(self, document_id: int, text: str, *, chunk_size: int = 600, overlap: int = 80) -> list[dict[str, object]]:
+    def add_chunks(self, document_id: int, content: str, *, chunk_size: int = 600, overlap: int = 80) -> list[dict[str, object]]:
         """将文本固定切片后逐块写入 document_chunk（含向量），返回保存的分块列表。"""
-        chunks = self._chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+        chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=overlap)
         if not chunks:
             return []
         with SessionLocal() as session:
@@ -1006,7 +1003,7 @@ class DocumentAssetRepository:
             "original_text": row["original_text"],
             "extracted_text": row["extracted_text"],
             "metadata": dict(row["metadata"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
         }
 
     def _normalize_chunk_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
@@ -1018,7 +1015,7 @@ class DocumentAssetRepository:
             "chunk_index": int(row["chunk_index"]),
             "chunk_text": row["chunk_text"],
             "metadata": dict(row["metadata"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
         }
 
     def _normalize_chunk_search_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
@@ -1033,17 +1030,23 @@ class DocumentAssetRepository:
             "storage_uri": row["storage_uri"],
             "score": float(row["score"]),
             "metadata": dict(row["metadata"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
         }
 
-    def _chunk_text(self, text: str, *, chunk_size: int = 600, overlap: int = 80) -> list[str]:
-        normalized = re.sub(r"\s+", " ", (text or "").strip())
+    def _chunk_text(self, content: str, *, chunk_size: int = 600, overlap: int = 80) -> list[str]:
+        """把文本切成带重叠的固定大小分块（供向量检索）。
+
+        采用标准滑动窗口：每块最长 `chunk_size`，窗口每次前进 `chunk_size - overlap`
+        （即相邻块重叠 `overlap` 字符），避免「逐字符偏移」产生海量冗余块。
+        若某块在 65% 之后遇到空格，则回退到该空格处断句，保证块边界尽量完整。
+        """
+        normalized = re.sub(r"\s+", " ", (content or "").strip())
         if not normalized:
             return []
         chunks: list[str] = []
-        start = 0
         size = max(80, int(chunk_size))
-        step = max(20, int(overlap))
+        step = max(20, int(size - max(0, int(overlap))))
+        start = 0
         while start < len(normalized):
             end = min(len(normalized), start + size)
             chunk = normalized[start:end].strip()
@@ -1055,9 +1058,9 @@ class DocumentAssetRepository:
                     end = start + last_space
                     chunk = normalized[start:end].strip()
             chunks.append(chunk)
-            start = max(start + 1, end - step)
-            if start >= len(normalized):
+            if end >= len(normalized):
                 break
+            start += step
         return [chunk for chunk in chunks if chunk]
 
     def _embed_text(self, text: str) -> list[float]:
@@ -1795,7 +1798,7 @@ class AuditRepository:
                 "after_data": dict(row["after_data"] or {}),
                 "result_status": row["result_status"],
                 "error_code": row["error_code"],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "created_at": as_display_iso(row["created_at"]),
             }
             for row in rows
         ]
@@ -2111,8 +2114,8 @@ class ChatRepository:
             "status": row["status"],
             "meta": dict(row["meta"] or {}),
             "message_count": message_count if message_count is not None else None,
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
+            "updated_at": as_display_iso(row["updated_at"]),
         }
 
     def _normalize_message_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
@@ -2127,7 +2130,7 @@ class ChatRepository:
             "client_message_id": row["client_message_id"],
             "run_id": str(row["run_id"]) if row.get("run_id") is not None else None,
             "meta": dict(row["meta"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
         }
 
     def _normalize_run_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
@@ -2141,8 +2144,8 @@ class ChatRepository:
             "status": row["status"],
             "error": row["error"],
             "meta": dict(row["meta"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
+            "updated_at": as_display_iso(row["updated_at"]),
         }
 
 
@@ -2299,6 +2302,6 @@ class MemoryRepository:
             "superseded_by": row["superseded_by"],
             "importance": int(row["importance"]),
             "meta": dict(row["meta"] or {}),
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "created_at": as_display_iso(row["created_at"]),
+            "updated_at": as_display_iso(row["updated_at"]),
         }

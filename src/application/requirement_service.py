@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.agents.analyze_agent import AnalyzeAgent
 from src.agents.extract_agent import ExtractAgent
 from src.agents.risk_agent import RiskAgent
+from src.common.time import as_display_iso
 from src.domain.requirement import RequirementSource
 from src.graph.graphs import run_analysis
 from src.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
@@ -102,7 +103,7 @@ class RequirementService:
             "department": metadata.get("department"),
             "business_domain": metadata.get("business_domain"),
             "sensitivity_level": metadata.get("sensitivity_level"),
-            "submitted_at": saved_source.submitted_at.isoformat() if saved_source.submitted_at else None,
+            "submitted_at": as_display_iso(saved_source.submitted_at),
         }
         self.source_repo.update_status(saved_source.id or 0, "pending_review", metadata=metadata)
         return {

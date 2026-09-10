@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
+
+from src.common.time import utc_now
 
 
 @dataclass(slots=True)
@@ -19,7 +21,7 @@ class RequirementSource:
     original_payload: dict[str, object] = field(default_factory=dict)
     metadata: dict[str, object] = field(default_factory=dict)
     processing_status: str = "received"
-    submitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    submitted_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)

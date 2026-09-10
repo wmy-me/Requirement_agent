@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     app_env: str = Field(default="dev", alias="APP_ENV")
     app_port: int = Field(default=8888, alias="APP_PORT")
     mcp_port: int = Field(default=8000, alias="MCP_PORT")
+    # 业务展示时区（如 Asia/Shanghai）：数据库统一以 UTC 存储，前端展示时转成本地时区
+    display_timezone: str = Field(default="Asia/Shanghai", alias="DISPLAY_TIMEZONE")
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")

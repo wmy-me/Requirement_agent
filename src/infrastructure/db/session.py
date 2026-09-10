@@ -5,6 +5,9 @@
 - `SessionLocal`：会话工厂，仓库层通过它开/关事务（`SessionLocal() as session` 模式）。
 - `get_db_session`：FastAPI 依赖注入用的请求级会话（自动关闭）。
 - `check_database_connection`：健康检查用的探针。
+
+时区约定：所有会话固定 `timezone=UTC`，保证 `NOW()` / `DEFAULT NOW()` 一律以 **UTC 落库**，
+与业务展示时区（`settings.display_timezone`）解耦；对外显示由 `src.common.time.as_display_iso` 负责。
 """
 
 from __future__ import annotations
@@ -17,7 +20,12 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from src.config.settings import settings
 
 
-engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    future=True,
+    connect_args={"options": "-c timezone=UTC"},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 

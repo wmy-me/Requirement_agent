@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.time import utc_now
 from src.infrastructure.db.session import SessionLocal
 
 
@@ -25,7 +26,7 @@ class OutboxEvent:
     retries: int = 0
     status: str = "pending"
     last_error: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=utc_now)
 
 
 class OutboxRepository:
