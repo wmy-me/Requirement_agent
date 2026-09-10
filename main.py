@@ -1,3 +1,5 @@
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -5,14 +7,38 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.config.settings import settings
+from src.infrastructure.worker.consumer import OutboxConsumer
 from src.interfaces.http.routes import router
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：随 API 进程启动后台 outbox 消费循环，退出时优雅停止。
+
+    背景：worker 服务不常驻部署，审核通过入队的 embedding 同步事件长期无人消费，
+    导致语义向量不更新。这里由 API 进程统一承担 outbox 消费，保证：
+    - 每条待处理事件被持续认领执行（间隔与批次见 settings.outbox_*）；
+    - 多实例并发安全由 outbox 的 `FOR UPDATE SKIP LOCKED` 保证。
+    """
+    consumer = OutboxConsumer()
+    thread = threading.Thread(target=consumer.start, name="outbox-consumer", daemon=True)
+    if settings.outbox_consumer_enabled:
+        thread.start()
+    try:
+        yield
+    finally:
+        consumer.stop()
+        thread.join(timeout=settings.outbox_poll_interval + 1)
+
 
 app = FastAPI(
     title="Requirement Agent API",
     version="0.1.0",
     description="渠道接入、查询和审批的 API 服务入口。",
+    lifespan=lifespan,
 )
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

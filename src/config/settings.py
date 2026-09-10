@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
+    embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
+    embedding_api_key: SecretStr = Field(default=SecretStr(""), alias="EMBEDDING_API_KEY")
+    embedding_dimension: int = Field(default=1536, alias="EMBEDDING_DIMENSION")
+
+    # 后台 outbox 消费循环：由 API 进程持续认领 embedding 同步 / 文档分片事件
+    outbox_consumer_enabled: bool = Field(default=True, alias="OUTBOX_CONSUMER_ENABLED")
+    outbox_poll_interval: float = Field(default=5.0, alias="OUTBOX_POLL_INTERVAL_SECONDS")
+    outbox_poll_batch: int = Field(default=50, alias="OUTBOX_POLL_BATCH")
+    outbox_stale_timeout_seconds: int = Field(default=300, alias="OUTBOX_STALE_TIMEOUT_SECONDS")
 
     model_config = SettingsConfigDict(
         env_file=".env",

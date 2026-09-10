@@ -95,12 +95,14 @@ class RetrievalService:
         vector_results = self.search_by_vector(cleaned, limit=limit, filters=filters)
         for row in vector_results:
             key = str(row.get("requirement_key") or "")
-            if not any(item["requirement_key"] == key for item in candidates):
+            vector_score = float(row.get("score", 0.0))
+            existing = next((item for item in candidates if item["requirement_key"] == key), None)
+            if existing is None:
                 candidates.append({
                     "requirement_key": key,
                     "requirement_name": row.get("title", "相关需求"),
                     "summary": row.get("summary", ""),
-                    "score": float(row.get("score", 0.0)),
+                    "score": vector_score,
                     "business_domain": row.get("business_domain", "general"),
                     "status": row.get("status", "active"),
                     "match_type": "vector",
@@ -112,6 +114,10 @@ class RetrievalService:
                     "feature_count": row.get("feature_count", 0),
                     "matched_features": [],
                 })
+            elif vector_score > float(existing.get("score", 0.0)):
+                # 语义命中比关键词命中更相关时，用向量分覆盖并标记来源，让真实语义排序生效
+                existing["score"] = vector_score
+                existing["match_type"] = "vector"
 
         ranked = sorted(
             candidates,
@@ -139,9 +145,13 @@ class RetrievalService:
     ) -> list[dict[str, object]]:
         """纯向量召回：embedding 后按余弦相似度检索，返回归一化候选。
 
-        向量缺失/服务不可用时此分支不报错，由上层合并逻辑退化为关键词。
+        向量缺失/服务不可用时此分支不报错，返回空候选，由上层合并逻辑退化为关键词。
         """
-        vector = self.embedding_service.embed(query)
+        try:
+            vector = self.embedding_service.embed(query)
+        except Exception:
+            # 向量服务不可用：退化到关键词召回（上层 search() 合并）
+            return []
         results = self.vector_repo.search(vector, limit=limit, filters=filters)
         normalized: list[dict[str, object]] = []
         for row in results:

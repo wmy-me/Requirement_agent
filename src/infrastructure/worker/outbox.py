@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.common.time import utc_now
+from src.config.settings import settings
 from src.infrastructure.db.session import SessionLocal
 
 
@@ -34,6 +35,12 @@ class OutboxRepository:
 
     事务约定：与业务状态更新共用同一 session 入队，保证“业务提交成功即事件已持久化”。
     """
+
+    def __init__(self, stale_timeout_seconds: int | None = None) -> None:
+        """构造仓库；`stale_timeout_seconds` 缺省取 settings.outbox_stale_timeout_seconds。"""
+        self.stale_timeout_seconds = (
+            settings.outbox_stale_timeout_seconds if stale_timeout_seconds is None else stale_timeout_seconds
+        )
 
     def enqueue(
         self,
@@ -75,14 +82,25 @@ class OutboxRepository:
                 session.close()
             raise
 
-    def claim_pending(self, *, limit: int = 20, event_type: str | None = None) -> list[OutboxEvent]:
+    def claim_pending(
+        self,
+        *,
+        limit: int = 20,
+        event_type: str | None = None,
+        stale_timeout_seconds: int | None = None,
+    ) -> list[OutboxEvent]:
         """以 `FOR UPDATE SKIP LOCKED` 认领待处理事件并置为 processing。
 
         供多个 worker 并发安全消费：一条事件只被一个 worker 领走；失败后按
         mark_failed 重试或转 dead_letter。
+
+        顺带回收“认领后崩溃/卡死”的事件：`locked_at` 早于 stale_timeout_seconds 的
+        processing 事件会被重新认领（retry_count 递增），避免任务永久卡死在处理中。
         """
+        timeout = self.stale_timeout_seconds if stale_timeout_seconds is None else stale_timeout_seconds
+        stale_cutoff = utc_now() - timedelta(seconds=timeout)
         event_filter = "AND event_type = :event_type" if event_type else ""
-        values: dict[str, object] = {"limit": limit}
+        values: dict[str, object] = {"limit": limit, "stale_cutoff": stale_cutoff}
         if event_type:
             values["event_type"] = event_type
         with SessionLocal() as session:
@@ -92,13 +110,19 @@ class OutboxRepository:
                     WITH candidates AS (
                         SELECT id
                         FROM outbox_event
-                        WHERE status = 'pending' {event_filter}
+                        WHERE (
+                            status = 'pending'
+                            OR (status = 'processing' AND locked_at < :stale_cutoff)
+                        )
+                        {event_filter}
                         ORDER BY created_at ASC
                         LIMIT :limit
                         FOR UPDATE SKIP LOCKED
                     )
                     UPDATE outbox_event e
                     SET status = 'processing',
+                        retry_count = e.retry_count
+                            + CASE WHEN e.status = 'processing' THEN 1 ELSE 0 END,
                         locked_at = NOW(),
                         updated_at = NOW()
                     FROM candidates

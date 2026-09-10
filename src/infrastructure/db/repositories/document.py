@@ -103,6 +103,9 @@ class DocumentAssetRepository:
 
         短文本优化：`len(content) <= chunk_size` 时整段作为唯一分块（chunk_index=1），
         跳过滑动窗口切片——语义完整、单次 embedding；长文本才走 `_chunk_text` 窗口。
+
+        幂等：同一 document 先删除旧分块再插入，任务重跑 / 重新索引不会产生重复分块
+        （同一事务内完成，异常时整体回滚，不会丢旧分块留半截新分块）。
         """
         normalized = (content or "").strip()
         if not normalized:
@@ -111,6 +114,7 @@ class DocumentAssetRepository:
         if not chunks:
             return []
         with SessionLocal() as session:
+            session.execute(text("DELETE FROM document_chunk WHERE document_id = :document_id"), {"document_id": document_id})
             saved: list[dict[str, object]] = []
             for index, chunk in enumerate(chunks, start=1):
                 embedding = self._embed_text(chunk)

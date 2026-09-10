@@ -24,6 +24,18 @@ class LLMProvider:
         """当前激活 provider（openai/deepseek）是否具备 key 与 base_url。"""
         return bool(self.api_key) and bool(self.base_url)
 
+    def embedding_configured(self) -> bool:
+        """embedding 是否具备独立 base_url 与 key（优先于 chat provider 的 embedding 能力）。"""
+        return bool(settings.embedding_base_url.strip()) and bool(settings.embedding_api_key.get_secret_value().strip())
+
+    def _embedding_base_url(self) -> str:
+        """embedding 请求的 base_url：独立配置优先，否则复用 chat provider 的 base_url。"""
+        return settings.embedding_base_url.strip().rstrip("/") or self.base_url or ""
+
+    def _embedding_api_key(self) -> str:
+        """embedding 请求的 api key：独立配置优先，否则复用 chat provider 的 key。"""
+        return settings.embedding_api_key.get_secret_value().strip() or self.api_key
+
     def generate(self, prompt: str, *, system_prompt: str | None = None) -> str:
         """非流式补全：返回完整生成文本。未配置时返回提示文案（由上层决定是否回退）。"""
         if not self.is_configured():
@@ -100,17 +112,21 @@ class LLMProvider:
                     yield content
 
     def embed(self, text: str) -> list[float]:
-        """调用 embedding 模型返回向量；未配置时返回 1536 维全零占位。"""
-        if not self.is_configured():
-            return [0.0] * 1536
+        """调用 embedding 模型返回向量；unconfigured 时返回 1536 维全零占位。
+
+        embedding 走独立配置（EMBEDDING_BASE_URL/EMBEDDING_API_KEY/EMBEDDING_MODEL），
+        与 chat provider 解耦——避免 chat 是 deepseek（无 /embeddings 端点）时 404。
+        """
+        if not (self.embedding_configured() or self.is_configured()):
+            return [0.0] * settings.embedding_dimension
 
         payload = {"model": self.embedding_model, "input": text}
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self._embedding_api_key()}",
             "Content-Type": "application/json",
         }
         response = httpx.post(
-            f"{self.base_url}/embeddings",
+            f"{self._embedding_base_url()}/embeddings",
             headers=headers,
             json=payload,
             timeout=30,

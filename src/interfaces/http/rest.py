@@ -69,9 +69,19 @@ async def database_health() -> dict[str, object]:
 
 @router.get("/api/v1/health/llm")
 async def llm_health() -> dict[str, object]:
-    """LLM 配置检查：返回是否配置及所用 provider / model。"""
+    """LLM 配置检查：返回 chat 与 embedding 是否配置及所用 provider / model。"""
     provider = LLMProvider()
-    return {"configured": provider.is_configured(), "provider": provider.provider_name, "model": provider.model}
+    return {
+        "configured": provider.is_configured(),
+        "provider": provider.provider_name,
+        "model": provider.model,
+        "embedding": {
+            "configured": provider.embedding_configured(),
+            "base_url": provider._embedding_base_url(),
+            "model": provider.embedding_model,
+            "dimension": settings.embedding_dimension,
+        },
+    }
 
 
 @router.get("/api/v1/requirements")
