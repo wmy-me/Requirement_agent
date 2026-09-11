@@ -143,18 +143,19 @@ class DocumentAssetRepository:
         normalized = (query or "").strip()
         if not normalized:
             return []
-        embedding = self._embed_text(normalized)
+        # 向量以字符串形式与 CAST(... AS vector) 绑定，兼容 SQLAlchemy text()（不支持 :x::vector 直接替换）
+        embedding = "[" + ",".join(str(float(x)) for x in self._embed_text(normalized)) + "]"
         with SessionLocal() as session:
             rows = session.execute(
                 text(
                     """
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.chunk_text, dc.metadata, dc.created_at,
                            da.file_name, da.storage_uri,
-                           1 - (dc.embedding <=> :embedding::vector) AS score
+                           1 - (dc.embedding <=> CAST(:embedding AS vector)) AS score
                     FROM document_chunk dc
                     JOIN document_asset da ON da.id = dc.document_id
                     WHERE dc.embedding IS NOT NULL
-                    ORDER BY dc.embedding <=> :embedding::vector
+                    ORDER BY dc.embedding <=> CAST(:embedding AS vector)
                     LIMIT :limit
                     """
                 ),

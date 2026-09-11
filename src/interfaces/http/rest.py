@@ -286,6 +286,19 @@ async def list_documents(limit: int = Query(default=20, ge=1, le=50)) -> dict[st
     return {"items": document_repo.list_documents(limit=limit)}
 
 
+@router.get("/api/v1/documents/search")
+async def search_document_chunks(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=5, ge=1, le=20),
+) -> dict[str, object]:
+    """按向量相似度检索文档分块：返回 {"items": [...]}。
+
+    必须声明在 `/documents/{document_id}` 之前——否则 "search" 会被当作
+    document_id 走 422（FastAPI 按声明顺序匹配路径参数路由）。
+    """
+    return {"items": document_repo.search_chunks(q.strip(), limit=limit)}
+
+
 @router.get("/api/v1/documents/{document_id}")
 async def get_document(document_id: int) -> dict[str, object]:
     """文档详情：按 id 返回单篇文档；不存在返回 404。"""
@@ -315,15 +328,6 @@ async def reindex_document_chunks(document_id: int) -> dict[str, object]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document text is empty")
     result = document_chunk_task.enqueue(document_id=document_id, content=text, chunk_size=600, overlap=120)
     return {"status": "queued", "result": result, "document_id": document_id}
-
-
-@router.get("/api/v1/documents/search")
-async def search_document_chunks(
-    q: str = Query(min_length=1, max_length=200),
-    limit: int = Query(default=5, ge=1, le=20),
-) -> dict[str, object]:
-    """按向量相似度检索文档分块：返回 {"items": [...]}。"""
-    return {"items": document_repo.search_chunks(q.strip(), limit=limit)}
 
 
 @router.get("/api/v1/conversations")
