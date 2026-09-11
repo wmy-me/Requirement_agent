@@ -49,7 +49,8 @@ class ObjectStorage:
         self.secret_key = secret_key if secret_key is not None else settings.minio_secret_key.get_secret_value()
         self.bucket = bucket or settings.minio_bucket
         # 本地回退目录：$PROJECT_ROOT/storage/uploads，首次访问自动创建
-        self.local_root = Path(__file__).resolve().parents[3] / "storage" / "uploads"
+        # 注意：本文件位于 src/requirement_agent/infrastructure/storage/，故项目根为上溯 4 层（parents[4]）。
+        self.local_root = Path(__file__).resolve().parents[4] / "storage" / "uploads"
         self.local_root.mkdir(parents=True, exist_ok=True)
         self._client = None
         # 仅当配置齐全且驱动可导入时才尝试连接 MinIO；失败则静默降级本地
