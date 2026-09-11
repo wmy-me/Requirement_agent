@@ -6,18 +6,18 @@ agent（Agent 分析/聊天）、conversations（会话）。
 
 from __future__ import annotations
 
-from src.requirement_agent.api.schemas.agent import AgentChatRequest, AgentRunRequest
-from src.requirement_agent.api.schemas.common import HealthResponse
-from src.requirement_agent.api.schemas.conversations import (
+from requirement_agent.api.schemas.agent import AgentChatRequest, AgentRunRequest
+from requirement_agent.api.schemas.common import HealthResponse
+from requirement_agent.api.schemas.conversations import (
     ConversationCreateRequest,
     ConversationMessageCreateRequest,
     ConversationUpdateRequest,
 )
-from src.requirement_agent.api.schemas.requirements import (
+from requirement_agent.api.schemas.requirements import (
     RequirementSubmitRequest,
     RequirementSubmitResponse,
 )
-from src.requirement_agent.api.schemas.reviews import ReviewSubmitRequest
+from requirement_agent.api.schemas.reviews import ReviewSubmitRequest
 
 __all__ = [
     "AgentChatRequest",

@@ -6,8 +6,8 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
-from src.requirement_agent.workflows.graphs import run_decision
-from src.requirement_agent.infrastructure.db.repositories import (
+from requirement_agent.workflows.graphs import run_decision
+from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
     RequirementFeatureRepository,
     RequirementMasterRepository,
@@ -15,8 +15,8 @@ from src.requirement_agent.infrastructure.db.repositories import (
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
-from src.requirement_agent.infrastructure.db.session import SessionLocal
-from src.requirement_agent.infrastructure.worker.outbox import OutboxRepository
+from requirement_agent.infrastructure.db.session import SessionLocal
+from requirement_agent.infrastructure.worker.outbox import OutboxRepository
 
 
 class ReviewService:

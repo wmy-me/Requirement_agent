@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 
 
 class BaseSkill:

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from src.requirement_agent.config.settings import settings
-from src.requirement_agent.infrastructure.db.session import check_database_connection
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.config.settings import settings
+from requirement_agent.infrastructure.db.session import check_database_connection
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 
 router = APIRouter()
 

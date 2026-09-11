@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from src.requirement_agent.domain.requirement import AuditEvent, RequirementMaster, RequirementReview, RequirementVersion
-from src.requirement_agent.workflows.canonical import canonical_requirement, canonical_title
+from requirement_agent.domain.requirement import AuditEvent, RequirementMaster, RequirementReview, RequirementVersion
+from requirement_agent.workflows.canonical import canonical_requirement, canonical_title
 
 
 def _ctx(state: dict[str, Any]) -> dict[str, Any]:

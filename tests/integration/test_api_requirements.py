@@ -15,7 +15,7 @@ API_HEADERS = {"Authorization": "Bearer test-api-token"}
 
 
 def test_submit_requirement_api(monkeypatch) -> None:
-    from src.requirement_agent.config.settings import settings
+    from requirement_agent.config.settings import settings
 
     monkeypatch.setattr(settings.api_auth_token, "_secret_value", "test-api-token")
     # 唯一 key，避免命中历史幂等记录（持久 DB 可能导致旧源已 committed）

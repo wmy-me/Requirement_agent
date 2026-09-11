@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.domain.requirement import RequirementSource
 
 
 def canonical_title(source: RequirementSource, edited_requirement: str | None) -> str:

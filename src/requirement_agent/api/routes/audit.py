@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from src.requirement_agent.api.dependencies import audit_repo
+from requirement_agent.api.dependencies import audit_repo
 
 router = APIRouter()
 

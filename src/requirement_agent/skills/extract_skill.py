@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.base_skill import BaseSkill
 
 if TYPE_CHECKING:
-    from src.requirement_agent.agents.extract_agent import ExtractedRequirement
+    from requirement_agent.agents.extract_agent import ExtractedRequirement
 
 
 class ExtractSkill(BaseSkill):
@@ -25,7 +25,7 @@ class ExtractSkill(BaseSkill):
         requester_name: str | None = None,
     ) -> ExtractedRequirement:
         """调用模型抽取结构化需求；任何异常都回退到启发式结果。"""
-        from src.requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
+        from requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
 
         fallback = ExtractAgent._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
         if not self.provider.is_configured():

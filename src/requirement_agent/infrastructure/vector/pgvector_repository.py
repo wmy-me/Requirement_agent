@@ -8,9 +8,9 @@ from typing import Any
 import psycopg
 from pgvector.psycopg import register_vector
 
-from src.requirement_agent.common.snowflake import new_id
-from src.requirement_agent.common.time import as_utc_iso, parse_display_time
-from src.requirement_agent.config.settings import settings
+from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.time import as_utc_iso, parse_display_time
+from requirement_agent.config.settings import settings
 
 
 class RequirementVectorRepository:

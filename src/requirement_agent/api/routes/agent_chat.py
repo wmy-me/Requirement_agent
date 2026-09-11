@@ -18,10 +18,10 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
-from src.requirement_agent.application.decision_rules import next_action_for as decision_next_action
-from src.requirement_agent.application.decision_rules import review_required as decision_review_required
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
-from src.requirement_agent.api.dependencies import (
+from requirement_agent.application.decision_rules import next_action_for as decision_next_action
+from requirement_agent.application.decision_rules import review_required as decision_review_required
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.api.dependencies import (
     actor_id_or_default,
     analyze_agent,
     chat_repo,
@@ -32,7 +32,7 @@ from src.requirement_agent.api.dependencies import (
     retrieval_service,
     risk_agent,
 )
-from src.requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
+from requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
 
 router = APIRouter(tags=["agent"])
 
@@ -445,8 +445,8 @@ async def _chat_stream_files_events(
 # —— Agent 分析管线（/agent/run）：已迁移至 requirement_agent.api.routes.agent（子批次 3.3.2）——
 # 在原位置 include 子 router，保持注册顺序；旧路径函数名继续可用（同一对象）。
 # 本文件内的 chat_with_agent 亦复用该函数（经下方 import 解析）。
-from src.requirement_agent.api.routes.agent import run_agent_pipeline  # noqa: E402,F401
-from src.requirement_agent.api.routes.agent import router as _agent_run_router  # noqa: E402
+from requirement_agent.api.routes.agent import run_agent_pipeline  # noqa: E402,F401
+from requirement_agent.api.routes.agent import router as _agent_run_router  # noqa: E402
 
 router.include_router(_agent_run_router)
 

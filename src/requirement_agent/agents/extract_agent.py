@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.requirement_agent.skills.extract_skill import ExtractSkill
+from requirement_agent.skills.extract_skill import ExtractSkill
 
 
 class ExtractedRequirement(BaseModel):

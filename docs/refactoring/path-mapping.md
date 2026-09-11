@@ -87,3 +87,6 @@
   `api/schemas/{agent,conversations}.py`；路由聚合器→`api/router.py`（保留两级聚合）；
   **删除整个 `src/interfaces/`**（http 包 + 空包）。至此新包自洽，旧路径不再被引用。
 - 阶段 1（结构重组）**完成**：全部 42 路由 + 依赖 + Schema + 聚合器均在 `src/requirement_agent/` 下。
+- 子批次3.3.7（**其余分层全迁移**）：`domain / common / config / infrastructure / application /
+  agents / skills` 整体 `git mv` 入新包；`graph → workflows`（重命名）；全局改写 64 个文件 import。
+  `src/` 顶层仅剩 `requirement_agent/`。**阶段 1 至此全部完成**。

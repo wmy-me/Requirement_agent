@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.requirement_agent.agents.analyze_agent import AnalyzeAgent
-from src.requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
-from src.requirement_agent.agents.retrieval_agent import RetrievalAgent
-from src.requirement_agent.agents.risk_agent import RiskAgent
-from src.requirement_agent.application.decision_rules import next_action_for
+from requirement_agent.agents.analyze_agent import AnalyzeAgent
+from requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
+from requirement_agent.agents.retrieval_agent import RetrievalAgent
+from requirement_agent.agents.risk_agent import RiskAgent
+from requirement_agent.application.decision_rules import next_action_for
 
 
 def extract_node(state: dict[str, Any]) -> dict[str, Any]:

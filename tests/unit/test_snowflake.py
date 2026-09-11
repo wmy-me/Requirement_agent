@@ -3,7 +3,7 @@
 import threading
 import time
 
-from src.requirement_agent.common.snowflake import Snowflake
+from requirement_agent.common.snowflake import Snowflake
 
 
 def test_ids_positive_and_within_int63() -> None:

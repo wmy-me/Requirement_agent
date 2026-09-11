@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from src.requirement_agent.infrastructure.db.repositories import MemoryRepository
-from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.db.repositories import MemoryRepository
+from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 
 
 def _embed_safe(embedding_service: EmbeddingService, text: str) -> list[float] | None:

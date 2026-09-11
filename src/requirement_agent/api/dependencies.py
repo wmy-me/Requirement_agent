@@ -7,14 +7,14 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.agents.analyze_agent import AnalyzeAgent
-from src.requirement_agent.agents.extract_agent import ExtractAgent
-from src.requirement_agent.agents.risk_agent import RiskAgent
-from src.requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
-from src.requirement_agent.application.requirement_service import RequirementService
-from src.requirement_agent.application.retrieval_service import RetrievalService
-from src.requirement_agent.application.review_service import ReviewService
-from src.requirement_agent.infrastructure.db.repositories import (
+from requirement_agent.agents.analyze_agent import AnalyzeAgent
+from requirement_agent.agents.extract_agent import ExtractAgent
+from requirement_agent.agents.risk_agent import RiskAgent
+from requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
+from requirement_agent.application.requirement_service import RequirementService
+from requirement_agent.application.retrieval_service import RetrievalService
+from requirement_agent.application.review_service import ReviewService
+from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
     ChatRepository,
     DocumentAssetRepository,
@@ -23,12 +23,12 @@ from src.requirement_agent.infrastructure.db.repositories import (
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
-from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
-from src.requirement_agent.infrastructure.parser.document_parser import DocumentParser
-from src.requirement_agent.infrastructure.storage.object_store import ObjectStorage
-from src.requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
-from src.requirement_agent.config.settings import settings
+from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.parser.document_parser import DocumentParser
+from requirement_agent.infrastructure.storage.object_store import ObjectStorage
+from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
+from requirement_agent.config.settings import settings
 
 # —— 领域服务 ——
 requirement_service = RequirementService()

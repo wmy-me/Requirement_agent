@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 
-from src.requirement_agent.api.dependencies import source_repo
+from requirement_agent.api.dependencies import source_repo
 
 router = APIRouter()
 

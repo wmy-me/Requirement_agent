@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.application.retrieval_service import RetrievalService
+from requirement_agent.application.retrieval_service import RetrievalService
 
 
 class RetrievalAgent:

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.base_skill import BaseSkill
 
 if TYPE_CHECKING:
-    from src.requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
-    from src.requirement_agent.agents.extract_agent import ExtractedRequirement
+    from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
+    from requirement_agent.agents.extract_agent import ExtractedRequirement
 
 
 class AnalyzeSkill(BaseSkill):
@@ -24,7 +24,7 @@ class AnalyzeSkill(BaseSkill):
         historical_requirements: list[dict[str, object]] | None = None,
     ) -> AnalysisResult:
         """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。"""
-        from src.requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
+        from requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
 
         fallback = AnalyzeAgent._heuristic_analyze(extracted, historical_requirements)
         if not self.provider.is_configured():
@@ -44,7 +44,7 @@ class AnalyzeSkill(BaseSkill):
         )
 
         try:
-            from src.requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
+            from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
 
             payload = self._generate_json(prompt, system_prompt)
 

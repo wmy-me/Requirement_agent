@@ -9,10 +9,10 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.infrastructure.db.repositories import DocumentAssetRepository
-from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
-from src.requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
-from src.requirement_agent.infrastructure.worker.outbox import OutboxRepository
+from requirement_agent.infrastructure.db.repositories import DocumentAssetRepository
+from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
+from requirement_agent.infrastructure.worker.outbox import OutboxRepository
 
 
 class EmbeddingTask:

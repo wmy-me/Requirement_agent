@@ -26,12 +26,14 @@ dev = [
     "pytest>=8.0.0",
 ]
 
+# src-layout：正式业务包为 `requirement_agent`（物理位置 src/requirement_agent/）
 [tool.setuptools]
-package-dir = {"" = "."}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["apps*", "src*", "requirement_agent*"]
+where = ["src"]
+include = ["requirement_agent*"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+# src：导入 requirement_agent.*；"."：导入根目录下的 apps / main（测试用）
+pythonpath = ["src", "."]

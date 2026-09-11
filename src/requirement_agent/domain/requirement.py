@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.requirement_agent.common.time import utc_now
+from requirement_agent.common.time import utc_now
 
 
 @dataclass(slots=True)

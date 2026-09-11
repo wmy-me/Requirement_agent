@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from src.requirement_agent.config.settings import settings
+from requirement_agent.config.settings import settings
 
 
 def utc_now() -> datetime:

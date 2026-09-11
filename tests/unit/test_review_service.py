@@ -1,7 +1,7 @@
 import pytest
 
-from src.requirement_agent.application.review_service import ReviewService
-from src.requirement_agent.domain.requirement import RequirementMaster, RequirementReview, RequirementSource, RequirementVersion
+from requirement_agent.application.review_service import ReviewService
+from requirement_agent.domain.requirement import RequirementMaster, RequirementReview, RequirementSource, RequirementVersion
 
 
 class FakeSession:

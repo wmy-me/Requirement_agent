@@ -1,6 +1,6 @@
 """OutboxConsumer 消费循环的单元测试（用 fake 任务，不碰数据库）。"""
 
-from src.requirement_agent.infrastructure.worker.consumer import (
+from requirement_agent.infrastructure.worker.consumer import (
     _EMPTY_ROUNDS_BEFORE_BACKOFF,
     _MAX_BACKOFF_MULTIPLIER,
     OutboxConsumer,

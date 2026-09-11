@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.base_skill import BaseSkill
 
 
 class RiskSkill(BaseSkill):
@@ -14,8 +14,8 @@ class RiskSkill(BaseSkill):
 
     def assess(self, extracted: object) -> object:
         """评估风险并把 confidence 约束在前端可展示的安全区间。"""
-        from src.requirement_agent.agents.extract_agent import ExtractedRequirement
-        from src.requirement_agent.agents.risk_agent import RiskAgent, RiskAssessment
+        from requirement_agent.agents.extract_agent import ExtractedRequirement
+        from requirement_agent.agents.risk_agent import RiskAgent, RiskAssessment
 
         if not isinstance(extracted, ExtractedRequirement):
             extracted = ExtractedRequirement.model_validate(extracted)

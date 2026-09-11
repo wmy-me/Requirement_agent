@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 
-from src.requirement_agent.infrastructure.db.repositories import RequirementFeatureRepository, RequirementMasterRepository
-from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
-from src.requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
+from requirement_agent.infrastructure.db.repositories import RequirementFeatureRepository, RequirementMasterRepository
+from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 
 
 class RetrievalService:
@@ -239,7 +239,7 @@ class RetrievalService:
     @staticmethod
     def _parse_time(value: str) -> datetime:
         """解析时间串为展示时区的 aware datetime，naive 视为展示时区本地时间。"""
-        from src.requirement_agent.common.time import parse_display_time
+        from requirement_agent.common.time import parse_display_time
 
         return parse_display_time(value)
 

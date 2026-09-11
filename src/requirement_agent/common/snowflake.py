@@ -16,7 +16,7 @@ from __future__ import annotations
 import threading
 import time
 
-from src.requirement_agent.config.settings import settings
+from requirement_agent.config.settings import settings
 
 # 时间戳起始（UTC）：2025-01-01 00:00:00.000，毫秒级。41 位容量覆盖约 69 年。
 _EPOCH_MS = 1735689600000

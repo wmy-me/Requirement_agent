@@ -6,20 +6,20 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from src.requirement_agent.workflows.agents_nodes import (
+from requirement_agent.workflows.agents_nodes import (
     analyze_node,
     decide_node,
     extract_node,
     retrieve_node,
     risk_node,
 )
-from src.requirement_agent.workflows.commit_nodes import (
+from requirement_agent.workflows.commit_nodes import (
     commit_requirement_node,
     record_review_node,
     reject_requirement_node,
     route_decision,
 )
-from src.requirement_agent.workflows.state import RequirementState
+from requirement_agent.workflows.state import RequirementState
 
 
 def build_analysis_graph():

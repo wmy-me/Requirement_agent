@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.config.settings import settings
-from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.config.settings import settings
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 
 
 class EmbeddingService:

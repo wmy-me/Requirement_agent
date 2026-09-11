@@ -11,19 +11,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from src.requirement_agent.api.routes.agent_chat import router as _agent_chat_router
-from src.requirement_agent.api.routes.audit import router as _audit_router
-from src.requirement_agent.api.routes.conversations import router as _conversations_router
-from src.requirement_agent.api.routes.documents import router as _documents_router
-from src.requirement_agent.api.routes.health import router as _health_router
-from src.requirement_agent.api.routes.memory import router as _memory_router
-from src.requirement_agent.api.routes.requirements import router as _requirements_query_router
-from src.requirement_agent.api.routes.requirements import search_router as _requirements_search_router
-from src.requirement_agent.api.routes.requirements_write import router as _requirements_write_router
-from src.requirement_agent.api.routes.reviews import router as _reviews_read_router
-from src.requirement_agent.api.routes.reviews import submit_router as _reviews_submit_router
-from src.requirement_agent.api.routes.sources import router as _sources_router
-from src.requirement_agent.api.routes.system import router as _system_router
+from requirement_agent.api.routes.agent_chat import router as _agent_chat_router
+from requirement_agent.api.routes.audit import router as _audit_router
+from requirement_agent.api.routes.conversations import router as _conversations_router
+from requirement_agent.api.routes.documents import router as _documents_router
+from requirement_agent.api.routes.health import router as _health_router
+from requirement_agent.api.routes.memory import router as _memory_router
+from requirement_agent.api.routes.requirements import router as _requirements_query_router
+from requirement_agent.api.routes.requirements import search_router as _requirements_search_router
+from requirement_agent.api.routes.requirements_write import router as _requirements_write_router
+from requirement_agent.api.routes.reviews import router as _reviews_read_router
+from requirement_agent.api.routes.reviews import submit_router as _reviews_submit_router
+from requirement_agent.api.routes.sources import router as _sources_router
+from requirement_agent.api.routes.system import router as _system_router
 
 
 # —— REST 域聚合（注册顺序与迁移前完全一致）——

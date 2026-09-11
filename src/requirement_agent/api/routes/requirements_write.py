@@ -11,15 +11,15 @@ import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from src.requirement_agent.domain.requirement import RequirementSource
-from src.requirement_agent.api.dependencies import (
+from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.api.dependencies import (
     document_chunk_task,
     document_parser,
     document_repo,
     object_storage,
     requirement_service,
 )
-from src.requirement_agent.api.schemas import RequirementSubmitRequest, RequirementSubmitResponse
+from requirement_agent.api.schemas import RequirementSubmitRequest, RequirementSubmitResponse
 
 router = APIRouter()
 

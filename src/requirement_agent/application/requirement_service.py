@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from src.requirement_agent.agents.analyze_agent import AnalyzeAgent
-from src.requirement_agent.agents.extract_agent import ExtractAgent
-from src.requirement_agent.agents.risk_agent import RiskAgent
-from src.requirement_agent.common.time import as_display_iso
-from src.requirement_agent.domain.requirement import RequirementSource
-from src.requirement_agent.workflows.graphs import run_analysis
-from src.requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
-from src.requirement_agent.infrastructure.parser.document_parser import DocumentParser
+from requirement_agent.agents.analyze_agent import AnalyzeAgent
+from requirement_agent.agents.extract_agent import ExtractAgent
+from requirement_agent.agents.risk_agent import RiskAgent
+from requirement_agent.common.time import as_display_iso
+from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.workflows.graphs import run_analysis
+from requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
+from requirement_agent.infrastructure.parser.document_parser import DocumentParser
 
 
 class RequirementService:

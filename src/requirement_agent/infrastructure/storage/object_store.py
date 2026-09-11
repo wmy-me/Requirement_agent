@@ -15,7 +15,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.requirement_agent.config.settings import settings
+from requirement_agent.config.settings import settings
 
 try:
     from minio import Minio

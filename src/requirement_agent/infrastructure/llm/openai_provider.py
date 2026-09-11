@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
-from src.requirement_agent.config.settings import settings
+from requirement_agent.config.settings import settings
 
 
 class LLMProvider:

@@ -16,8 +16,8 @@ from __future__ import annotations
 import logging
 import time
 
-from src.requirement_agent.config.settings import settings
-from src.requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
+from requirement_agent.config.settings import settings
+from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
 
 logger = logging.getLogger(__name__)
 

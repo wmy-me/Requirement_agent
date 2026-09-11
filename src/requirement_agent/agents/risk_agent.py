@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from src.requirement_agent.agents.extract_agent import ExtractedRequirement
-from src.requirement_agent.skills.risk_skill import RiskSkill
+from requirement_agent.agents.extract_agent import ExtractedRequirement
+from requirement_agent.skills.risk_skill import RiskSkill
 
 
 class RiskAssessment(BaseModel):

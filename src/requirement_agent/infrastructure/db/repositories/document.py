@@ -12,9 +12,9 @@ import re
 
 from sqlalchemy import text
 
-from src.requirement_agent.common.snowflake import new_id
-from src.requirement_agent.common.time import as_display_iso
-from src.requirement_agent.infrastructure.db.session import SessionLocal
+from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.time import as_display_iso
+from requirement_agent.infrastructure.db.session import SessionLocal
 
 
 class DocumentAssetRepository:
@@ -259,7 +259,7 @@ class DocumentAssetRepository:
         return [chunk for chunk in chunks if chunk]
 
     def _embed_text(self, text: str) -> list[float]:
-        from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+        from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
 
         return EmbeddingService().embed(text)
 

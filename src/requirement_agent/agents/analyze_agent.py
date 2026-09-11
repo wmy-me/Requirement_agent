@@ -6,8 +6,8 @@ import re
 
 from pydantic import BaseModel, Field
 
-from src.requirement_agent.agents.extract_agent import ExtractedRequirement
-from src.requirement_agent.skills.analyze_skill import AnalyzeSkill
+from requirement_agent.agents.extract_agent import ExtractedRequirement
+from requirement_agent.skills.analyze_skill import AnalyzeSkill
 
 
 class CandidateMatch(BaseModel):

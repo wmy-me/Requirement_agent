@@ -13,10 +13,10 @@ import sys
 
 from sqlalchemy import text
 
-from src.requirement_agent.infrastructure.db.repositories import DocumentAssetRepository
-from src.requirement_agent.infrastructure.db.session import SessionLocal
-from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
-from src.requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
+from requirement_agent.infrastructure.db.repositories import DocumentAssetRepository
+from requirement_agent.infrastructure.db.session import SessionLocal
+from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 
 
 def main(dry_run: bool = False) -> int:

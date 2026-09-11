@@ -1,5 +1,5 @@
-from src.requirement_agent.infrastructure.worker.outbox import OutboxEvent
-from src.requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
+from requirement_agent.infrastructure.worker.outbox import OutboxEvent
+from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
 
 
 class FakeOutboxRepo:

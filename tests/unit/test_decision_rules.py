@@ -1,4 +1,4 @@
-from src.requirement_agent.application.decision_rules import next_action_for, review_required
+from requirement_agent.application.decision_rules import next_action_for, review_required
 
 LOW = {"quality_risk": "low", "change_risk": "low", "technical_impact_risk": "low"}
 HIGH = {"quality_risk": "high", "change_risk": "medium", "technical_impact_risk": "low"}

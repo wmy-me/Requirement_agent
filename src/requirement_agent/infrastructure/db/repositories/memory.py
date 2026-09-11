@@ -9,9 +9,9 @@ import json
 
 from sqlalchemy import text
 
-from src.requirement_agent.common.snowflake import new_id
-from src.requirement_agent.common.time import as_display_iso
-from src.requirement_agent.infrastructure.db.session import SessionLocal
+from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.time import as_display_iso
+from requirement_agent.infrastructure.db.session import SessionLocal
 
 
 class MemoryRepository:
