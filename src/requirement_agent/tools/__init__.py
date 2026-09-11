@@ -1,8 +1,10 @@
 """内部 Tool 方法集（可直接调用的普通方法）。
 
-7 个工具方法：health_check / submit_requirement / search_requirements /
-submit_review_decision / get_requirement_detail / get_requirement_versions /
-get_master_requirements。
+按域拆分：
+- `tools.health`      —— 健康检查
+- `tools.requirements` —— 需求提交 / 检索 / 详情 / 版本 / 主需求列表
+- `tools.reviews`     —— 人工审核提交
+- `tools._deps`       —— 共享的服务 / 仓库单例
 
 原则：工具只做「入参 → 领域服务 / 只读 repo」的转发，**不在此实现业务、不直接写库**。
 - 写类能力（需求提交、审核落库）一律走 `RequirementService` / `ReviewService`
@@ -13,111 +15,15 @@ get_master_requirements。
 
 from __future__ import annotations
 
-from typing import Any
-
-from requirement_agent.application.requirement_service import RequirementService
-from requirement_agent.application.retrieval_service import RetrievalService
-from requirement_agent.application.review_service import ReviewService
-from requirement_agent.config.settings import settings
-from requirement_agent.domain.requirement import RequirementSource
-from requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementVersionRepository
-
-requirement_service = RequirementService()
-retrieval_service = RetrievalService()
-review_service = ReviewService()
-master_repo = RequirementMasterRepository()
-version_repo = RequirementVersionRepository()
-
-
-def health_check() -> dict[str, str]:
-    """服务健康检查。"""
-    return {"status": "ok"}
-
-
-def submit_requirement(
-    original_text: str,
-    source_type: str = "web",
-    requester_id: str | None = None,
-    requester_name: str | None = None,
-    source_event_id: str | None = None,
-) -> dict[str, Any]:
-    """提交一条需求进入治理流程（抽取 → 冲突/重复分析 → 风险评估 → 待人工审核）。
-
-    不会直接写入正式需求主表；审核通过后才生成 REQ。返回值含 source_id / status / analysis / risk。
-    """
-    source = RequirementSource(
-        idempotency_key=f"{source_type}:{(requester_id or 'tool')}:{original_text}",
-        source_type=source_type,
-        source_event_id=(source_event_id or "").strip() or None,
-        requester_id=(requester_id or "").strip() or None,
-        requester_name=(requester_name or "").strip() or None,
-        original_text=original_text,
-        original_payload={"input_mode": "text", "source": "tool"},
-        metadata={},
-    )
-    return requirement_service.submit_requirement(source)
-
-
-def search_requirements(query: str, limit: int = 10) -> dict[str, Any]:
-    """基于项目检索服务搜索需求记录（关键字 + 向量）。"""
-    rows = retrieval_service.search(query, limit=limit)
-    return {"query": query, "limit": limit, "results": rows}
-
-
-def submit_review_decision(
-    source_id: int,
-    decision: str,
-    reviewer_name: str | None = None,
-    comment: str | None = None,
-    edited_requirement: str | None = None,
-) -> dict[str, str]:
-    """提交对某条需求来源的人工审核结果（approved / rejected / returned）。"""
-    return review_service.submit_decision(
-        source_id=source_id,
-        decision=decision,
-        reviewer_id=settings.tool_actor_id,
-        reviewer_name=reviewer_name,
-        comment=comment,
-        edited_requirement=edited_requirement,
-    )
-
-
-def get_requirement_detail(requirement_id: int) -> dict[str, Any]:
-    """根据主键 id 查询正式需求详情。"""
-    item = master_repo.get_by_id(requirement_id)
-    if item is None:
-        return {"requirement_id": requirement_id, "status": "not_found"}
-    return {
-        "id": requirement_id,
-        "requirement_key": item.requirement_key,
-        "requirement_name": item.requirement_name,
-        "final_requirement": item.final_requirement,
-        "current_version": item.current_version,
-        "status": item.status,
-        "lock_version": item.lock_version,
-    }
-
-
-def get_requirement_versions(requirement_id: int, limit: int = 20) -> dict[str, Any]:
-    """返回某个正式需求的版本历史。"""
-    master = master_repo.get_by_id(requirement_id)
-    if master is None:
-        return {"requirement_id": requirement_id, "status": "not_found"}
-    rows = version_repo.list_by_requirement_key(master.requirement_key)
-    return {
-        "requirement_id": requirement_id,
-        "requirement_key": master.requirement_key,
-        "limit": limit,
-        "results": rows[:limit],
-    }
-
-
-def get_master_requirements(limit: int = 50, status: str = "active") -> dict[str, Any]:
-    """返回符合状态条件的主需求列表（默认 active）。status 传空串返回全部。"""
-    rows = master_repo.search("", limit=limit)
-    filtered = [r for r in rows if r.get("status") == status] if status else rows
-    return {"limit": limit, "status": status or None, "results": filtered}
-
+from requirement_agent.tools.health import health_check
+from requirement_agent.tools.requirements import (
+    get_master_requirements,
+    get_requirement_detail,
+    get_requirement_versions,
+    search_requirements,
+    submit_requirement,
+)
+from requirement_agent.tools.reviews import submit_review_decision
 
 __all__ = [
     "health_check",
