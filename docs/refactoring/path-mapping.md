@@ -79,4 +79,8 @@
 - 子批次3.3.4：**conversations 全域**（7 条，连续）迁至 `api/routes/conversations.py`
   （list/create/messages×2/update/delete/finalize）。因只读与写在原文件交错、无法单拆只读组，
   整块作为一个 router 迁移以保顺序。逐字迁移，含 finalize（LLM 调用未改）。
-- 后续子步骤：剩余复杂路由（submit/ingest/documents/memory/SSE）→ 3.4（待清理记录）。
+- 子批次3.3.5（**一键全迁移**）：剩余全部路由迁出——
+  `system.py`（/、/health）、`requirements_write.py`（列表/submit/ingest）、
+  `documents.py`（5 条）、`memory.py`（4 条）、`agent_chat.py`（agent 5 条 + SSE 辅助，整文件 `git mv`）。
+  至此 **rest.py 与 agent_chat.py 均为纯转发壳**，全部 42 条路由实现在 `api/routes/`。
+- 后续：`_state.py`→`api/dependencies.py`、剩余 5 Schema、清理未使用导入（3.4）。
