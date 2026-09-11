@@ -26,9 +26,12 @@ from requirement_agent.api.dependencies import (
     analyze_agent,
     chat_repo,
     chat_sessions,
+    document_chunk_task,
     document_parser,
+    document_repo,
     extract_agent,
     memory_context_builder,
+    object_storage,
     retrieval_service,
     risk_agent,
 )
@@ -389,6 +392,41 @@ async def _collect_files(run_text: str, files: list[UploadFile] | None) -> tuple
             parsed = document_parser.parse(upload.filename or "requirement-document.txt", payload)
             meta["title"] = parsed.title
             meta["pages"] = parsed.pages
+            # —— 持久化：对象存储 + 文档库 + 分片入队（与 /requirements/ingest 一致）——
+            # 失败不中断本次分析：仅在 meta 标记 persist_error，正文仍参与分析。
+            try:
+                stored = object_storage.upload(upload.filename or "requirement-document.txt", payload)
+                doc_asset = document_repo.save(
+                    file_name=upload.filename or "requirement-document.txt",
+                    content_type=upload.content_type or "application/octet-stream",
+                    storage_uri=stored.uri,
+                    checksum=stored.checksum,
+                    size_bytes=stored.size,
+                    source_type="web",
+                    original_text=parsed.raw_content,
+                    extracted_text=parsed.content,
+                    metadata={
+                        "input_mode": "chat",
+                        "normalized_fields": parsed.normalized_fields or {},
+                        "segments": [
+                            {"index": seg.index, "kind": seg.kind, "text": seg.text, "field_name": seg.field_name}
+                            for seg in (parsed.segments or [])
+                        ],
+                    },
+                    source_id=None,
+                )
+                if parsed.content:
+                    document_chunk_task.enqueue(
+                        document_id=int(doc_asset["id"]),
+                        content=parsed.content,
+                        chunk_size=600,
+                        overlap=120,
+                    )
+                    document_chunk_task.process_pending(limit=1)
+                meta["document_id"] = doc_asset["id"]
+                meta["object_uri"] = stored.uri
+            except Exception as persist_exc:  # noqa: BLE001 - 持久化失败不拖垮本次分析
+                meta["persist_error"] = str(persist_exc)
             content = (parsed.content or "")[:MAX_FILE_CHARS]
             if parsed.content and len(parsed.content) > MAX_FILE_CHARS:
                 meta["truncated"] = True
