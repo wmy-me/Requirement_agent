@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.interfaces.http._state import document_chunk_task, document_repo
+from src.requirement_agent.api.dependencies import document_chunk_task, document_repo
 
 router = APIRouter()
 

@@ -1,5 +1,6 @@
-"""目标命名空间：api —— HTTP/FastAPI 接口层。
+"""api —— HTTP/FastAPI 接口层。
 
-当前实际代码在 src/interfaces/http/ 与根 main.py（以及 apps/api 冗余壳）。
-子批次 2/3 统一入口与迁移内容到本包；迁移期间保持 src.interfaces.http / main.py 兼容。
+本包是 API 的正式实现位置：`app.py`（统一入口）、`router.py`（路由聚合）、
+`routes/`（各域路由）、`schemas/`（请求/响应模型）、`dependencies.py`（共享单例）。
+旧 `src/interfaces/http/` 已迁移完毕并删除。
 """

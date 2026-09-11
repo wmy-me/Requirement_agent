@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config.settings import settings
 from src.infrastructure.worker.consumer import OutboxConsumer
-from src.interfaces.http.routes import router
+from src.requirement_agent.api.router import router
 
 # 项目根目录：本文件位于 <root>/src/requirement_agent/api/app.py
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

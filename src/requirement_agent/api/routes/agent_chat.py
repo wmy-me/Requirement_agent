@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from src.application.decision_rules import next_action_for as decision_next_action
 from src.application.decision_rules import review_required as decision_review_required
 from src.infrastructure.llm.openai_provider import LLMProvider
-from src.interfaces.http._state import (
+from src.requirement_agent.api.dependencies import (
     actor_id_or_default,
     analyze_agent,
     chat_repo,
@@ -32,7 +32,7 @@ from src.interfaces.http._state import (
     retrieval_service,
     risk_agent,
 )
-from src.interfaces.http.schemas import AgentChatRequest, AgentRunRequest
+from src.requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
 
 router = APIRouter(tags=["agent"])
 

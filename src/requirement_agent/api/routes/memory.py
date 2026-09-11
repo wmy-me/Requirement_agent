@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config.settings import settings
-from src.interfaces.http._state import (
+from src.requirement_agent.api.dependencies import (
     actor_id_or_default,
     embedding_service,
     memory_context_builder,

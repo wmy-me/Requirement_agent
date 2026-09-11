@@ -1,17 +1,18 @@
 """目标命名空间：API 请求/响应 Schema（Pydantic 模型）。
 
-从 `src/interfaces/http/schemas.py` 逐步迁移而来；旧文件保留兼容转发（同一类对象）。
-已迁移（子批次 3.1）：
-    - common.HealthResponse
-    - requirements.RequirementSubmitRequest / RequirementSubmitResponse
-    - reviews.ReviewSubmitRequest
-未迁移（归属待确认，暂留旧文件）：AgentRunRequest / AgentChatRequest（agent 域）、
-ConversationCreateRequest / ConversationUpdateRequest / ConversationMessageCreateRequest（conversation 域）。
+按域拆分：common（健康检查）、requirements（需求提交）、reviews（审核）、
+agent（Agent 分析/聊天）、conversations（会话）。
 """
 
 from __future__ import annotations
 
+from src.requirement_agent.api.schemas.agent import AgentChatRequest, AgentRunRequest
 from src.requirement_agent.api.schemas.common import HealthResponse
+from src.requirement_agent.api.schemas.conversations import (
+    ConversationCreateRequest,
+    ConversationMessageCreateRequest,
+    ConversationUpdateRequest,
+)
 from src.requirement_agent.api.schemas.requirements import (
     RequirementSubmitRequest,
     RequirementSubmitResponse,
@@ -19,6 +20,11 @@ from src.requirement_agent.api.schemas.requirements import (
 from src.requirement_agent.api.schemas.reviews import ReviewSubmitRequest
 
 __all__ = [
+    "AgentChatRequest",
+    "AgentRunRequest",
+    "ConversationCreateRequest",
+    "ConversationMessageCreateRequest",
+    "ConversationUpdateRequest",
     "HealthResponse",
     "RequirementSubmitRequest",
     "RequirementSubmitResponse",

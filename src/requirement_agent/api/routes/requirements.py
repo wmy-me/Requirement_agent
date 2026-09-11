@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.interfaces.http._state import feature_repo, retrieval_service, version_repo
+from src.requirement_agent.api.dependencies import feature_repo, retrieval_service, version_repo
 
 router = APIRouter()
 

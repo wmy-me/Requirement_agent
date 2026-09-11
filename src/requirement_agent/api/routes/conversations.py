@@ -19,14 +19,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.interfaces.http._state import (
+from src.requirement_agent.api.dependencies import (
     actor_id_or_default,
     chat_repo,
     memory_extractor,
     memory_repo,
     summarize_text,
 )
-from src.interfaces.http.schemas import (
+from src.requirement_agent.api.schemas import (
     ConversationCreateRequest,
     ConversationMessageCreateRequest,
     ConversationUpdateRequest,

@@ -17,8 +17,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config.settings import settings
-from src.interfaces.http._state import review_service, source_repo
-from src.interfaces.http.schemas import ReviewSubmitRequest
+from src.requirement_agent.api.dependencies import review_service, source_repo
+from src.requirement_agent.api.schemas import ReviewSubmitRequest
 
 router = APIRouter()         # 只读查询组
 submit_router = APIRouter()  # 审核提交（写库 / 强事务）

@@ -1,4 +1,4 @@
-"""HTTP 层的共享运行态与领域单例。
+"""API 层的共享运行态与领域单例。
 
 集中定义被各资源路由复用的 service / repository / agent 单例，以及
 会话内存态 `chat_sessions`，避免在每个子 router 中重复实例化，
