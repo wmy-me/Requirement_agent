@@ -14,6 +14,10 @@ class StaticTokenVerifier(TokenVerifier):
     """
 
     async def verify_token(self, token: str) -> AccessToken | None:
+        """校验 Bearer token：等于配置的 MCP_AUTH_TOKEN 则放行，否则返回 None 拒绝。
+
+        `TokenVerifier.verify_token` 的抽象方法实现：MCP 会话初始化阶段被 SDK 调用。
+        """
         expected = settings.mcp_auth_token.get_secret_value().strip()
         if not expected or token != expected:
             return None

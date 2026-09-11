@@ -12,6 +12,7 @@ import json
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.snowflake import new_id
 from src.domain.requirement import RequirementReview
 from src.infrastructure.db.session import SessionLocal
 
@@ -28,15 +29,16 @@ class RequirementReviewRepository:
                 text(
                     """
                     INSERT INTO requirement_review (
-                        source_id, analysis_snapshot, decision, reviewer_id, reviewer_name,
+                        id, source_id, analysis_snapshot, decision, reviewer_id, reviewer_name,
                         review_comment, edited_requirement
                     ) VALUES (
-                        :source_id, :analysis_snapshot, :decision, :reviewer_id, :reviewer_name,
+                        :id, :source_id, :analysis_snapshot, :decision, :reviewer_id, :reviewer_name,
                         :review_comment, :edited_requirement
                     )
                     """
                 ),
                 {
+                    "id": new_id(),
                     "source_id": review.source_id,
                     "analysis_snapshot": json.dumps(review.analysis_snapshot or {}),
                     "decision": review.decision,
@@ -114,10 +116,10 @@ class RequirementFeatureRepository:
                 text(
                     """
                     INSERT INTO requirement_feature (
-                        requirement_id, feature_key, content, status, ordinal,
+                        id, requirement_id, feature_key, content, status, ordinal,
                         origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
                     ) VALUES (
-                        :requirement_id, :feature_key, :content, 'active', :ordinal,
+                        :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
                         :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
                     )
                     RETURNING id, requirement_id, feature_key, content, status, ordinal,
@@ -125,6 +127,7 @@ class RequirementFeatureRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "requirement_id": requirement_id,
                     "feature_key": feature_key,
                     "content": content,
@@ -181,15 +184,16 @@ class RequirementFeatureRepository:
                     text(
                         """
                         INSERT INTO requirement_feature (
-                            requirement_id, feature_key, content, status, ordinal,
+                            id, requirement_id, feature_key, content, status, ordinal,
                             origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
                         ) VALUES (
-                            :requirement_id, :feature_key, :content, 'active', :ordinal,
+                            :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
                             :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
                         )
                         """
                     ),
                     {
+                        "id": new_id(),
                         "requirement_id": requirement_id,
                         "feature_key": feature_key,
                         "content": content,
@@ -350,15 +354,16 @@ class RequirementFeatureRepository:
                     text(
                         """
                         INSERT INTO requirement_feature (
-                            requirement_id, feature_key, content, status, ordinal,
+                            id, requirement_id, feature_key, content, status, ordinal,
                             origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
                         ) VALUES (
-                            :requirement_id, :feature_key, :content, 'active', :ordinal,
+                            :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
                             :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
                         )
                         """
                     ),
                     {
+                        "id": new_id(),
                         "requirement_id": requirement_id,
                         "feature_key": next_key,
                         "content": content,

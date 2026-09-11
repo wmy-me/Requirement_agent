@@ -12,6 +12,7 @@ import re
 
 from sqlalchemy import text
 
+from src.common.snowflake import new_id
 from src.common.time import as_display_iso
 from src.infrastructure.db.session import SessionLocal
 
@@ -39,10 +40,10 @@ class DocumentAssetRepository:
                 text(
                     """
                     INSERT INTO document_asset (
-                        file_name, content_type, storage_uri, checksum, size_bytes,
+                        id, file_name, content_type, storage_uri, checksum, size_bytes,
                         source_type, source_id, original_text, extracted_text, metadata
                     ) VALUES (
-                        :file_name, :content_type, :storage_uri, :checksum, :size_bytes,
+                        :id, :file_name, :content_type, :storage_uri, :checksum, :size_bytes,
                         :source_type, :source_id, :original_text, :extracted_text, CAST(:metadata AS JSONB)
                     )
                     RETURNING id, file_name, content_type, storage_uri, checksum, size_bytes,
@@ -50,6 +51,7 @@ class DocumentAssetRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "file_name": file_name,
                     "content_type": content_type,
                     "storage_uri": storage_uri,
@@ -121,12 +123,13 @@ class DocumentAssetRepository:
                 row = session.execute(
                     text(
                         """
-                        INSERT INTO document_chunk (document_id, chunk_index, chunk_text, embedding, metadata)
-                        VALUES (:document_id, :chunk_index, :chunk_text, :embedding, CAST(:metadata AS JSONB))
+                        INSERT INTO document_chunk (id, document_id, chunk_index, chunk_text, embedding, metadata)
+                        VALUES (:id, :document_id, :chunk_index, :chunk_text, :embedding, CAST(:metadata AS JSONB))
                         RETURNING id, document_id, chunk_index, chunk_text, metadata, created_at
                         """
                     ),
                     {
+                        "id": new_id(),
                         "document_id": document_id,
                         "chunk_index": index,
                         "chunk_text": chunk,

@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
+
+    # 雪花 id：多实例部署时每实例设不同 SNOWFLAKE_WORKER_ID（0-1023），保证全局不撞号
+    snowflake_worker_id: int = Field(default=0, alias="SNOWFLAKE_WORKER_ID", ge=0, le=1023)
     embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
     embedding_api_key: SecretStr = Field(default=SecretStr(""), alias="EMBEDDING_API_KEY")
     embedding_dimension: int = Field(default=1536, alias="EMBEDDING_DIMENSION")

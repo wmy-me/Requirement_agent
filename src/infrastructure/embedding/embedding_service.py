@@ -31,5 +31,11 @@ class EmbeddingService:
         return [0.0] * settings.embedding_dimension
 
     def is_configured(self) -> bool:
+        """embedding 网关是否可用。
+
+        以独立 embedding 配置为准（EMBEDDING_BASE_URL + EMBEDDING_API_KEY）；
+        未配置独立 embedding 时，回退到 chat provider 是否就绪——此时 embed 会复用
+        chat 的 base_url/key（不保证有 /embeddings 端点，可能 404）。
+        """
         # embedding 以独立配置为准；未给独立 base_url/key 时，回退到 chat provider 是否就绪
         return self.provider.embedding_configured() or self.provider.is_configured()

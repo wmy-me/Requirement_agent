@@ -7,6 +7,7 @@ import json
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.snowflake import new_id
 from src.common.time import as_display_iso
 from src.domain.requirement import AuditEvent
 from src.infrastructure.db.session import SessionLocal
@@ -24,15 +25,16 @@ class AuditRepository:
                 text(
                     """
                     INSERT INTO audit_event (
-                        trace_id, event_type, aggregate_type, aggregate_id, actor_type, actor_id,
+                        id, trace_id, event_type, aggregate_type, aggregate_id, actor_type, actor_id,
                         before_data, after_data, result_status, error_code
                     ) VALUES (
-                        :trace_id, :event_type, :aggregate_type, :aggregate_id, :actor_type, :actor_id,
+                        :id, :trace_id, :event_type, :aggregate_type, :aggregate_id, :actor_type, :actor_id,
                         :before_data, :after_data, :result_status, :error_code
                     )
                     """
                 ),
                 {
+                    "id": new_id(),
                     "trace_id": event.trace_id,
                     "event_type": event.event_type,
                     "aggregate_type": event.aggregate_type,

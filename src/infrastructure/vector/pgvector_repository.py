@@ -8,6 +8,7 @@ from typing import Any
 import psycopg
 from pgvector.psycopg import register_vector
 
+from src.common.snowflake import new_id
 from src.common.time import as_utc_iso, parse_display_time
 from src.config.settings import settings
 
@@ -28,6 +29,12 @@ class RequirementVectorRepository:
         limit: int = 10,
         filters: Mapping[str, object] | None = None,
     ) -> list[dict[str, object]]:
+        """按余弦相似度检索需求向量，返回归一化候选。
+
+        - 使用无索引精确扫描（`<=>` 距离排序），当前数据量级（百级）足够。
+        - `filters` 支持 channel / department / business_domain / sensitivity_level /
+          submitted_from/to / requester / has_version_ge，见 `_build_metadata_filter`。
+        """
         if not query_vector:
             return []
         where_clause, params = self._build_metadata_filter(filters)
@@ -59,6 +66,7 @@ class RequirementVectorRepository:
                     LEFT JOIN requirement_version v ON v.requirement_id = rm.id
                     LEFT JOIN requirement_version_source vs ON vs.version_id = v.id
                     LEFT JOIN requirement_source s ON s.id = vs.source_id
+
                     WHERE 1 = 1 {where_clause}
                     GROUP BY rm.id, rm.requirement_key, rm.requirement_name, rm.final_requirement,
                              rm.status, re.embedding
@@ -87,26 +95,31 @@ class RequirementVectorRepository:
         return results
 
     def upsert(self, requirement_id: int, embedding: list[float], *, source_text: str) -> dict[str, object]:
+        """写入/更新一条需求向量（按 requirement_id 唯一，重复执行幂等覆盖）。
+
+        id 由应用层雪花生成器分配（`new_id()`），不再依赖数据库自增。
+        """
         with self._connect() as conn:
             register_vector(conn)
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO requirement_embedding (requirement_id, embedding, source_text)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO requirement_embedding (id, requirement_id, embedding, source_text)
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT (requirement_id) DO UPDATE SET
                         embedding = EXCLUDED.embedding,
                         source_text = EXCLUDED.source_text,
                         updated_at = NOW()
                     RETURNING requirement_id, source_text
                     """,
-                    (requirement_id, embedding, source_text),
+                    (new_id(), requirement_id, embedding, source_text),
                 )
                 result = cur.fetchone()
             conn.commit()
         return {"requirement_id": result[0], "source_text": result[1]}
 
     def build_similarity_filter(self, rows: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+        """按 score 降序取前 limit 条候选（上限 50），用于二次精排。"""
         ordered = sorted(rows, key=lambda row: float(row.get("score", 0.0)), reverse=True)
         return ordered[: max(1, min(limit, 50))]
 

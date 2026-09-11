@@ -9,6 +9,7 @@ import json
 
 from sqlalchemy import text
 
+from src.common.snowflake import new_id
 from src.common.time import as_display_iso
 from src.infrastructure.db.session import SessionLocal
 
@@ -34,12 +35,13 @@ class MemoryRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO memory_note (actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta, embedding)
-                    VALUES (:actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB), CAST(:embedding AS vector))
+                    INSERT INTO memory_note (id, actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta, embedding)
+                    VALUES (:id, :actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB), CAST(:embedding AS vector))
                     RETURNING id, actor_id, kind, status, active, content, source_conversation_id, source_message_id, ref_requirement_key, superseded_by, importance, meta, created_at, updated_at
                     """
                 ),
                 {
+                    "id": new_id(),
                     "actor_id": actor_id,
                     "kind": kind,
                     "content": content,

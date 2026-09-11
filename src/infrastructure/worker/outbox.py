@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.snowflake import new_id
 from src.common.time import utc_now
 from src.config.settings import settings
 from src.infrastructure.db.session import SessionLocal
@@ -59,13 +60,14 @@ class OutboxRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO outbox_event (aggregate_type, aggregate_id, event_type, payload, status)
-                    VALUES (:aggregate_type, :aggregate_id, :event_type, CAST(:payload AS JSONB), 'pending')
+                    INSERT INTO outbox_event (id, aggregate_type, aggregate_id, event_type, payload, status)
+                    VALUES (:id, :aggregate_type, :aggregate_id, :event_type, CAST(:payload AS JSONB), 'pending')
                     RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                               retry_count, last_error, created_at
                     """
                 ),
                 {
+                    "id": new_id(),
                     "aggregate_type": aggregate_type,
                     "aggregate_id": aggregate_id,
                     "event_type": event_type,
@@ -137,6 +139,11 @@ class OutboxRepository:
         return [self._from_row(row) for row in rows]
 
     def list_pending(self, limit: int = 20) -> list[OutboxEvent]:
+        """返回待处理（status='pending'）事件，按创建时间升序。
+
+        与 `claim_pending` 不同，本方法**不加锁**，仅用于只读排查/展示，
+        不推荐作为 worker 消费入口（消费应走 claim_pending 保证并发安全）。
+        """
         with SessionLocal() as session:
             rows = session.execute(
                 text(
@@ -154,6 +161,10 @@ class OutboxRepository:
         return [self._from_row(row) for row in rows]
 
     def mark_done(self, event: OutboxEvent, session: Session | None = None) -> OutboxEvent:
+        """事件执行成功：置 completed，清空 last_error 与 locked_at。
+
+        幂等：重复调用同一 event 只是再置一次 completed，无害。
+        """
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -190,6 +201,7 @@ class OutboxRepository:
         max_retries: int = 3,
         session: Session | None = None,
     ) -> OutboxEvent:
+        """事件执行失败：retry_count+1；未达上限回 pending 以重试，达到上限转 dead_letter。"""
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -227,6 +239,7 @@ class OutboxRepository:
             raise
 
     def list_dead_letters(self, limit: int = 50) -> list[OutboxEvent]:
+        """返回已死亡（status='dead_letter'）事件，按最近更新时间倒序，供人工介入排查。"""
         with SessionLocal() as session:
             rows = session.execute(
                 text(

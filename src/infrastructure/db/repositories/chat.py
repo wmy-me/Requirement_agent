@@ -9,6 +9,7 @@ import json
 
 from sqlalchemy import text
 
+from src.common.snowflake import new_id
 from src.common.time import as_display_iso
 from src.infrastructure.db.session import SessionLocal
 
@@ -154,8 +155,8 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO agent_message (conversation_id, role, content, client_message_id, meta)
-                    VALUES (CAST(:conversation_id AS UUID), 'user', :content, :client_message_id, CAST(:meta AS JSONB))
+                    INSERT INTO agent_message (id, conversation_id, role, content, client_message_id, meta)
+                    VALUES (:id, CAST(:conversation_id AS UUID), 'user', :content, :client_message_id, CAST(:meta AS JSONB))
                     ON CONFLICT (conversation_id, client_message_id) WHERE client_message_id IS NOT NULL DO UPDATE SET
                         content = EXCLUDED.content,
                         meta = EXCLUDED.meta
@@ -163,6 +164,7 @@ class ChatRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "conversation_id": conversation_id,
                     "content": content,
                     "client_message_id": client_message_id,
@@ -186,8 +188,8 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO agent_run (conversation_id, client_message_id, status, error, meta)
-                    VALUES (CAST(:conversation_id AS UUID), :client_message_id, :status, :error, CAST(:meta AS JSONB))
+                    INSERT INTO agent_run (id, conversation_id, client_message_id, status, error, meta)
+                    VALUES (:id, CAST(:conversation_id AS UUID), :client_message_id, :status, :error, CAST(:meta AS JSONB))
                     ON CONFLICT (conversation_id, client_message_id) WHERE client_message_id IS NOT NULL DO UPDATE SET
                         status = EXCLUDED.status,
                         error = EXCLUDED.error,
@@ -197,6 +199,7 @@ class ChatRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "conversation_id": conversation_id,
                     "client_message_id": client_message_id,
                     "status": status,
@@ -296,12 +299,13 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO agent_message (conversation_id, role, content, artifacts, run_id, meta)
-                    VALUES (CAST(:conversation_id AS UUID), 'assistant', :content, CAST(:artifacts AS JSONB), CAST(:run_id AS UUID), CAST(:meta AS JSONB))
+                    INSERT INTO agent_message (id, conversation_id, role, content, artifacts, run_id, meta)
+                    VALUES (:id, CAST(:conversation_id AS UUID), 'assistant', :content, CAST(:artifacts AS JSONB), CAST(:run_id AS UUID), CAST(:meta AS JSONB))
                     RETURNING id, conversation_id, role, content, artifacts, client_message_id, run_id, meta, created_at
                     """
                 ),
                 {
+                    "id": new_id(),
                     "conversation_id": conversation_id,
                     "content": content,
                     "artifacts": json.dumps(artifacts or {}),

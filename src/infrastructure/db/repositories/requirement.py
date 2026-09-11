@@ -12,6 +12,7 @@ import json
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.common.snowflake import new_id
 from src.common.time import as_display_iso
 from src.domain.requirement import RequirementMaster, RequirementSource, RequirementVersion
 from src.infrastructure.db.session import SessionLocal
@@ -34,10 +35,10 @@ class RequirementSourceRepository:
                 text(
                     """
                     INSERT INTO requirement_source (
-                        idempotency_key, source_type, source_event_id, requester_id, requester_name,
+                        id, idempotency_key, source_type, source_event_id, requester_id, requester_name,
                         original_text, extracted_text, original_payload, metadata, submitted_at
                     ) VALUES (
-                        :idempotency_key, :source_type, :source_event_id, :requester_id, :requester_name,
+                        :id, :idempotency_key, :source_type, :source_event_id, :requester_id, :requester_name,
                         :original_text, :extracted_text, :original_payload, :metadata, NOW()
                     )
                     ON CONFLICT (idempotency_key) DO UPDATE SET
@@ -55,6 +56,7 @@ class RequirementSourceRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "idempotency_key": source.idempotency_key,
                     "source_type": source.source_type,
                     "source_event_id": source.source_event_id,
@@ -354,8 +356,8 @@ class RequirementMasterRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO requirement_master (requirement_key, requirement_name, final_requirement, current_version, status, lock_version)
-                    VALUES (:requirement_key, :requirement_name, :final_requirement, :current_version, :status, :lock_version)
+                    INSERT INTO requirement_master (id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version)
+                    VALUES (:id, :requirement_key, :requirement_name, :final_requirement, :current_version, :status, :lock_version)
                     ON CONFLICT (requirement_key) DO UPDATE SET
                         requirement_name = EXCLUDED.requirement_name,
                         final_requirement = EXCLUDED.final_requirement,
@@ -367,6 +369,7 @@ class RequirementMasterRepository:
                     """
                 ),
                 {
+                    "id": new_id(),
                     "requirement_key": requirement.requirement_key,
                     "requirement_name": requirement.requirement_name,
                     "final_requirement": requirement.final_requirement,
@@ -576,16 +579,17 @@ class RequirementVersionRepository:
                 text(
                     """
                     INSERT INTO requirement_version (
-                        requirement_id, parent_version_id, version_no, version_title, change_type,
+                        id, requirement_id, parent_version_id, version_no, version_title, change_type,
                         requirement_snapshot, change_summary, diff_payload, created_by, reviewed_by, feature_changes, parent_version_no
                     ) VALUES (
-                        :requirement_id, :parent_version_id, :version_no, :version_title, :change_type,
+                        :id, :requirement_id, :parent_version_id, :version_no, :version_title, :change_type,
                         :requirement_snapshot, :change_summary, :diff_payload, :created_by, :reviewed_by, :feature_changes, :parent_version_no
                     )
                     RETURNING id, requirement_id, version_no
                     """
                 ),
                 {
+                    "id": new_id(),
                     "requirement_id": version.requirement_id,
                     "parent_version_id": version.parent_version_id,
                     "version_no": version.version_no,
