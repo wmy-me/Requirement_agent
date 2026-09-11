@@ -85,10 +85,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-requirement-attachments}
       API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
       API_ACTOR_ID: ${API_ACTOR_ID:-api-operator}
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
-      MCP_ACTOR_ID: ${MCP_ACTOR_ID:-dify-mcp-client}
-      MCP_ISSUER_URL: ${MCP_ISSUER_URL:-http://localhost:8000}
-      MCP_RESOURCE_URL: ${MCP_RESOURCE_URL:-http://localhost:8000/mcp}
+      TOOL_ACTOR_ID: ${TOOL_ACTOR_ID:-tool-client}
       LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
@@ -106,29 +103,6 @@ services:
       - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8888}:8888"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    networks:
-      - backend
-    restart: unless-stopped
-
-  mcp:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    command: ["uvicorn", "apps.mcp.server:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment:
-      <<: *app-environment
-      APP_PORT: 8888
-      MCP_PORT: 8000
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    ports:
-      - "${MCP_BIND_ADDRESS:-127.0.0.1}:${MCP_PORT:-8000}:8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 10

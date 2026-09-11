@@ -1,0 +1,52 @@
+"""需求相关 API Schema：提交请求/响应。"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class RequirementSubmitRequest(BaseModel):
+    """提交一条待分析需求的请求体（文本通道入口）。
+
+    - `source_type`：输入渠道，当前限 web/email/meeting/manual（扩展渠道需同步放宽此处枚举）。
+    - `source_event_id`：渠道侧事件 ID，预留做幂等去重（当前仍以原文哈希为主）。
+    - `metadata`：调用方附加的自定义元信息，随 source 一并落库（JSONB）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["web", "email", "meeting", "manual"] = "web"
+    source_event_id: str | None = Field(default=None, max_length=200)
+    requester_id: str | None = Field(default=None, max_length=120)
+    requester_name: str | None = Field(default=None, max_length=120)
+    original_text: str = Field(min_length=1, max_length=20_000)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("source_event_id", "requester_id", "requester_name", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        """可选文本字段：trim 空白，空串归一为 None。"""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("original_text")
+    @classmethod
+    def require_text(cls, value: str) -> str:
+        """正文必填且不能为空白，避免空需求入库。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("original_text must not be blank")
+        return normalized
+
+
+class RequirementSubmitResponse(BaseModel):
+    """提交需求的响应体，`source_id` 供后续审核/回放引用。"""
+
+    message: str
+    source_type: str
+    status: str = "pending_review"
+    source_id: int | None = None

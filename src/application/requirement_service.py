@@ -17,7 +17,7 @@ class RequirementService:
 
     职责：把一条来源需求写入 requirement_source，跑 LangGraph 分析图
     （抽取→检索→冲突/重复分析→风险→决策），并把结构化结果回填到来源元数据、
-    置为待审核。HTTP 路由与 MCP 都经由本服务，不直接操作领域逻辑。
+    置为待审核。HTTP 路由与内部 Tool 方法都经由本服务，不直接操作领域逻辑。
     """
 
     def __init__(
@@ -45,7 +45,7 @@ class RequirementService:
         流程：保存来源 → 清洗/分段规整文本 → 跑 LangGraph 分析图 →
         将 extracted/analysis/risk/retrieval_filters 回填 metadata →
         置 pending_review。返回结构含 source_id、status、analysis、risk 等，
-        供调用方（HTTP/MCP/前端卡片）直接展示。
+        供调用方（HTTP/内部 Tool/前端卡片）直接展示。
         """
         saved_source = self.source_repo.save(source)
         if saved_source.processing_status not in {"received", "failed"}:

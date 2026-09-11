@@ -60,28 +60,15 @@ async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/api/v1/health/db")
-async def database_health() -> dict[str, object]:
-    """数据库连通性检查：返回 {"database": bool, "status": ...}。"""
-    ok, message = check_database_connection()
-    return {"database": ok, "status": message}
+# —— 健康检查组：已迁移至 requirement_agent.api.routes.health（子批次 3.2.3）——
+# 在原位置 include 子 router；旧路径函数名继续可用（兼容转发）。
+from src.requirement_agent.api.routes.health import (  # noqa: E402,F401
+    database_health,
+    llm_health,
+)
+from src.requirement_agent.api.routes.health import router as _health_router  # noqa: E402
 
-
-@router.get("/api/v1/health/llm")
-async def llm_health() -> dict[str, object]:
-    """LLM 配置检查：返回 chat 与 embedding 是否配置及所用 provider / model。"""
-    provider = LLMProvider()
-    return {
-        "configured": provider.is_configured(),
-        "provider": provider.provider_name,
-        "model": provider.model,
-        "embedding": {
-            "configured": provider.embedding_configured(),
-            "base_url": provider._embedding_base_url(),
-            "model": provider.embedding_model,
-            "dimension": settings.embedding_dimension,
-        },
-    }
+router.include_router(_health_router)
 
 
 @router.get("/api/v1/requirements")
@@ -231,53 +218,15 @@ async def ingest_requirement(
     )
 
 
-@router.get("/api/v1/requirements/search")
-async def search_requirements(
-    q: str = Query(default="", max_length=500),
-    channel: str | None = Query(default=None, max_length=60),
-    requester: str | None = Query(default=None, max_length=120),
-    department: str | None = Query(default=None, max_length=120),
-    business_domain: str | None = Query(default=None, max_length=120),
-    sensitivity_level: str | None = Query(default=None, max_length=60),
-    submitted_from: str | None = Query(default=None, max_length=40),
-    submitted_to: str | None = Query(default=None, max_length=40),
-    has_version_ge: int | None = Query(default=None, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
-) -> dict[str, object]:
-    """多维检索需求：关键字 + 渠道/人/部门/领域/密级/时间/版本组合筛选。"""
-    filters: dict[str, object] = {
-        "channel": (channel or "").strip() or None,
-        "requester": (requester or "").strip() or None,
-        "department": (department or "").strip() or None,
-        "business_domain": (business_domain or "").strip() or None,
-        "sensitivity_level": (sensitivity_level or "").strip() or None,
-        "submitted_from": (submitted_from or "").strip() or None,
-        "submitted_to": (submitted_to or "").strip() or None,
-        "has_version_ge": has_version_ge,
-    }
-    filters = {key: value for key, value in filters.items() if value not in (None, "")}
-    rows = retrieval_service.search((q or "").strip(), limit=limit, filters=filters)
-    return {"items": rows}
+# —— 相似需求检索组：已迁移至 requirement_agent.api.routes.requirements（子批次 3.2.2）——
+# 在原位置 include 独立子 router；旧路径函数名继续可用（兼容转发）。
+from src.requirement_agent.api.routes.requirements import (  # noqa: E402,F401
+    search_requirement_features,
+    search_requirements,
+)
+from src.requirement_agent.api.routes.requirements import search_router as _requirements_search_router  # noqa: E402
 
-
-@router.get("/api/v1/requirements/features/search")
-async def search_requirement_features(
-    q: str = Query(default="", max_length=500),
-    status: str | None = Query(default=None, max_length=60),
-    requester: str | None = Query(default=None, max_length=120),
-    has_version_ge: int | None = Query(default=None, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
-) -> dict[str, object]:
-    """按功能条目检索：返回匹配 feature 行 {"items": [...]}。"""
-    return {
-        "items": retrieval_service.search_features(
-            (q or "").strip(),
-            status=status,
-            requester=requester,
-            has_version_ge=has_version_ge,
-            limit=limit,
-        )
-    }
+router.include_router(_requirements_search_router)
 
 
 @router.get("/api/v1/documents")
@@ -330,91 +279,21 @@ async def reindex_document_chunks(document_id: int) -> dict[str, object]:
     return {"status": "queued", "result": result, "document_id": document_id}
 
 
-@router.get("/api/v1/conversations")
-async def list_conversations(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0), actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
-    """会话列表：按 actor 分页返回会话 {"items": [...]}。"""
-    normalized_actor_id = actor_id_or_default(actor_id)
-    return {"items": chat_repo.list_conversations(actor_id=normalized_actor_id, limit=limit, offset=offset)}
+# —— 会话（conversations）域：已迁移至 requirement_agent.api.routes.conversations（子批次 3.3.4）——
+# 整块（只读 + 写 + finalize 连续）在原位置 include 子 router，保持注册顺序；
+# 旧路径函数名继续可用（兼容转发，同一对象）。
+from src.requirement_agent.api.routes.conversations import (  # noqa: E402,F401
+    add_conversation_message,
+    create_conversation,
+    delete_conversation,
+    finalize_conversation,
+    get_conversation_messages,
+    list_conversations,
+    update_conversation,
+)
+from src.requirement_agent.api.routes.conversations import router as _conversations_router  # noqa: E402
 
-
-@router.post("/api/v1/conversations")
-async def create_conversation(payload: ConversationCreateRequest) -> dict[str, object]:
-    """新建会话：按标题与 actor 创建，返回会话对象。"""
-    actor_id = actor_id_or_default(payload.actor_id)
-    conversation = chat_repo.create_conversation(actor_id=actor_id, title=payload.title)
-    return conversation
-
-
-@router.get("/api/v1/conversations/{conversation_id}/messages")
-async def get_conversation_messages(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
-    """按会话 id 分页读取消息，返回 {"conversation_id", "items": [...]}。"""
-    normalized_actor_id = actor_id_or_default(actor_id)
-    conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
-    if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    return {"conversation_id": conversation_id, "items": chat_repo.get_messages(conversation_id)}
-
-
-@router.post("/api/v1/conversations/{conversation_id}/messages")
-async def add_conversation_message(conversation_id: str, payload: ConversationMessageCreateRequest) -> dict[str, object]:
-    """向会话追加一条用户消息，返回落库后的消息对象 {"message": ...}。"""
-    actor_id = actor_id_or_default(payload.actor_id)
-    conversation = chat_repo.get_conversation(conversation_id, actor_id=actor_id)
-    if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    message = chat_repo.upsert_user_message(
-        conversation_id=conversation_id,
-        content=payload.message,
-        actor_id=actor_id,
-        client_message_id=payload.client_message_id or str(uuid4()),
-    )
-    return {"message": message}
-
-
-@router.patch("/api/v1/conversations/{conversation_id}")
-async def update_conversation(conversation_id: str, payload: ConversationUpdateRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
-    """更新会话标题/摘要/状态；会话不存在返回 404，成功返回更新后的会话对象。"""
-    normalized_actor_id = actor_id_or_default(actor_id)
-    conversation = chat_repo.update_conversation(
-        conversation_id,
-        title=payload.title,
-        summary=payload.summary,
-        status=payload.status,
-        actor_id=normalized_actor_id,
-    )
-    if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    return conversation
-
-
-@router.delete("/api/v1/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, str]:
-    """删除会话：成功返回 {"status": "deleted"}，不存在返回 404。"""
-    normalized_actor_id = actor_id_or_default(actor_id)
-    deleted = chat_repo.delete_conversation(conversation_id, actor_id=normalized_actor_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    return {"status": "deleted", "conversation_id": conversation_id}
-
-
-@router.post("/api/v1/conversations/{conversation_id}/finalize")
-async def finalize_conversation(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
-    """会话收尾：生成一句话摘要 + 触发长期记忆抽取。"""
-    normalized_actor_id = actor_id_or_default(actor_id)
-    conversation = chat_repo.get_conversation(conversation_id, actor_id=normalized_actor_id)
-    if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
-    messages = chat_repo.get_messages(conversation_id)
-    transcript = "\n".join(str(msg["content"] or "") for msg in messages if msg["role"] in {"user", "assistant"})
-    summary = summarize_text(transcript)
-    chat_repo.update_conversation(conversation_id, summary=summary, actor_id=normalized_actor_id)
-    memory = memory_extractor.extract_from_conversation(
-        actor_id=normalized_actor_id,
-        conversation_id=conversation_id,
-        messages=messages,
-        existing_notes=memory_repo.list_memories(actor_id=normalized_actor_id, limit=50),
-    )
-    return {"status": "finalized", "conversation_id": conversation_id, "summary": summary, "memory": memory}
+router.include_router(_conversations_router)
 
 
 @router.get("/api/v1/memory")
@@ -469,97 +348,51 @@ async def get_memory_context(query: str = Query(min_length=1, max_length=200), a
     return {"context": memory_context_builder.build_context(normalized_actor_id, query, limit=4)}
 
 
-@router.get("/api/v1/reviews/pending")
-async def list_pending_reviews(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, object]:
-    """待人工评审列表：返回 pending_review 状态的需求 {"items": [...]}。"""
-    return {"items": source_repo.list_by_status("pending_review", limit=limit)}
+# —— 审核工作台只读查询组：已迁移至 requirement_agent.api.routes.reviews（子批次 3.2.5）——
+# 在原位置 include 子 router；旧路径函数名继续可用（兼容转发）。
+# 注：POST /api/v1/reviews/submit 为写库/事务路由，仍保留在本文件，不迁移。
+from src.requirement_agent.api.routes.reviews import (  # noqa: E402,F401
+    get_review_detail,
+    list_pending_reviews,
+)
+from src.requirement_agent.api.routes.reviews import router as _reviews_read_router  # noqa: E402
+
+router.include_router(_reviews_read_router)
 
 
-@router.get("/api/v1/reviews/{source_id}/detail")
-async def get_review_detail(source_id: int) -> dict[str, object]:
-    """评审详情：按 source_id 返回需求与相关分析的完整信息；不存在返回 404。"""
-    detail = source_repo.get_detail(source_id)
-    if detail is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="review source not found")
-    return detail
+# —— 需求来源追踪组：已迁移至 requirement_agent.api.routes.sources（子批次 3.2.4）——
+# 在原位置 include 子 router；旧路径函数名继续可用（兼容转发）。
+from src.requirement_agent.api.routes.sources import get_source_trace  # noqa: E402,F401
+from src.requirement_agent.api.routes.sources import router as _sources_router  # noqa: E402
+
+router.include_router(_sources_router)
 
 
-@router.get("/api/v1/sources/{source_id}/trace")
-async def get_source_trace(source_id: int) -> dict[str, object]:
-    """需求来源追踪：按 source_id 返回来源链路；不存在返回 404。"""
-    trace = source_repo.get_trace(source_id)
-    if trace is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source not found")
-    return trace
+# —— 只读需求查询组：已迁移至 requirement_agent.api.routes.requirements（子批次 3.2.1）——
+# 在本位置 include 子 router，保持路由注册顺序与 operationId 不变；旧路径函数名继续可用（兼容转发）。
+from src.requirement_agent.api.routes.requirements import (  # noqa: E402,F401
+    get_requirement_diff,
+    get_requirement_trace,
+    list_requirement_features,
+    list_requirement_versions,
+)
+from src.requirement_agent.api.routes.requirements import router as _requirements_query_router  # noqa: E402
+
+router.include_router(_requirements_query_router)
 
 
-@router.get("/api/v1/requirements/{requirement_key}/versions")
-async def list_requirement_versions(requirement_key: str) -> dict[str, object]:
-    """需求版本列表：按 requirement_key 返回全部版本 {"items": [...]}。"""
-    return {"items": version_repo.list_by_requirement_key(requirement_key)}
+# —— 审计事件查询组：已迁移至 requirement_agent.api.routes.audit（子批次 3.2.4）——
+# 在原位置 include 子 router；旧路径函数名继续可用（兼容转发）。
+from src.requirement_agent.api.routes.audit import list_audit_events  # noqa: E402,F401
+from src.requirement_agent.api.routes.audit import router as _audit_router  # noqa: E402
+
+router.include_router(_audit_router)
 
 
-@router.get("/api/v1/requirements/{requirement_key}/features")
-async def list_requirement_features(
-    requirement_key: str,
-    at_version: int | None = Query(default=None, ge=1),
-    include_deleted: bool = Query(default=False),
-) -> dict[str, object]:
-    """需求特性列表：按 requirement_key（可选指定版本/是否含已删除）返回 {"items": [...]}。"""
-    return {
-        "items": feature_repo.list_by_requirement_key(
-            requirement_key,
-            at_version=at_version,
-            include_deleted=include_deleted,
-        )
-    }
+# —— 审核提交（写库 / 强事务）：已迁移至 requirement_agent.api.routes.reviews（子批次 3.3.3）——
+# 在原位置 include 子 router；旧路径函数名继续可用（兼容转发）。
+# 注：强事务语义仍由 ReviewService.submit_decision 持有，未改。
+from src.requirement_agent.api.routes.reviews import submit_review_decision  # noqa: E402,F401
+from src.requirement_agent.api.routes.reviews import submit_router as _reviews_submit_router  # noqa: E402
 
-
-@router.get("/api/v1/requirements/{requirement_key}/diff")
-async def get_requirement_diff(
-    requirement_key: str,
-    from_version: int | None = Query(default=None, ge=1),
-    to_version: int | None = Query(default=None, ge=1),
-) -> dict[str, object]:
-    """需求版本差异：对比 from_version 与 to_version 的字段差异；版本不存在返回 404。"""
-    try:
-        return feature_repo.diff_by_requirement_key(
-            requirement_key,
-            from_version=from_version,
-            to_version=to_version,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
-
-@router.get("/api/v1/requirements/{requirement_key}/trace")
-async def get_requirement_trace(requirement_key: str) -> dict[str, object]:
-    """需求溯源链路：按 requirement_key 返回版本演变轨迹；不存在返回 404。"""
-    trace = version_repo.trace_by_requirement_key(requirement_key)
-    if trace is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requirement not found")
-    return trace
-
-
-@router.get("/api/v1/audit/events")
-async def list_audit_events(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, object]:
-    """审计事件列表：按时间倒序分页返回操作日志 {"items": [...]}。"""
-    return {"items": audit_repo.list_dicts(limit=limit)}
-
-
-@router.post("/api/v1/reviews/submit")
-async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, object]:
-    """提交评审结论：记录决策并生成/更新需求与特性；冲突时返回 409。"""
-    try:
-        return review_service.submit_decision(
-            source_id=payload.source_id,
-            decision=payload.decision,
-            reviewer_id=settings.api_actor_id,
-            target_requirement_key=payload.target_requirement_key,
-            reviewer_name=payload.reviewer_name,
-            comment=payload.comment,
-            edited_requirement=payload.edited_requirement,
-            feature_overrides=payload.feature_overrides,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+router.include_router(_reviews_submit_router)

@@ -10,7 +10,6 @@ class Settings(BaseSettings):
 
     app_env: str = Field(default="dev", alias="APP_ENV")
     app_port: int = Field(default=8888, alias="APP_PORT")
-    mcp_port: int = Field(default=8000, alias="MCP_PORT")
     # 业务展示时区（如 Asia/Shanghai）：数据库统一以 UTC 存储，前端展示时转成本地时区
     display_timezone: str = Field(default="Asia/Shanghai", alias="DISPLAY_TIMEZONE")
 
@@ -27,10 +26,8 @@ class Settings(BaseSettings):
 
     api_auth_token: SecretStr = Field(default=SecretStr(""), alias="API_AUTH_TOKEN")
     api_actor_id: str = Field(default="api-user", alias="API_ACTOR_ID")
-    mcp_auth_token: SecretStr = Field(default=SecretStr(""), alias="MCP_AUTH_TOKEN")
-    mcp_actor_id: str = Field(default="mcp-client", alias="MCP_ACTOR_ID")
-    mcp_issuer_url: str = Field(default="http://localhost:8000", alias="MCP_ISSUER_URL")
-    mcp_resource_url: str = Field(default="http://localhost:8000/mcp", alias="MCP_RESOURCE_URL")
+    # 内部 Tool 方法（src/requirement_agent/tools）审核时使用的 reviewer_id。
+    tool_actor_id: str = Field(default="tool-client", alias="TOOL_ACTOR_ID")
 
     llm_provider: str = Field(default="deepseek", alias="LLM_PROVIDER")
     openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")
@@ -122,10 +119,6 @@ class Settings(BaseSettings):
     def require_api_auth(self) -> None:
         if not self.api_auth_token.get_secret_value().strip():
             raise RuntimeError("API_AUTH_TOKEN must be configured for protected API operations")
-
-    def require_mcp_auth(self) -> None:
-        if not self.mcp_auth_token.get_secret_value().strip():
-            raise RuntimeError("MCP_AUTH_TOKEN must be configured for MCP operations")
 
 
 settings = Settings()

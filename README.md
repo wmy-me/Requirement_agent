@@ -4,7 +4,7 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 
 本项目遵循分层设计，核心职责划分如下：
 
-- apps/: 服务入口，包含 API、MCP、后台任务等启动入口
+- apps/: 服务入口，包含 API、后台任务等启动入口
 - src/: 业务核心代码，包含 domain、application、infrastructure、interfaces、graph、agents、skills 等层
 - migrations/: 数据库迁移与初始化脚本
 - tests/: 单元测试、集成测试等
@@ -18,7 +18,7 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 - 进行质量、变更和技术风险评估
 - 支持人工审核与版本变更闭环
 - 维护审计日志与业务状态追踪
-- 提供 MCP 接口以便外部工具接入
+- 提供内部 Tool 方法（可直接调用的工具层）
 - 提供前端工作台用于交互式展示与使用
 
 ## 技术栈
@@ -30,7 +30,6 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 - Pydantic / Pydantic Settings
 - LangGraph 风格工作流编排
 - OpenAI 兼容 / DeepSeek 兼容 LLM
-- MCP（Model Context Protocol）
 
 ## 运行环境要求
 
@@ -80,20 +79,6 @@ cd /home/wangmengyang/Software/Requirement_agent/Requirement_agent
 - API: http://127.0.0.1:8888
 - 前端 UI: http://127.0.0.1:8888/ui
 - 健康检查: http://127.0.0.1:8888/health
-
-### 5. 启动 MCP 服务
-
-MCP 服务保留在 8000 端口：
-
-```bash
-cd /home/wangmengyang/Software/Requirement_agent/Requirement_agent
-.venv/bin/python -m uvicorn apps.mcp.server:app --host 0.0.0.0 --port 8000 --reload
-```
-
-MCP 访问地址：
-
-- MCP 入口: http://127.0.0.1:8000/mcp
-- 健康检查: http://127.0.0.1:8000/health
 
 ## 常用接口
 
@@ -169,17 +154,17 @@ curl http://127.0.0.1:8888/api/v1/health/llm
 - 审计日志
 - 版本更新
 
-### 5. MCP 接入
+### 5. 内部 Tool 方法
 
-服务支持标准 MCP 接口，可在外部客户端中调用需求搜索、审核提交、版本读取等能力。
+工具能力为**可直接调用的普通方法**（`src/requirement_agent/tools/`），
+覆盖需求提交、需求检索、审核提交、需求详情 / 版本读取与主需求列表等。
 
 ## 目录结构说明
 
 ```text
 Requirement_agent/
 ├── apps/
-│   ├── api/
-│   └── mcp/
+│   └── api/
 ├── src/
 │   ├── agents/
 │   ├── application/
@@ -188,6 +173,7 @@ Requirement_agent/
 │   ├── graph/
 │   ├── infrastructure/
 │   ├── interfaces/
+│   ├── requirement_agent/   # 重构目标包（api/routes、tools 等）
 │   └── skills/
 ├── migrations/
 ├── tests/
@@ -214,29 +200,12 @@ Address already in use
 请检查并清理旧的 uvicorn 进程，再重新启动：
 
 ```bash
-ss -lntp | grep 8000
 ss -lntp | grep 8888
 ps -ef | grep uvicorn
 kill <PID>
 ```
 
-### 2. MCP 连接失败
-
-如果出现 `socksio` 相关错误，先在项目虚拟环境中安装：
-
-```bash
-. .venv/bin/activate
-pip install "httpx[socks]"
-```
-
-并清理代理变量：
-
-```bash
-unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
-unset http_proxy https_proxy all_proxy
-```
-
-### 3. 主服务没有按 8888 启动
+### 2. 主服务没有按 8888 启动
 
 如果你使用的是：
 
@@ -256,7 +225,7 @@ uvicorn main:app --reload
 
 - 完整的 Python/FastAPI 项目骨架
 - PostgreSQL 数据层与业务表结构
-- MCP 服务入口
+- 内部 Tool 方法层
 - LLM 适配器
 - 真实 Agent + Skill 结构
 - LangGraph 风格工作流
@@ -270,4 +239,3 @@ uvicorn main:app --reload
 - 每次修改关键逻辑，优先运行相关单测
 - 确保 `.env` 中不提交真实密钥
 - 所有敏感信息统一放在环境变量中
-- MCP 与主 API 分开部署，端口保持区分

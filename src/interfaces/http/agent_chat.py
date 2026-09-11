@@ -442,29 +442,13 @@ async def _chat_stream_files_events(
         yield frame
 
 
-@router.post("/api/v1/agent/run")
-async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
-    """与 /chat/stream 共享的分析管线（非流式，供回放/兼容）。"""
-    extracted = extract_agent.extract(
-        payload.original_text,
-        source_type=payload.source_type,
-        requester_name=payload.requester_name,
-    )
-    candidates = retrieval_service.search(extracted.summary or payload.original_text, limit=5)
-    analysis = analyze_agent.analyze(extracted, candidates)
-    risk = risk_agent.assess(extracted)
-    risk_payload = risk.model_dump(mode="python")
-    analysis_payload = analysis.model_dump(mode="python")
-    return {
-        "status": "ok",
-        "steps": ["extract", "retrieve", "analyze", "risk", "review_decision"],
-        "extracted": extracted.model_dump(mode="python"),
-        "candidates": candidates,
-        "analysis": analysis_payload,
-        "risk": risk_payload,
-        "review_required": decision_review_required(analysis_payload, risk_payload),
-        "next_action": decision_next_action(analysis_payload, risk_payload),
-    }
+# —— Agent 分析管线（/agent/run）：已迁移至 requirement_agent.api.routes.agent（子批次 3.3.2）——
+# 在原位置 include 子 router，保持注册顺序；旧路径函数名继续可用（同一对象）。
+# 本文件内的 chat_with_agent 亦复用该函数（经下方 import 解析）。
+from src.requirement_agent.api.routes.agent import run_agent_pipeline  # noqa: E402,F401
+from src.requirement_agent.api.routes.agent import router as _agent_run_router  # noqa: E402
+
+router.include_router(_agent_run_router)
 
 
 @router.post("/api/v1/agent/chat")
