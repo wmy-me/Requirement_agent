@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.config.settings import settings
+from src.requirement_agent.config.settings import settings
 from src.requirement_agent.api.dependencies import review_service, source_repo
 from src.requirement_agent.api.schemas import ReviewSubmitRequest
 

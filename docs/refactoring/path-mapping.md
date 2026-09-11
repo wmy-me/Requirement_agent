@@ -83,4 +83,7 @@
   `system.py`（/、/health）、`requirements_write.py`（列表/submit/ingest）、
   `documents.py`（5 条）、`memory.py`（4 条）、`agent_chat.py`（agent 5 条 + SSE 辅助，整文件 `git mv`）。
   至此 **rest.py 与 agent_chat.py 均为纯转发壳**，全部 42 条路由实现在 `api/routes/`。
-- 后续：`_state.py`→`api/dependencies.py`、剩余 5 Schema、清理未使用导入（3.4）。
+- 子批次3.3.6（**阶段1 收尾**）：`_state.py`→`api/dependencies.py`；剩余 5 个 Schema→
+  `api/schemas/{agent,conversations}.py`；路由聚合器→`api/router.py`（保留两级聚合）；
+  **删除整个 `src/interfaces/`**（http 包 + 空包）。至此新包自洽，旧路径不再被引用。
+- 阶段 1（结构重组）**完成**：全部 42 路由 + 依赖 + Schema + 聚合器均在 `src/requirement_agent/` 下。

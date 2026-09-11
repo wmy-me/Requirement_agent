@@ -1,7 +1,7 @@
 """校验 AnalyzeSkill 对 LLM 布尔字段的交叉修正：消除 duplicate∧independent 等自相矛盾。"""
 
-from src.agents.extract_agent import ExtractedRequirement
-from src.skills.analyze_skill import AnalyzeSkill
+from src.requirement_agent.agents.extract_agent import ExtractedRequirement
+from src.requirement_agent.skills.analyze_skill import AnalyzeSkill
 
 
 class FakeProvider:

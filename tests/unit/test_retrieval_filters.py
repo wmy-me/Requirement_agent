@@ -1,5 +1,5 @@
-from src.application.retrieval_service import RetrievalService
-from src.infrastructure.vector.pgvector_repository import RequirementVectorRepository
+from src.requirement_agent.application.retrieval_service import RetrievalService
+from src.requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 
 
 class FakeMasterRepo:

@@ -1,5 +1,11 @@
-"""目标命名空间：workflows —— LangGraph 状态与节点编排。
+"""LangGraph orchestration layer for the requirement workflow."""
 
-当前实际代码在 src/graph/（graphs / agents_nodes / commit_nodes / state / canonical）。
-子批次 5 迁移内容到本包；迁移期间保持 src.graph 兼容。
-"""
+from src.requirement_agent.workflows.graphs import (
+    analysis_graph,
+    decision_graph,
+    run_analysis,
+    run_decision,
+)
+from src.requirement_agent.workflows.state import RequirementState
+
+__all__ = ["analysis_graph", "decision_graph", "run_analysis", "run_decision", "RequirementState"]

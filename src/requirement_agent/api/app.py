@@ -15,8 +15,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.config.settings import settings
-from src.infrastructure.worker.consumer import OutboxConsumer
+from src.requirement_agent.config.settings import settings
+from src.requirement_agent.infrastructure.worker.consumer import OutboxConsumer
 from src.requirement_agent.api.router import router
 
 # 项目根目录：本文件位于 <root>/src/requirement_agent/api/app.py

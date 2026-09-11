@@ -43,3 +43,4 @@
 | 项 | 说明 |
 |---|---|
 | `src/interfaces/api/`（routes/schemas）、`src/interfaces/http/auth.py` | 早前「死代码清理」已删除并提交（`5c5386f`）；当前无残留引用 |
+| **`src/interfaces/` 整个包** | 阶段1 收尾（commit `180578b`）已删除：全部路由/依赖/Schema/聚合器迁至 `src/requirement_agent/api/`；可由 git 历史恢复 |

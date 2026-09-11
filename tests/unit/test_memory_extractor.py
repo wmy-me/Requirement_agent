@@ -1,6 +1,6 @@
 """MemoryExtractor / MemoryContextBuilder 单元测试（fake repo/LLM/embedding，不连库）。"""
 
-from src.application.memory_service import MemoryContextBuilder, MemoryExtractor
+from src.requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
 
 
 class FakeEmbedding:

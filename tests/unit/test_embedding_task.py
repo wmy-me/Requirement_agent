@@ -1,5 +1,5 @@
-from src.infrastructure.worker.outbox import OutboxEvent
-from src.infrastructure.worker.tasks import EmbeddingTask
+from src.requirement_agent.infrastructure.worker.outbox import OutboxEvent
+from src.requirement_agent.infrastructure.worker.tasks import EmbeddingTask
 
 
 class FakeOutboxRepo:

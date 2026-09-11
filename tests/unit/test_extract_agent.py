@@ -1,4 +1,4 @@
-from src.agents.extract_agent import ExtractAgent
+from src.requirement_agent.agents.extract_agent import ExtractAgent
 
 
 def test_extract_agent_basic() -> None:

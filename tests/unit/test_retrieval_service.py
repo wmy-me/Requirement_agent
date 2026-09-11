@@ -1,4 +1,4 @@
-from src.application.retrieval_service import RetrievalService
+from src.requirement_agent.application.retrieval_service import RetrievalService
 
 
 def test_retrieval_service_returns_candidates() -> None:

@@ -7,14 +7,14 @@
 
 from __future__ import annotations
 
-from src.agents.analyze_agent import AnalyzeAgent
-from src.agents.extract_agent import ExtractAgent
-from src.agents.risk_agent import RiskAgent
-from src.application.memory_service import MemoryContextBuilder, MemoryExtractor
-from src.application.requirement_service import RequirementService
-from src.application.retrieval_service import RetrievalService
-from src.application.review_service import ReviewService
-from src.infrastructure.db.repositories import (
+from src.requirement_agent.agents.analyze_agent import AnalyzeAgent
+from src.requirement_agent.agents.extract_agent import ExtractAgent
+from src.requirement_agent.agents.risk_agent import RiskAgent
+from src.requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
+from src.requirement_agent.application.requirement_service import RequirementService
+from src.requirement_agent.application.retrieval_service import RetrievalService
+from src.requirement_agent.application.review_service import ReviewService
+from src.requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
     ChatRepository,
     DocumentAssetRepository,
@@ -23,12 +23,12 @@ from src.infrastructure.db.repositories import (
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
-from src.infrastructure.embedding.embedding_service import EmbeddingService
-from src.infrastructure.llm.openai_provider import LLMProvider
-from src.infrastructure.parser.document_parser import DocumentParser
-from src.infrastructure.storage.object_store import ObjectStorage
-from src.infrastructure.worker.tasks import DocumentChunkingTask
-from src.config.settings import settings
+from src.requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from src.requirement_agent.infrastructure.parser.document_parser import DocumentParser
+from src.requirement_agent.infrastructure.storage.object_store import ObjectStorage
+from src.requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
+from src.requirement_agent.config.settings import settings
 
 # —— 领域服务 ——
 requirement_service = RequirementService()

@@ -18,9 +18,9 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
-from src.application.decision_rules import next_action_for as decision_next_action
-from src.application.decision_rules import review_required as decision_review_required
-from src.infrastructure.llm.openai_provider import LLMProvider
+from src.requirement_agent.application.decision_rules import next_action_for as decision_next_action
+from src.requirement_agent.application.decision_rules import review_required as decision_review_required
+from src.requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from src.requirement_agent.api.dependencies import (
     actor_id_or_default,
     analyze_agent,

@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.requirement_service import RequirementService
-from src.application.retrieval_service import RetrievalService
-from src.application.review_service import ReviewService
-from src.config.settings import settings
-from src.domain.requirement import RequirementSource
-from src.infrastructure.db.repositories import RequirementMasterRepository, RequirementVersionRepository
+from src.requirement_agent.application.requirement_service import RequirementService
+from src.requirement_agent.application.retrieval_service import RetrievalService
+from src.requirement_agent.application.review_service import ReviewService
+from src.requirement_agent.config.settings import settings
+from src.requirement_agent.domain.requirement import RequirementSource
+from src.requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementVersionRepository
 
 requirement_service = RequirementService()
 retrieval_service = RetrievalService()

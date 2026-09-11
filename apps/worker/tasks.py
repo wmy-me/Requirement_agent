@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from src.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
-from src.infrastructure.worker.outbox import OutboxRepository
+from src.requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
+from src.requirement_agent.infrastructure.worker.outbox import OutboxRepository
 
 app = FastAPI(
     title="Requirement Agent Worker",

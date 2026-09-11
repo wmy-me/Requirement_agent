@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - 取决于 python-docx 是否被遮蔽
 
 pytestmark = pytest.mark.skipif(not _DOCX_OK, reason="python-docx 不可导入（本地 docx/ 目录遮蔽）")
 
-from src.infrastructure.parser.document_parser import DocumentParser
+from src.requirement_agent.infrastructure.parser.document_parser import DocumentParser
 
 
 def test_document_parser_cleans_segments_and_normalizes_fields() -> None:

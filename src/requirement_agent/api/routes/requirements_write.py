@@ -11,7 +11,7 @@ import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from src.domain.requirement import RequirementSource
+from src.requirement_agent.domain.requirement import RequirementSource
 from src.requirement_agent.api.dependencies import (
     document_chunk_task,
     document_parser,

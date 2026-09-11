@@ -1,5 +1,7 @@
-"""目标命名空间：skills —— Prompt、Schema、规则与 Skill 执行。
+"""Reusable LLM prompt skills for the requirement agent."""
 
-当前实际代码在 src/skills/（base_skill / extract_skill / analyze_skill / risk_skill / prompts）。
-子批次 5 迁移内容到本包；迁移期间保持 src.skills 兼容。
-"""
+from src.requirement_agent.skills.analyze_skill import AnalyzeSkill
+from src.requirement_agent.skills.extract_skill import ExtractSkill
+from src.requirement_agent.skills.risk_skill import RiskSkill
+
+__all__ = ["AnalyzeSkill", "ExtractSkill", "RiskSkill"]

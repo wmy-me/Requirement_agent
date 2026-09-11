@@ -1,7 +1,7 @@
-from src.agents.analyze_agent import AnalysisResult
-from src.agents.extract_agent import ExtractedRequirement
-from src.agents.risk_agent import RiskAssessment
-from src.graph import run_analysis
+from src.requirement_agent.agents.analyze_agent import AnalysisResult
+from src.requirement_agent.agents.extract_agent import ExtractedRequirement
+from src.requirement_agent.agents.risk_agent import RiskAssessment
+from src.requirement_agent.workflows import run_analysis
 
 
 def _extracted(**overrides):
@@ -22,19 +22,19 @@ def _extracted(**overrides):
 
 def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.agents.extract_agent.ExtractAgent.extract",
+        "src.requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
     )
     monkeypatch.setattr(
-        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        "src.requirement_agent.agents.retrieval_agent.RetrievalAgent.retrieve",
         lambda self, query, limit=5: [],
     )
     monkeypatch.setattr(
-        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        "src.requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
         lambda self, extracted, historical=None: AnalysisResult(independent=True),
     )
     monkeypatch.setattr(
-        "src.agents.risk_agent.RiskAgent.assess",
+        "src.requirement_agent.agents.risk_agent.RiskAgent.assess",
         lambda self, extracted: RiskAssessment(change_risk="medium"),
     )
 
@@ -55,15 +55,15 @@ def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch
 
 def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.agents.extract_agent.ExtractAgent.extract",
+        "src.requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
     )
     monkeypatch.setattr(
-        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        "src.requirement_agent.agents.retrieval_agent.RetrievalAgent.retrieve",
         lambda self, query, limit=5: [{"requirement_key": "REQ-000001", "requirement_name": "短信登录"}],
     )
     monkeypatch.setattr(
-        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        "src.requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
         lambda self, extracted, historical=None: AnalysisResult(
             duplicate=True,
             related=True,
@@ -74,7 +74,7 @@ def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) ->
         ),
     )
     monkeypatch.setattr(
-        "src.agents.risk_agent.RiskAgent.assess",
+        "src.requirement_agent.agents.risk_agent.RiskAgent.assess",
         lambda self, extracted: RiskAssessment(change_risk="high"),
     )
 
@@ -88,19 +88,19 @@ def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) ->
 
 def test_analysis_graph_high_risk_triggers_manual_review(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.agents.extract_agent.ExtractAgent.extract",
+        "src.requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
     )
     monkeypatch.setattr(
-        "src.agents.retrieval_agent.RetrievalAgent.retrieve",
+        "src.requirement_agent.agents.retrieval_agent.RetrievalAgent.retrieve",
         lambda self, query, limit=5: [],
     )
     monkeypatch.setattr(
-        "src.agents.analyze_agent.AnalyzeAgent.analyze",
+        "src.requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
         lambda self, extracted, historical=None: AnalysisResult(independent=True),
     )
     monkeypatch.setattr(
-        "src.agents.risk_agent.RiskAgent.assess",
+        "src.requirement_agent.agents.risk_agent.RiskAgent.assess",
         lambda self, extracted: RiskAssessment(technical_impact_risk="high"),
     )
 

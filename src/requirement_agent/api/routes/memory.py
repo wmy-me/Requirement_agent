@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.config.settings import settings
+from src.requirement_agent.config.settings import settings
 from src.requirement_agent.api.dependencies import (
     actor_id_or_default,
     embedding_service,

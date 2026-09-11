@@ -1,5 +1,15 @@
-"""目标命名空间：agents —— 智能分析 Agent（extract / retrieve / analyze / risk）。
+"""LLM agents used by the requirement management workflow."""
 
-当前实际代码在 src/agents/。Agent 只做入口编排与启发式回退，不直接写数据库。
-子批次 5 迁移内容到本包；迁移期间保持 src.agents 兼容。
-"""
+from src.requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
+from src.requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
+from src.requirement_agent.agents.risk_agent import RiskAgent, RiskAssessment
+
+__all__ = [
+    "AnalyzeAgent",
+    "AnalysisResult",
+    "CandidateMatch",
+    "ExtractAgent",
+    "ExtractedRequirement",
+    "RiskAgent",
+    "RiskAssessment",
+]
