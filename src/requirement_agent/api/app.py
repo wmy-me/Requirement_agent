@@ -1,8 +1,8 @@
 """requirement_agent.api.app —— 统一 FastAPI 应用入口（目标命名空间）。
 
 当前行为与根 `main.py` 保持一致（应用名/版本/描述/路由 /health /ui /static、安全响应头、
-lifespan outbox 消费循环）。旧入口 main.py / apps/api/main.py / apps/api/__main__.py
-均改为薄包装转发到 `app = create_app()`，**不产生第二个 FastAPI app、不重复注册路由**。
+lifespan outbox 消费循环）。根 `main.py` 为薄包装转发到 `app = create_app()`，**不产生第二个 FastAPI app、不重复注册路由**；
+后台 Worker 入口在 `requirement_agent.workers.tasks:app`。
 """
 
 from __future__ import annotations

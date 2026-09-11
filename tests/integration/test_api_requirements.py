@@ -5,7 +5,7 @@ os.environ.setdefault("API_AUTH_TOKEN", "test-api-token")
 
 from fastapi.testclient import TestClient
 
-from apps.api.main import app
+from requirement_agent.api.app import app
 
 
 client = TestClient(app)

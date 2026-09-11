@@ -1,4 +1,4 @@
-from apps.api.main import app
+from requirement_agent.api.app import app
 
 
 def test_app_exists() -> None:

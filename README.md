@@ -4,8 +4,7 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 
 本项目遵循分层设计，核心职责划分如下：
 
-- apps/: 服务入口，包含 API、后台任务等启动入口
-- src/: 业务核心代码，包含 domain、application、infrastructure、interfaces、graph、agents、skills 等层
+- src/requirement_agent/: 业务核心（api / workers / domain / application / agents / skills / workflows / infrastructure / config / tools）
 - migrations/: 数据库迁移与初始化脚本
 - tests/: 单元测试、集成测试等
 - deploy/: 部署与环境配置
@@ -163,28 +162,28 @@ curl http://127.0.0.1:8888/api/v1/health/llm
 
 ```text
 Requirement_agent/
-├── apps/
-│   └── api/
 ├── src/
-│   ├── agents/
-│   ├── application/
-│   ├── config/
-│   ├── domain/
-│   ├── graph/
-│   ├── infrastructure/
-│   ├── interfaces/
-│   ├── requirement_agent/   # 重构目标包（api/routes、tools 等）
-│   └── skills/
+│   └── requirement_agent/          # 业务核心包（src-layout，导入名 requirement_agent.*）
+│       ├── api/                    # HTTP 接口：app / router / routes / schemas / dependencies
+│       ├── workers/                # 后台 Worker 入口（:8200）
+│       ├── domain/                 # 领域模型
+│       ├── application/            # 应用服务（需求/检索/审核/记忆/决策规则）
+│       ├── agents/                 # 智能分析 Agent（extract/analyze/retrieval/risk）
+│       ├── skills/                 # Prompt / Skill 执行
+│       ├── workflows/              # LangGraph 状态与节点编排
+│       ├── infrastructure/         # db / llm / embedding / vector / parser / storage / channels / worker
+│       ├── common/ config/         # 公共工具（时间/雪花 id）、配置
+│       └── tools/                  # 内部 Tool 方法
+├── main.py                         # 主服务入口（:8888）
 ├── migrations/
 ├── tests/
 ├── deploy/
 ├── docx/
 ├── static/
 ├── .env
-├── main.py
 ├── pyproject.toml
 ├── README.md
-└── requirements.txt / uv.lock
+└── uv.lock
 ```
 
 ## 常见问题
