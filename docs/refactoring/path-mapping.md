@@ -90,3 +90,6 @@
 - 子批次3.3.7（**其余分层全迁移**）：`domain / common / config / infrastructure / application /
   agents / skills` 整体 `git mv` 入新包；`graph → workflows`（重命名）；全局改写 64 个文件 import。
   `src/` 顶层仅剩 `requirement_agent/`。**阶段 1 至此全部完成**。
+- 子批次3.3.8（**src-layout**）：导入统一为 `requirement_agent.*`（非 `src.requirement_agent.*`）；
+  删顶层 shim；pyproject 改 src-layout；pytest `pythonpath=[src, "."]`。PyCharm `.iml` 的
+  `src` 源码根与此一致，IDE 无解析错误。
