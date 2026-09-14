@@ -1,7 +1,11 @@
 # Migrations
 
-按序号顺序执行的裸 SQL 迁移，由部署流程统一应用（`deploy/docker-compose.yml` 的
-`migrate` 服务负责，先于 `api` 启动）。
+按序号顺序执行的裸 SQL 迁移，**必须全部执行且顺序不能乱**，并先于主服务启动完成：
+
+```bash
+createdb requirement_agent
+for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
+```
 
 | 文件 | 内容 |
 |---|---|

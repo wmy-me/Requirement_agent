@@ -7,7 +7,6 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 - src/requirement_agent/: 业务核心（api / workers / domain / application / agents / skills / workflows / infrastructure / config / tools）
 - migrations/: 数据库迁移与初始化脚本
 - tests/: 单元测试、集成测试等
-- deploy/: 部署与环境配置
 - docx/: 项目文档、任务清单、问题记录等
 
 ## 项目目标
@@ -56,13 +55,17 @@ pip install -e .
 
 ### 3. 初始化数据库
 
-确保 PostgreSQL 服务已启动，并配置好 `.env` 中的数据库连接参数。
+确保 PostgreSQL 服务已启动，并配置好 `.env` 中的数据库连接参数。默认库名为 `requirement_agent`。
 
-默认库名为：
+建库并按序执行全部迁移（`001`~`007`，**缺一不可、顺序不能乱**）：
 
 ```bash
-requirement_agent
+createdb requirement_agent
+for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
 ```
+
+> 迁移必须**先于**主服务启动完成。注意 `006` 是破坏性的：它会删除三个向量索引并清空既有向量，
+> 执行前请确认不需要保留旧向量（详见 `migrations/README.md`）。
 
 ### 4. 启动主服务（前端 + API）
 
@@ -177,7 +180,6 @@ Requirement_agent/
 ├── main.py                         # 主服务入口（:8888）
 ├── migrations/
 ├── tests/
-├── deploy/
 ├── docx/
 ├── static/
 ├── .env
