@@ -44,8 +44,9 @@ def _agent_at(similarity: float, monkeypatch: pytest.MonkeyPatch) -> AnalyzeAgen
     return AnalyzeAgent(skill=AnalyzeSkill(provider=UnconfiguredProvider()))
 
 
-def test_strict_mode_keeps_historical_defaults() -> None:
-    assert thresholds_for(None) == {"duplicate": 0.70, "related": 0.45, "candidate": 0.35}
+def test_strict_mode_uses_calibrated_defaults() -> None:
+    """默认阈值是实测校准出来的（旧的 0.70/0.45/0.35 落在无关内容的相似度分布内部）。"""
+    assert thresholds_for(None) == {"duplicate": 0.80, "related": 0.72, "candidate": 0.60}
     assert thresholds_for("strict") == thresholds_for(None)
 
 
@@ -63,12 +64,12 @@ def test_unknown_mode_falls_back_to_strict() -> None:
 
 
 def test_mode_changes_verdict_for_same_similarity(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 同一相似度 0.55：strict 下只是「关联」，broad 下已算「重复」
-    strict = _agent_at(0.55, monkeypatch).analyze(_extracted(), HISTORY, analysis_mode="strict")
+    # 同一相似度 0.73：strict（重复阈值 0.80）下只是「关联」，broad（0.70）下已算「重复」
+    strict = _agent_at(0.73, monkeypatch).analyze(_extracted(), HISTORY, analysis_mode="strict")
     assert strict.duplicate is False
     assert strict.related is True
 
-    broad = _agent_at(0.55, monkeypatch).analyze(_extracted(), HISTORY, analysis_mode="broad")
+    broad = _agent_at(0.73, monkeypatch).analyze(_extracted(), HISTORY, analysis_mode="broad")
     assert broad.duplicate is True
     assert broad.independent is False
 
@@ -82,6 +83,7 @@ def test_below_candidate_threshold_stays_independent_in_every_mode(
 
 
 def test_score_label_follows_mode_thresholds() -> None:
-    assert score_label(0.55, thresholds_for("strict")) == "中"
-    assert score_label(0.55, thresholds_for("broad")) == "高"
+    assert score_label(0.73, thresholds_for("strict")) == "中"
+    assert score_label(0.73, thresholds_for("broad")) == "高"
+    assert score_label(0.73, thresholds_for("balanced")) == "中"  # balanced 重复阈值 0.75
     assert score_label(0.10, thresholds_for("broad")) == "低"

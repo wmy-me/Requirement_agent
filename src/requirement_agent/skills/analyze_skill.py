@@ -27,12 +27,13 @@ class AnalyzeSkill(BaseSkill):
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
         *,
-        duplicate_threshold: float = 0.7,
-        related_threshold: float = 0.45,
+        duplicate_threshold: float = 0.80,
+        related_threshold: float = 0.72,
     ) -> AnalysisResult:
         """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。
 
-        `duplicate_threshold` / `related_threshold` 由 AnalyzeAgent 按 analysis_mode 下发。
+        `duplicate_threshold` / `related_threshold` 由 AnalyzeAgent 按 analysis_mode 下发；
+        这里的默认值与 strict 模式保持一致（校准依据见 `analyze_agent.ANALYSIS_MODE_THRESHOLDS`）。
         """
         from requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
 
@@ -80,14 +81,15 @@ class AnalyzeSkill(BaseSkill):
             duplicate = bool(payload.get("duplicate"))
             related = bool(payload.get("related"))
             conflict = bool(payload.get("conflict"))
-            # duplicate=true 但没有任何 ≥0.7 的相似候选 → 降为 false（防假阳性）
+            # duplicate=true 但没有达到重复阈值的候选佐证 → 降为 false（防假阳性）
             if duplicate and max_similarity < duplicate_threshold:
                 duplicate = False
                 related = related or max_similarity >= related_threshold
-            # 达到重复阈值但 LLM 漏报 → 按证据补上
-            if not duplicate and max_similarity >= duplicate_threshold:
-                duplicate = True
-                related = True
+            # 这里**刻意没有**「达到阈值就补判 duplicate=True」的分支。
+            # 那条规则的前提是 similarity 为模型的独立判断；实测它只是把检索分数原样回显
+            # （0.7313209960078035 逐位相同），于是该规则等价于「向量分数高就直接判重复」，
+            # 会推翻模型自己的结论，并产出「重复=是」配「理由：非重复、非冲突」的矛盾卡片。
+            # 漏报的代价小得多，宁可漏报也不要自相矛盾。
             if not related and max_similarity >= related_threshold:
                 related = True
             independent = not (duplicate or related or conflict)

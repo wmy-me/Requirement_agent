@@ -11,12 +11,21 @@ from requirement_agent.skills.analyze_skill import AnalyzeSkill
 
 
 # 分析模式 → 阈值映射。
-# strict 使用历史默认阈值（保持既有行为）；balanced / broad 逐级放宽——
-# 阈值越低，越容易把候选判为「重复 / 相关」。
+#
+# **阈值是校准出来的，不是拍的。** 用当前 embedding 模型（Doubao-embedding）实测：
+#   - 同一文档内部分片之间（语义同源）：0.7994 ~ 0.9207
+#   - **语义无关**的文档分片 × 历史需求：平均 0.6778，最高 0.7374
+#   - 12 个语义无关组合里有 4 个 ≥ 0.70
+# 也就是说旧值 0.70 的 duplicate 阈值**落在无关内容的分布内部**，必然产生假阳性
+# （实测把「习惯打卡小程序」判成了与「后台报表导出」重复）。
+# 因此把重复阈值抬到无关分布之上；相关阈值同步抬高，否则「related」会吞掉一切。
+#
+# ⚠️ 样本只有 2 条需求，且「真重复」的上界是用同文档分片近似的（真实重复需求可能略低）。
+# 数据量上来后应重跑校准，别把这里的数字当永久真理。
 ANALYSIS_MODE_THRESHOLDS: dict[str, dict[str, float]] = {
-    "strict": {"duplicate": 0.70, "related": 0.45, "candidate": 0.35},
-    "balanced": {"duplicate": 0.60, "related": 0.38, "candidate": 0.30},
-    "broad": {"duplicate": 0.50, "related": 0.30, "candidate": 0.25},
+    "strict": {"duplicate": 0.80, "related": 0.72, "candidate": 0.60},
+    "balanced": {"duplicate": 0.75, "related": 0.68, "candidate": 0.58},
+    "broad": {"duplicate": 0.70, "related": 0.64, "candidate": 0.55},
 }
 
 
@@ -106,9 +115,9 @@ class AnalyzeAgent:
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
         *,
-        duplicate_threshold: float = 0.70,
-        related_threshold: float = 0.45,
-        candidate_threshold: float = 0.35,
+        duplicate_threshold: float = 0.80,
+        related_threshold: float = 0.72,
+        candidate_threshold: float = 0.60,
     ) -> AnalysisResult:
         """本地证据规则。
 
