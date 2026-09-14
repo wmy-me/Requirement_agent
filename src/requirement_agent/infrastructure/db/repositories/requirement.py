@@ -328,7 +328,11 @@ class RequirementSourceRepository:
             ).mappings().all()
         return [
             {
-                "source_id": int(row["id"]),
+                # **必须序列化成字符串**：雪花 id 超过 JS 的 Number.MAX_SAFE_INTEGER（2^53），
+                # 前端 JSON.parse 会把它悄悄改写（实测 224103804432285696 → ...700、
+                # 225111676653928448 → ...450），回传时就成了「source_id not found」→ 审核 409。
+                # 字符串在 JS 里原样透传；后端 pydantic 会把数字字符串再转回 int。
+                "source_id": str(row["id"]),
                 "source_type": row["source_type"],
                 "source_event_id": row["source_event_id"],
                 "requester_id": row["requester_id"],

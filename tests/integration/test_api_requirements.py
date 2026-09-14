@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -76,6 +77,26 @@ def test_export_requirements_csv_api() -> None:
     header = raw.decode("utf-8-sig").splitlines()[0]
     assert header.split(",")[0] == "需求编号"
     assert "来源渠道" in header
+
+
+def test_pending_review_ids_are_strings_not_numbers() -> None:
+    """待办的 source_id 必须以**字符串**下发，否则审核必然 409。
+
+    雪花 id 超过 JS 的 Number.MAX_SAFE_INTEGER（2^53）。按 JSON number 下发时，
+    前端 JSON.parse 会把它悄悄改写——实测 224103804432285696 → ...700、
+    225111676653928448 → ...450——回传时后端只看到「不存在的 id」→ 409。
+    字符串在 JS 里原样透传，后端 pydantic 再把数字字符串转回 int。
+    """
+    items = client.get("/api/v1/reviews/pending?limit=30").json()["items"]
+    if not items:
+        pytest.skip("库里没有待审核来源，跳过")
+
+    for item in items:
+        source_id = item["source_id"]
+        assert isinstance(source_id, str), f"source_id 必须是字符串，实际是 {type(source_id).__name__}"
+        assert int(source_id) > 0
+        # 模拟 JS 侧：字符串经过 JSON 往返必须一字不改
+        assert json.loads(json.dumps({"source_id": source_id}))["source_id"] == source_id
 
 
 def test_list_requirements_filter_narrows_results() -> None:
