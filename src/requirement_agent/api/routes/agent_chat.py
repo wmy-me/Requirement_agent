@@ -14,7 +14,7 @@ from queue import Queue
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 

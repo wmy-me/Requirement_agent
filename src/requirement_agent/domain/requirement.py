@@ -25,19 +25,6 @@ class RequirementSource:
 
 
 @dataclass(slots=True)
-class RequirementAttachment:
-    """与来源需求绑定的附件元数据。"""
-
-    source_id: int
-    file_name: str
-    content_type: str
-    object_uri: str
-    file_hash: str
-    file_size: int
-    extraction_status: str = "pending"
-
-
-@dataclass(slots=True)
 class RequirementMaster:
     """已批准落地的主需求的规范化表示。"""
 

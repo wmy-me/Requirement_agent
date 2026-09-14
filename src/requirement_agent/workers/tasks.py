@@ -51,15 +51,3 @@ async def list_dead_letter_events(limit: int = 50) -> dict[str, object]:
             for event in events
         ]
     }
-
-
-def enqueue_embedding_sync(*, requirement_id: int = 1, requirement_key: str = "REQ-000001", content: str = "") -> str:
-    """Queue a background embedding synchronization job."""
-    task = EmbeddingTask()
-    return task.enqueue(requirement_id=requirement_id, requirement_key=requirement_key, content=content)
-
-
-def enqueue_document_chunk_sync(*, document_id: int, content: str, chunk_size: int = 600, overlap: int = 120) -> str:
-    """Queue a background document chunking job."""
-    task = DocumentChunkingTask()
-    return task.enqueue(document_id=document_id, content=content, chunk_size=chunk_size, overlap=overlap)

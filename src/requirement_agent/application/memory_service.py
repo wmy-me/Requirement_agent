@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from requirement_agent.infrastructure.db.repositories import MemoryRepository
 from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService

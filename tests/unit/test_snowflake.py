@@ -1,7 +1,6 @@
 """雪花 id 生成器单测（无 DB 依赖，全内存）。"""
 
 import threading
-import time
 
 from requirement_agent.common.snowflake import Snowflake
 
