@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.prompts import RISK_SYSTEM_PROMPT, build_risk_user_prompt
 
 
 class RiskSkill(BaseSkill):
@@ -24,15 +25,8 @@ class RiskSkill(BaseSkill):
         if not self.provider.is_configured():
             return fallback
 
-        system_prompt = (
-            "你是一名企业架构与风险评估专家。请基于业务质量、变更影响和技术复杂度，"
-            "评估该需求的风险，并返回严格的 JSON 对象。"
-        )
-        prompt = (
-            "请评估当前需求的风险，字段包括：quality_risk、change_risk、technical_impact_risk、confidence。\n"
-            "quality_risk、change_risk、technical_impact_risk 的合法值为 low、medium、high。\n"
-            f"需求内容：{extracted.model_dump(mode='json')}"
-        )
+        system_prompt = RISK_SYSTEM_PROMPT
+        prompt = build_risk_user_prompt(requirement_json=extracted.model_dump(mode="json"))
 
         try:
             payload = self._generate_json(prompt, system_prompt)

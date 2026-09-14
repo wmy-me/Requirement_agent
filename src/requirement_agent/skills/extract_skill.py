@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.prompts import EXTRACT_SYSTEM_PROMPT, build_extract_user_prompt
 
 if TYPE_CHECKING:
     from requirement_agent.agents.extract_agent import ExtractedRequirement
@@ -31,23 +32,9 @@ class ExtractSkill(BaseSkill):
         if not self.provider.is_configured():
             return fallback
 
-        system_prompt = (
-            "你是一名资深业务需求分析师。请从原始需求文本中抽取结构化业务需求，"
-            "返回严格的 JSON 对象，且仅返回 JSON，不要包含 markdown 代码块。"
-        )
-        prompt = (
-            "请从下面的需求来源文本中抽取结构化需求。\n"
-            "请输出 JSON，字段说明如下：\n"
-            "- requirement_title：简洁且明确的需求标题\n"
-            "- summary：需求的业务摘要\n"
-            "- requester_name：需求发起人或发起团队，若未知则写 null\n"
-            "- source_type：需求来源渠道\n"
-            "- business_domain：业务领域，例如 auth、order、report、data、workflow、general\n"
-            "- priority：low、medium、high\n"
-            "- tags：业务标签列表\n"
-            "- requirements：子需求列表\n"
-            "- raw_text：原始文本\n"
-            f"source_type={source_type}\nrequester_name={requester_name or 'unknown'}\nraw_text:\n{raw_text}"
+        system_prompt = EXTRACT_SYSTEM_PROMPT
+        prompt = build_extract_user_prompt(
+            source_type=source_type, requester_name=requester_name, raw_text=raw_text
         )
 
         try:

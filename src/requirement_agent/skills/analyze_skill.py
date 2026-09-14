@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.prompts import ANALYZE_SYSTEM_PROMPT, build_analyze_user_prompt
 
 if TYPE_CHECKING:
     from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
@@ -30,17 +31,10 @@ class AnalyzeSkill(BaseSkill):
         if not self.provider.is_configured():
             return fallback
 
-        system_prompt = (
-            "你是一名企业需求分析师。请比较当前需求与历史需求的关系，判断其是否重复、相关、冲突或独立，"
-            "并返回严格的 JSON 对象。"
-        )
+        system_prompt = ANALYZE_SYSTEM_PROMPT
         history = historical_requirements or []
-        prompt = (
-            "请分析当前需求与历史需求的关系，并判断是否存在重复、关联、冲突或独立情况。\n"
-            "返回 JSON，字段包括：duplicate、related、conflict、independent、reasoning、candidates。\n"
-            "candidates 中每项必须有 requirement_key、title、similarity、reason。\n"
-            f"当前需求：{extracted.model_dump(mode='json')}\n"
-            f"历史需求：{history}"
+        prompt = build_analyze_user_prompt(
+            extracted_json=extracted.model_dump(mode="json"), history=history
         )
 
         try:
