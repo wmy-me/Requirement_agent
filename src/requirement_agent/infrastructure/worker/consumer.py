@@ -1,7 +1,7 @@
 """后台 outbox 消费循环。
 
-把「申请表里的 pending 事件」真正消费掉：持续把 `embedding_sync` 与
-`document_chunk_sync` 两类事件取出来跑对应的异步任务，支撑语义检索。
+把「申请表里的 pending 事件」真正消费掉：持续把 `embedding_sync`、`document_chunk_sync`
+与 `requirement_analysis` 三类事件取出来跑对应的异步任务，支撑语义检索与渠道需求的分析。
 
 设计要点：
 - 与业务写分离：本循环持有自己的 Session/事务，不影响 API 请求路径。
@@ -17,7 +17,11 @@ import logging
 import time
 
 from requirement_agent.config.settings import settings
-from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
+from requirement_agent.infrastructure.worker.tasks import (
+    DocumentChunkingTask,
+    EmbeddingTask,
+    RequirementAnalysisTask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +37,20 @@ class OutboxConsumer:
         *,
         embedding_task: EmbeddingTask | None = None,
         chunk_task: DocumentChunkingTask | None = None,
+        analysis_task: RequirementAnalysisTask | None = None,
         interval: float | None = None,
         batch: int | None = None,
     ) -> None:
         self.embedding_task = embedding_task or EmbeddingTask()
         self.chunk_task = chunk_task or DocumentChunkingTask()
+        # 分析任务要注入应用层服务，无法在此自建。未注入时该类事件不会被消费，
+        # 故显式告警——否则会变成「渠道落了库却永远停在 received」的无声故障。
+        self.analysis_task = analysis_task
+        if analysis_task is None:
+            logger.warning(
+                "event=analysis_task_missing 未注入 RequirementAnalysisTask，"
+                "requirement_analysis 事件不会被消费"
+            )
         self.interval = settings.outbox_poll_interval if interval is None else interval
         self.batch = settings.outbox_poll_batch if batch is None else batch
         self._stop = False
@@ -72,6 +85,11 @@ class OutboxConsumer:
             done += len(self.chunk_task.process_pending(limit=self.batch))
         except Exception as exc:  # noqa: BLE001
             logger.exception("document-chunk outbox 消费失败（第 %d 次）: %s", self._poll_count, exc)
+        if self.analysis_task is not None:
+            try:
+                done += len(self.analysis_task.process_pending(limit=self.batch))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("requirement-analysis outbox 消费失败（第 %d 次）: %s", self._poll_count, exc)
         return done > 0
 
     def _delay_after(self, worked: bool) -> float:

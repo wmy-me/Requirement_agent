@@ -8,14 +8,26 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from requirement_agent.common.snowflake import new_id
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.domain.requirement import RequirementMaster, RequirementSource, RequirementVersion
 from requirement_agent.infrastructure.db.session import SessionLocal
+
+logger = logging.getLogger(__name__)
+
+# 渠道事件幂等唯一索引（migrations/001_init_business_schema.sql:26-28）
+_CHANNEL_EVENT_CONSTRAINT = "uq_requirement_source_channel_event"
+
+
+def _is_channel_event_conflict(exc: IntegrityError) -> bool:
+    """判断是否撞上了渠道事件唯一索引，而非其它完整性错误（避免误吞真正的写入失败）。"""
+    return _CHANNEL_EVENT_CONSTRAINT in str(exc)
 
 
 class RequirementSourceRepository:
@@ -80,6 +92,28 @@ class RequirementSourceRepository:
             if owns_session:
                 session.close()
             return source
+        except IntegrityError as exc:
+            # 渠道事件唯一索引不在 ON CONFLICT 目标里：同一 (渠道, 事件ID) 若正文有差异
+            # （idempotency_key 因而不同），并发重投就会撞上它。此时该事件其实已入库，
+            # 回查返回既有来源即可，不必让调用方吃到 500。
+            if not owns_session:
+                raise
+            session.rollback()
+            session.close()
+            existing = (
+                self.find_by_channel_event(source.source_type, source.source_event_id)
+                if _is_channel_event_conflict(exc)
+                else None
+            )
+            if existing is None:
+                raise
+            logger.info(
+                "event=channel_event_deduplicated channel=%s event_id=%s source_id=%s",
+                source.source_type,
+                source.source_event_id,
+                existing.id,
+            )
+            return existing
         except Exception:
             if owns_session:
                 session.rollback()
@@ -201,6 +235,43 @@ class RequirementSourceRepository:
                     "SELECT id, idempotency_key, source_type, source_event_id, requester_id, requester_name, original_text, extracted_text, original_payload, metadata, processing_status, submitted_at FROM requirement_source WHERE idempotency_key = :key"
                 ),
                 {"key": idempotency_key},
+            ).mappings().first()
+        if row is None:
+            return None
+        return RequirementSource(
+            id=int(row["id"]),
+            idempotency_key=str(row["idempotency_key"]),
+            source_type=str(row["source_type"]),
+            requester_id=row["requester_id"],
+            requester_name=row["requester_name"],
+            original_text=row["original_text"],
+            extracted_text=row["extracted_text"],
+            source_event_id=row["source_event_id"],
+            original_payload=dict(row["original_payload"] or {}),
+            metadata=dict(row["metadata"] or {}),
+            processing_status=str(row["processing_status"]),
+            submitted_at=row["submitted_at"],
+        )
+
+    def find_by_channel_event(
+        self, source_type: str, source_event_id: str | None
+    ) -> RequirementSource | None:
+        """按 (渠道, 渠道事件 ID) 取已入库来源；事件 ID 为空时直接返回 None。
+
+        渠道幂等的第一道防线（第二道是 uq_requirement_source_channel_event 唯一索引）。
+        语义：同一 (渠道, 事件ID) 视为**同一条需求** —— 渠道重复投递是投递重试，
+        不是编辑操作，所以后到的正文不覆盖已入库内容。
+        """
+        if not source_event_id:
+            return None
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, idempotency_key, source_type, source_event_id, requester_id, requester_name, "
+                    "original_text, extracted_text, original_payload, metadata, processing_status, submitted_at "
+                    "FROM requirement_source WHERE source_type = :source_type AND source_event_id = :event_id"
+                ),
+                {"source_type": source_type, "event_id": source_event_id},
             ).mappings().first()
         if row is None:
             return None

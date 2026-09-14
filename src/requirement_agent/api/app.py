@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.worker.consumer import OutboxConsumer
+from requirement_agent.api.dependencies import requirement_analysis_task
 from requirement_agent.api.router import router
 
 # 项目根目录：本文件位于 <root>/src/requirement_agent/api/app.py
@@ -40,7 +41,9 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    consumer = OutboxConsumer()
+    # 显式注入分析任务：不注入的话 requirement_analysis 事件不会被消费，
+    # 渠道接入的需求会永远停在 received（consumer 会为此打告警日志）。
+    consumer = OutboxConsumer(analysis_task=requirement_analysis_task)
     thread = threading.Thread(target=consumer.start, name="outbox-consumer", daemon=True)
     if settings.outbox_consumer_enabled:
         thread.start()

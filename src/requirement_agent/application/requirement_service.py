@@ -55,7 +55,41 @@ class RequirementService:
                 "source_type": saved_source.source_type,
                 "status": saved_source.processing_status,
             }
+        return self._analyze_and_mark_pending(saved_source)
 
+    def accept_requirement(self, source: RequirementSource) -> RequirementSource:
+        """只落库、不分析：写入 requirement_source 并保持 received 状态。
+
+        渠道接入的第一段。之后由 `RequirementAnalysisTask` 异步调用 `process_requirement`，
+        这样 Webhook 能在渠道要求的超时内（飞书是 3 秒）立即返回，
+        不会因为 LLM 分析图耗时而被判超时、进而触发渠道重投。
+        """
+        return self.source_repo.save(source)
+
+    def process_requirement(self, source_id: int) -> dict[str, object]:
+        """按 source_id 跑分析并置为待审核（异步路径的第二段）。
+
+        幂等：来源若已不是 received/failed（已分析过或已在流水线上），只回现状、
+        不重复跑图 —— 所以重复消费同一条 outbox 事件是安全的。
+        """
+        source = self.source_repo.get_by_id(source_id)
+        if source is None:
+            raise ValueError(f"requirement source not found: {source_id}")
+        if source.processing_status not in {"received", "failed"}:
+            return {
+                "source_id": source.id,
+                "idempotency_key": source.idempotency_key,
+                "source_type": source.source_type,
+                "status": source.processing_status,
+            }
+        return self._analyze_and_mark_pending(source)
+
+    def _analyze_and_mark_pending(self, saved_source: RequirementSource) -> dict[str, object]:
+        """清洗规整文本 → 跑分析图 → 回填 metadata → 置 pending_review。
+
+        同步路径（`submit_requirement`）与异步路径（`process_requirement`）共用本方法，
+        保证两条入口的分析行为完全一致。
+        """
         standardized_text = self.document_parser.clean_text(saved_source.original_text or "")
         segments = self.document_parser.segment(standardized_text)
         metadata = dict(saved_source.metadata)

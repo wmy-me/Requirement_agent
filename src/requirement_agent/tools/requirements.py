@@ -9,7 +9,40 @@ from __future__ import annotations
 from typing import Any
 
 from requirement_agent.domain.requirement import RequirementSource
-from requirement_agent.tools._deps import master_repo, requirement_service, retrieval_service, version_repo
+from requirement_agent.infrastructure.channels.base import InboundRequirement
+from requirement_agent.tools._deps import (
+    channel_ingest_service,
+    master_repo,
+    requirement_service,
+    retrieval_service,
+    version_repo,
+)
+
+
+def ingest_channel_event(
+    channel: str,
+    text: str,
+    event_id: str | None = None,
+    requester_id: str | None = None,
+    requester_name: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """接入一条渠道事件：落库 + 排队分析，**不等分析结果**。
+
+    与 `submit_requirement` 的区别：本方法立即返回（渠道要求在数秒内应答），分析由后台的
+    `RequirementAnalysisTask` 补上 —— 来源会先停在 `received`，被消费后推进到 `pending_review`。
+
+    幂等：同一 (channel, event_id) 重复投递会被去重，返回既有来源。
+    """
+    inbound = InboundRequirement(
+        channel=channel,
+        text=text,
+        event_id=(event_id or "").strip() or None,
+        requester_id=(requester_id or "").strip() or None,
+        requester_name=(requester_name or "").strip() or None,
+        payload=payload or {},
+    )
+    return channel_ingest_service.ingest(inbound)
 
 
 def submit_requirement(

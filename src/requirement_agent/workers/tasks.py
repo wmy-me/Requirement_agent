@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from requirement_agent.api.dependencies import requirement_analysis_task
 from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, EmbeddingTask
 from requirement_agent.infrastructure.worker.outbox import OutboxRepository
 
@@ -30,6 +31,13 @@ async def process_embedding_events(limit: int = 20) -> dict[str, object]:
 async def process_document_chunk_events(limit: int = 20) -> dict[str, object]:
     task = DocumentChunkingTask()
     results = task.process_pending(limit=limit)
+    return {"status": "ok", "results": results}
+
+
+@app.post("/tasks/requirement-analysis/process")
+async def process_requirement_analysis_events(limit: int = 20) -> dict[str, object]:
+    """消费渠道接入的分析事件，把来源从 received 推进到 pending_review。"""
+    results = requirement_analysis_task.process_pending(limit=limit)
     return {"status": "ok", "results": results}
 
 

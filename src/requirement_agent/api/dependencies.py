@@ -12,6 +12,7 @@ import logging
 from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
+from requirement_agent.application.channel_service import ChannelIngestService
 from requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
 from requirement_agent.application.requirement_service import RequirementService
 from requirement_agent.application.retrieval_service import RetrievalService
@@ -29,7 +30,8 @@ from requirement_agent.infrastructure.embedding.embedding_service import Embeddi
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.infrastructure.parser.document_parser import DocumentParser
 from requirement_agent.infrastructure.storage.object_store import ObjectStorage
-from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
+from requirement_agent.infrastructure.channels.feishu_client import FeishuClient
+from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, RequirementAnalysisTask
 from requirement_agent.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,13 @@ memory_repo = MemoryRepository()
 # —— 记忆 / 记忆抽取 ——
 memory_context_builder = MemoryContextBuilder(memory_repo)
 memory_extractor = MemoryExtractor(memory_repo)
+
+# —— 渠道接入 ——
+# 分析任务要调用应用层服务，装配点在这里注入（见 RequirementAnalysisTask 的说明）。
+# 飞书的 app_id/app_secret 目前为空——settings 还没有飞书字段，接线时再补。
+feishu_client = FeishuClient()
+requirement_analysis_task = RequirementAnalysisTask(requirement_service.process_requirement)
+channel_ingest_service = ChannelIngestService(requirement_analysis_task)
 
 # —— Agent / 基础设施 ——
 embedding_service = EmbeddingService()
@@ -94,6 +103,7 @@ __all__ = [
     "actor_id_or_default",
     "analyze_agent",
     "audit_repo",
+    "channel_ingest_service",
     "chat_repo",
     "chat_sessions",
     "document_chunk_task",
@@ -102,10 +112,12 @@ __all__ = [
     "embedding_service",
     "extract_agent",
     "feature_repo",
+    "feishu_client",
     "memory_context_builder",
     "memory_extractor",
     "memory_repo",
     "object_storage",
+    "requirement_analysis_task",
     "requirement_service",
     "retrieval_service",
     "review_service",
