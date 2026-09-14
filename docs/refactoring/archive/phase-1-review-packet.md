@@ -130,7 +130,7 @@ grep -rnE "src\.(interfaces|domain|config|infrastructure|application|agents|skil
 1. `apps/`（api 薄壳 + worker）是否也应迁入 `src/requirement_agent/`（目标结构的 `workers/`）？现留在根、依赖 cwd。
 2. `requirement_key` 是否也要去序列化（与雪花 id 一致化）？现仍是 `REQ-000001`。
 3. §7 的 P2（`/health` 重复、tags 重复）是否授权在后续阶段一并**修正**（会变更 OpenAPI，需明确授权）？
-4. 阶段 2 的整改范围与优先级（见 `docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md`）。
+4. 阶段 2 的整改范围与优先级（见 `../../docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md`）。
 
 ---
 

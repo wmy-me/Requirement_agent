@@ -162,7 +162,7 @@ src/requirement_agent/
 
 ## 七、阶段 2–7 概览（供顾问排期，本阶段不执行）
 
-- **阶段 2**：LLM/Agent/Prompt/Skill/Embedding/检索配置整改——见 `docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md`（含 P0–P3 问题与改进建议：Prompt 去重、参数透传、可观测性、无索引向量检索等）。
+- **阶段 2**：LLM/Agent/Prompt/Skill/Embedding/检索配置整改——见 `../../docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md`（含 P0–P3 问题与改进建议：Prompt 去重、参数透传、可观测性、无索引向量检索等）。
 - **阶段 3**：ChannelAdapter + 飞书 Webhook（签名/幂等/事件队列）——当前 `feishu_client.py` 为未接线 stub，`source_event_id` 幂等索引已就绪。
 - **阶段 4**：需求库表格视图 + 组合筛选 UI + CSV 导出——后端筛选已就绪（`/requirements/search`），缺前端表格与导出端点。
 - **阶段 5**：需求关系表 + 影响分析——当前 `relation_type` 仅写 `'source'`，related/conflict 未落库。

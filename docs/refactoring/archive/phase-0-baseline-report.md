@@ -128,7 +128,7 @@ Requirement_agent/
 | `src/common/snowflake.py` | 未跟踪 | 雪花 id 生成器；代码已引用 → **必须提交，否则 clone 即挂** |
 | `migrations/007_snowflake_ids.sql` | 未跟踪 | 7 张表 IDENTITY→BY DEFAULT；迁移链依赖 |
 | `tests/unit/test_snowflake.py` | 未跟踪 | 雪花单测 |
-| `docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md` | gitignore(docx/) | 本轮审计报告 |
+| `../../docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md` | gitignore(docx/) | 本轮审计报告 |
 | `.env` | gitignore | 含真实密钥 → 仅本地，不进版本库 ✅ |
 | `.idea/*.xml`、`.idea/requirement-agent.iml` | **被 git 跟踪** | IDE 文件入版本库（P3，可后续清理） |
 | `storage/uploads/` | gitignore(storage/) | 本地 MinIO 兼容上传目录，当前空 |
