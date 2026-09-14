@@ -85,13 +85,14 @@ class AnalyzeSkill(BaseSkill):
             if duplicate and max_similarity < duplicate_threshold:
                 duplicate = False
                 related = related or max_similarity >= related_threshold
-            # 这里**刻意没有**「达到阈值就补判 duplicate=True」的分支。
-            # 那条规则的前提是 similarity 为模型的独立判断；实测它只是把检索分数原样回显
-            # （0.7313209960078035 逐位相同），于是该规则等价于「向量分数高就直接判重复」，
-            # 会推翻模型自己的结论，并产出「重复=是」配「理由：非重复、非冲突」的矛盾卡片。
-            # 漏报的代价小得多，宁可漏报也不要自相矛盾。
-            if not related and max_similarity >= related_threshold:
-                related = True
+            # 这里**刻意没有**任何「达到阈值就补判」的分支（duplicate 与 related 都没有）。
+            # 那类规则的前提是 similarity 为模型的独立判断；实测它只是把检索分数原样回显
+            # （0.7313209960078035 逐位相同），于是规则等价于「向量分数高就直接下判」，
+            # 会推翻模型结论并产出「独立」配「关联=是」这类矛盾卡片。
+            #
+            # 实测教训：本 embedding 模型在**语义无关**的中文业务文本上也能给到 0.79，
+            # 所以绝对阈值本身就不可靠，拿它覆盖模型判断更是雪上加霜。
+            # 漏报的代价远小于自相矛盾：宁可为空，不可打架。
             independent = not (duplicate or related or conflict)
 
             result = AnalysisResult(

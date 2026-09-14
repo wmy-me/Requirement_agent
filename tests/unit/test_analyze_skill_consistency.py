@@ -46,8 +46,8 @@ def test_underreported_duplicate_is_not_forced_by_similarity() -> None:
 
     ⚠️ 行为反转：本用例原先断言「漏报会被候选分数补回 duplicate=true」。该规则的前提是
     similarity 为模型独立判断，实测它只是检索分数的原样回显，于是等价于「向量分数高就
-    直接判重复」，会推翻模型理由、产出「重复=是」配「理由：非重复」的矛盾卡片。
-    现在改为：不翻转，但保留「关联」标记提示人工核对——漏报的代价远小于自相矛盾。
+    直接下判」，会推翻模型理由、产出「重复=是」配「理由：非重复」的矛盾卡片。
+    现在 duplicate 与 related 都不再被翻转：模型说什么就是什么。
     """
     provider = FakeProvider(
         '{"duplicate": false, "related": false, "conflict": false, "independent": true, '
@@ -57,8 +57,8 @@ def test_underreported_duplicate_is_not_forced_by_similarity() -> None:
     result = AnalyzeSkill(provider=provider).analyze(_extracted(), historical_requirements=[])
 
     assert result.duplicate is False  # 不再被候选分数翻转
-    assert result.related is True  # 但会标记关联，提示人工核对
-    assert result.independent is False
+    assert result.related is False  # 同上
+    assert result.independent is True
 
 
 def test_confirmed_duplicate_with_candidate_is_kept() -> None:
@@ -89,7 +89,8 @@ def test_high_similarity_does_not_force_duplicate() -> None:
     result = AnalyzeSkill(provider=provider).analyze(_extracted(), historical_requirements=[])
 
     assert result.duplicate is False  # 不再被翻转
-    assert result.related is True  # 但高相似候选仍算「关联」
+    assert result.related is False  # related 同样不再被翻转
+    assert result.independent is True  # 模型的「独立」判断得以保留
 
 
 def test_parse_failure_falls_back_to_heuristic() -> None:
