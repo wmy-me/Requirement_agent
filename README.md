@@ -22,7 +22,7 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 
 ## 技术栈
 
-- Python 3.11+
+- Python 3.12+
 - FastAPI
 - PostgreSQL + pgvector
 - SQLAlchemy
@@ -32,7 +32,7 @@ Requirement Agent 是一个基于 Python + FastAPI 的需求管理与分析平�
 
 ## 运行环境要求
 
-1. Python 3.11 及以上
+1. Python 3.12 及以上
 2. PostgreSQL 已安装并可用
 3. 具备可访问的 LLM API Key（如 DeepSeek / OpenAI 兼容）
 4. 项目根目录中存在 `.env` 配置文件

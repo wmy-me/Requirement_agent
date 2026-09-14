@@ -100,7 +100,7 @@ class DocumentAssetRepository:
             ).mappings().first()
         return self._normalize_asset_row(row) if row else None
 
-    def add_chunks(self, document_id: int, content: str, *, chunk_size: int = 600, overlap: int = 80) -> list[dict[str, object]]:
+    def add_chunks(self, document_id: int, content: str, *, chunk_size: int = 600, overlap: int = 120) -> list[dict[str, object]]:
         """将文本切块并逐块写入 document_chunk（含向量），返回保存的分块列表。
 
         短文本优化：`len(content) <= chunk_size` 时整段作为唯一分块（chunk_index=1），
@@ -228,7 +228,7 @@ class DocumentAssetRepository:
             "created_at": as_display_iso(row["created_at"]),
         }
 
-    def _chunk_text(self, content: str, *, chunk_size: int = 600, overlap: int = 80) -> list[str]:
+    def _chunk_text(self, content: str, *, chunk_size: int = 600, overlap: int = 120) -> list[str]:
         """把文本切成带重叠的固定大小分块（供向量检索）。
 
         采用标准滑动窗口：每块最长 `chunk_size`，窗口每次前进 `chunk_size - overlap`
