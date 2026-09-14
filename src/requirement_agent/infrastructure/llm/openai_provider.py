@@ -1,13 +1,25 @@
-"""兼容 OpenAI 接口格式的 LLM provider 适配器。"""
+"""兼容 OpenAI 接口格式的 LLM provider 适配器。
+
+请求调参（temperature / 超时 / 重试）统一取自 settings，调用点无需关心；
+所有 httpx 调用收口在本类的 `_http_*` 方法，便于测试替换为假实现。
+"""
 
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+import random
+import time
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
+from typing import Any
 
 import httpx
 
 from requirement_agent.config.settings import settings
+
+# 值得重试的状态码：限流与各类临时性服务端故障。
+# 401/403/404/422 等属于请求本身的问题，重试没有意义，立即抛出。
+_RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
 class LLMProvider:
@@ -19,6 +31,11 @@ class LLMProvider:
         self.base_url = settings.active_llm_base_url.rstrip("/")
         self.model = settings.active_llm_model
         self.embedding_model = settings.embedding_model
+        self.temperature = settings.llm_temperature
+        self.timeout = settings.llm_timeout_seconds
+        self.stream_read_timeout = settings.llm_stream_read_timeout_seconds
+        self.max_retries = settings.llm_max_retries
+        self.retry_backoff = settings.llm_retry_backoff_seconds
 
     def is_configured(self) -> bool:
         """当前激活 provider（openai/deepseek）是否具备 key 与 base_url。"""
@@ -36,83 +53,148 @@ class LLMProvider:
         """embedding 请求的 api key：独立配置优先，否则复用 chat provider 的 key。"""
         return settings.embedding_api_key.get_secret_value().strip() or self.api_key
 
+    # ── 请求构造与传输 ──────────────────────────────────────────────────
+    # 抽成独立方法是为了让测试能直接替换，既不碰真实网络也不真的等待。
+
+    def _chat_payload(
+        self, prompt: str, system_prompt: str | None, *, stream: bool = False
+    ) -> dict[str, Any]:
+        """统一的 chat 请求体；temperature 未配置时不写入该字段。"""
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload: dict[str, Any] = {"model": self.model, "messages": messages}
+        if stream:
+            payload["stream"] = True
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        return payload
+
+    @staticmethod
+    def _headers(api_key: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    def _http_post(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
+    ) -> httpx.Response:
+        """非流式 POST（generate / embed 共用）。"""
+        return httpx.post(url, headers=headers, json=payload, timeout=timeout)
+
+    def _http_stream(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: httpx.Timeout
+    ) -> AbstractContextManager[httpx.Response]:
+        """流式 POST：返回上下文管理器，进入后才真正发起请求。"""
+        return httpx.stream("POST", url, headers=headers, json=payload, timeout=timeout)
+
+    def _sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def _backoff_seconds(self, attempt: int) -> float:
+        """指数退避 + 抖动：抖动避免多实例在同一时刻一起重试形成尖峰。"""
+        return self.retry_backoff * (2**attempt) * (0.5 + random.random() / 2)
+
+    def _request_with_retry(self, send: Callable[[], httpx.Response]) -> httpx.Response:
+        """执行请求，对可恢复错误做指数退避重试；次数耗尽后抛出最后一次异常。"""
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = send()
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRYABLE_STATUS:
+                    raise
+                last_error = exc
+            except httpx.TransportError as exc:  # 含超时、连接失败等网络层异常
+                last_error = exc
+            if attempt < self.max_retries:
+                self._sleep(self._backoff_seconds(attempt))
+        assert last_error is not None, "重试循环至少执行一次，必已记录异常"
+        raise last_error
+
+    @staticmethod
+    def _iter_content(response: httpx.Response) -> Iterator[str]:
+        """解析 SSE 增量行，产出文本增量；空行、非 data 行与空 delta 一律跳过。"""
+        for line in response.iter_lines():
+            if not line:
+                continue
+            if line.startswith("data:"):
+                data = line[len("data:"):].strip()
+            else:
+                data = line.strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            content = (choices[0].get("delta") or {}).get("content")
+            if content:
+                yield content
+
+    # ── 对外能力 ────────────────────────────────────────────────────────
+
     def generate(self, prompt: str, *, system_prompt: str | None = None) -> str:
         """非流式补全：返回完整生成文本。未配置时返回提示文案（由上层决定是否回退）。"""
         if not self.is_configured():
             return f"{self.provider_name} is not configured. Set API key and base URL first."
 
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [],
-        }
-        if system_prompt:
-            payload["messages"].append({"role": "system", "content": system_prompt})
-        payload["messages"].append({"role": "user", "content": prompt})
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        response = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30,
+        payload = self._chat_payload(prompt, system_prompt)
+        response = self._request_with_retry(
+            lambda: self._http_post(
+                f"{self.base_url}/chat/completions",
+                payload,
+                self._headers(self.api_key),
+                self.timeout,
+            )
         )
-        response.raise_for_status()
         body = response.json()
         return body["choices"][0]["message"]["content"]
 
     def generate_stream(self, prompt: str, *, system_prompt: str | None = None) -> Iterator[str]:
-        """以流式方式生成 chat 补全，逐段产出增量文本。"""
+        """以流式方式生成 chat 补全，逐段产出增量文本。
+
+        重试只发生在**产出首个增量之前**（连接失败 / 可重试状态码）：一旦已经开始
+        yield，重试会让调用方收到重复的半截内容，所以此时直接把异常抛出去。
+        """
         if not self.is_configured():
             yield f"{self.provider_name} is not configured. Set API key and base URL first."
             return
 
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [],
-            "stream": True,
-        }
-        if system_prompt:
-            payload["messages"].append({"role": "system", "content": system_prompt})
-        payload["messages"].append({"role": "user", "content": prompt})
+        payload = self._chat_payload(prompt, system_prompt, stream=True)
+        url = f"{self.base_url}/chat/completions"
+        headers = self._headers(self.api_key)
+        timeout = httpx.Timeout(connect=10.0, read=self.stream_read_timeout, write=30.0, pool=10.0)
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        with httpx.stream(
-            "POST",
-            f"{self.base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
-        ) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if not line:
-                    continue
-                if line.startswith("data:"):
-                    data = line[len("data:"):].strip()
-                else:
-                    data = line.strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                content = delta.get("content")
-                if content:
-                    yield content
+        started = False
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with self._http_stream(url, payload, headers, timeout) as response:
+                    response.raise_for_status()
+                    for piece in self._iter_content(response):
+                        started = True
+                        yield piece
+                return
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRYABLE_STATUS:
+                    raise
+                last_error = exc
+            except httpx.TransportError as exc:
+                last_error = exc
+            if started or attempt >= self.max_retries:
+                break
+            self._sleep(self._backoff_seconds(attempt))
+        assert last_error is not None, "重试循环至少执行一次，必已记录异常"
+        raise last_error
 
     def embed(self, text: str) -> list[float]:
-        """调用 embedding 模型返回向量；unconfigured 时返回 1536 维全零占位。
+        """调用 embedding 模型返回向量；unconfigured 时返回全零占位。
 
         embedding 走独立配置（EMBEDDING_BASE_URL/EMBEDDING_API_KEY/EMBEDDING_MODEL），
         与 chat provider 解耦——避免 chat 是 deepseek（无 /embeddings 端点）时 404。
@@ -121,17 +203,14 @@ class LLMProvider:
             return [0.0] * settings.embedding_dimension
 
         payload = {"model": self.embedding_model, "input": text}
-        headers = {
-            "Authorization": f"Bearer {self._embedding_api_key()}",
-            "Content-Type": "application/json",
-        }
-        response = httpx.post(
-            f"{self._embedding_base_url()}/embeddings",
-            headers=headers,
-            json=payload,
-            timeout=30,
+        response = self._request_with_retry(
+            lambda: self._http_post(
+                f"{self._embedding_base_url()}/embeddings",
+                payload,
+                self._headers(self._embedding_api_key()),
+                self.timeout,
+            )
         )
-        response.raise_for_status()
         body = response.json()
         values = body["data"][0]["embedding"]
         return [float(value) for value in values]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy.engine import URL
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,23 @@ class Settings(BaseSettings):
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
 
+    # —— LLM 请求调参 ——
+    # temperature 默认 None 表示「请求体不带该字段」，与历史行为逐字节一致；
+    # 需要确定性输出时显式设 LLM_TEMPERATURE=0。
+    llm_temperature: float | None = Field(default=None, alias="LLM_TEMPERATURE")
+    # 非流式与 embedding 请求的总超时（秒）。
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, alias="LLM_TIMEOUT_SECONDS")
+    # 流式请求的 read 超时（秒）——首字节后每段增量的等待上限。
+    llm_stream_read_timeout_seconds: float = Field(
+        default=120.0, gt=0, alias="LLM_STREAM_READ_TIMEOUT_SECONDS"
+    )
+    # 可恢复错误（网络层异常 / 408,409,425,429,5xx）的最大重试次数，0 表示不重试。
+    llm_max_retries: int = Field(default=2, ge=0, alias="LLM_MAX_RETRIES")
+    # 重试退避基数（秒）：第 n 次重试等待 base * 2**n 并叠加抖动。
+    llm_retry_backoff_seconds: float = Field(
+        default=0.5, ge=0.0, alias="LLM_RETRY_BACKOFF_SECONDS"
+    )
+
     # 雪花 id：多实例部署时每实例设不同 SNOWFLAKE_WORKER_ID（0-1023），保证全局不撞号
     snowflake_worker_id: int = Field(default=0, alias="SNOWFLAKE_WORKER_ID", ge=0, le=1023)
     embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
@@ -56,6 +73,18 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @field_validator("llm_temperature", mode="before")
+    @classmethod
+    def _blank_temperature_means_unset(cls, value: object) -> object:
+        """`.env` 里写成 `LLM_TEMPERATURE=` 视为「未配置」而非非法数字。
+
+        .env 是人手编辑的文件，留空是常见写法；不拦的话 pydantic 会直接抛
+        ValidationError，表现为服务起不来。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def database_url(self) -> str:
