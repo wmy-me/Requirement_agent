@@ -59,7 +59,8 @@ class Settings(BaseSettings):
     snowflake_worker_id: int = Field(default=0, alias="SNOWFLAKE_WORKER_ID", ge=0, le=1023)
     embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
     embedding_api_key: SecretStr = Field(default=SecretStr(""), alias="EMBEDDING_API_KEY")
-    embedding_dimension: int = Field(default=1536, alias="EMBEDDING_DIMENSION")
+    # 必须与向量列维度一致：三张表经 006 迁移后均为 vector(4096)。
+    embedding_dimension: int = Field(default=4096, alias="EMBEDDING_DIMENSION")
 
     # 后台 outbox 消费循环：由 API 进程持续认领 embedding 同步 / 文档分片事件
     outbox_consumer_enabled: bool = Field(default=True, alias="OUTBOX_CONSUMER_ENABLED")
