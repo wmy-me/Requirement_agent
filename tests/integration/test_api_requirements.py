@@ -15,26 +15,52 @@ client = TestClient(app)
 API_HEADERS = {"Authorization": "Bearer test-api-token"}
 
 
+def _purge_sources(requester_id: str) -> None:
+    """清掉本测试造出来的来源行。
+
+    本文件打的是**真实库**。此前不清理，每跑一次测试待办列表就多一条「接口冒烟-」，
+    实际累积到过 15 条。只删仍是 pending_review 的行，绝不碰已进入审核流程的数据。
+    """
+    from sqlalchemy import text
+
+    from requirement_agent.infrastructure.db.session import SessionLocal
+
+    with SessionLocal() as session:
+        session.execute(
+            text(
+                "DELETE FROM requirement_source "
+                "WHERE requester_id = :requester_id AND processing_status = 'pending_review'"
+            ),
+            {"requester_id": requester_id},
+        )
+        session.commit()
+
+
 def test_submit_requirement_api(monkeypatch) -> None:
     from requirement_agent.config.settings import settings
 
     monkeypatch.setattr(settings.api_auth_token, "_secret_value", "test-api-token")
     # 唯一 key，避免命中历史幂等记录（持久 DB 可能导致旧源已 committed）
     unique = uuid.uuid4().hex
-    response = client.post(
-        "/api/v1/requirements/submit",
-        headers=API_HEADERS,
-        json={
-            "source_type": "web",
-            "requester_id": f"u-{unique}",
-            "requester_name": "alice",
-            "original_text": f"接口冒烟-{unique}：希望报表按部门筛选导出",
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "pending_review"
-    assert payload["source_type"] == "web"
+    requester = f"u-{unique}"
+    try:
+        response = client.post(
+            "/api/v1/requirements/submit",
+            headers=API_HEADERS,
+            json={
+                "source_type": "web",
+                "requester_id": requester,
+                "requester_name": "alice",
+                "original_text": f"接口冒烟-{unique}：希望报表按部门筛选导出",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "pending_review"
+        assert payload["source_type"] == "web"
+    finally:
+        # 按 requester 清，即使断言失败也清得干净
+        _purge_sources(requester)
 
 
 def test_export_requirements_csv_api() -> None:
