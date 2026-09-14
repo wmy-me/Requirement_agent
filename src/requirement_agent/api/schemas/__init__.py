@@ -13,6 +13,7 @@ from requirement_agent.api.schemas.conversations import (
     ConversationUpdateRequest,
 )
 from requirement_agent.api.schemas.requirements import (
+    RequirementRelationUpdateRequest,
     RequirementSubmitRequest,
     RequirementSubmitResponse,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "ConversationCreateRequest",
     "ConversationMessageCreateRequest",
     "ConversationUpdateRequest",
+    "RequirementRelationUpdateRequest",
     "RequirementSubmitRequest",
     "RequirementSubmitResponse",
     "ReviewSubmitRequest",

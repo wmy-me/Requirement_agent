@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from requirement_agent.agents.analyze_agent import thresholds_for
 from requirement_agent.domain.requirement import AuditEvent, RequirementMaster, RequirementReview, RequirementVersion
 from requirement_agent.workflows.canonical import canonical_requirement, canonical_title
 
@@ -15,6 +16,69 @@ from requirement_agent.workflows.canonical import canonical_requirement, canonic
 def _ctx(state: dict[str, Any]) -> dict[str, Any]:
     """从决策图状态中取运行时上下文。"""
     return state.get("ctx") or {}
+
+
+def _analysis_relations(
+    analysis: dict[str, Any],
+    *,
+    master_repo: Any,
+    session: Any,
+    exclude_key: str,
+) -> list[dict[str, object]]:
+    """把分析结果里的候选翻译成待写入的需求关系边。
+
+    三条规则：
+    1. **只在对应布尔量为真时才写**：`duplicate` → `duplicates_of`、`related` → `related`、
+       `conflict` → `conflict`。分析判为独立时不产生任何关系。
+    2. **按该候选自己的相似度过阈值**：整份分析的布尔量是「至少有一个候选命中」，
+       不能据此把每个候选都标上关系——否则一个 0.62 的弱候选也会被写成「关联」。
+    3. **候选的 requirement_key 必须查得到对应 REQ**：检索候选里混着尚未成为正式需求
+       （还在待审）的条目，写进去就是悬空关系。
+
+    阈值取 strict（默认模式）——`analysis_mode` 目前不随分析结果落库，无从还原，
+    取默认值是保守且可解释的选择。
+    """
+    thresholds = thresholds_for(None)
+    relations: list[dict[str, object]] = []
+    for candidate in analysis.get("candidates") or []:
+        target_key = str(candidate.get("requirement_key") or "").strip()
+        if not target_key or target_key == exclude_key:
+            continue
+        target = master_repo.get_by_key(target_key, session=session)
+        if target is None or target.id is None:
+            continue
+        try:
+            similarity = float(candidate.get("similarity") or 0.0)
+        except (TypeError, ValueError):
+            similarity = 0.0
+
+        relation_type: str | None = None
+        if analysis.get("duplicate") and similarity >= thresholds["duplicate"]:
+            relation_type = "duplicates_of"
+        elif analysis.get("related") and similarity >= thresholds["related"]:
+            relation_type = "related"
+        if relation_type is not None:
+            relations.append(
+                {
+                    "target_requirement_id": target.id,
+                    "target_requirement_key": target_key,
+                    "relation_type": relation_type,
+                    "reason": candidate.get("reason"),
+                    "similarity": similarity,
+                }
+            )
+        # 冲突不是从相似度推出来的（是标签启发式），单独记一条，与上面互不排斥
+        if analysis.get("conflict"):
+            relations.append(
+                {
+                    "target_requirement_id": target.id,
+                    "target_requirement_key": target_key,
+                    "relation_type": "conflict",
+                    "reason": candidate.get("reason"),
+                    "similarity": similarity,
+                }
+            )
+    return relations
 
 
 def _source(state: dict[str, Any]) -> Any:
@@ -218,6 +282,23 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
     master.status = "active"
     master.lock_version = next_version
     ctx["master_repo"].save(master, session=session)
+
+    # —— 需求关系边：把分析阶段算出来的 related/conflict/duplicate 候选落表 ——
+    # 放在 master 落库之后：关系的两端都必须已经是存在的 REQ。
+    # 标记为 proposed 而非 confirmed ——审核人批准的是**这条需求**，不是分析给出的
+    # 每一条关系判断，替人下结论不合适；确认/驳回由 UI 上的裁决入口完成。
+    ctx["relation_repo"].upsert_many(
+        subject_requirement_id=int(master.id or 0),
+        subject_requirement_key=str(master.requirement_key),
+        relations=_analysis_relations(
+            source.metadata.get("analysis") or ctx.get("analysis_snapshot") or {},
+            master_repo=ctx["master_repo"],
+            session=session,
+            exclude_key=str(master.requirement_key),
+        ),
+        source_id=source_id,
+        session=session,
+    )
 
     trace_metadata = {
         **source.metadata,

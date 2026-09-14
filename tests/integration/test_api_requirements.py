@@ -99,6 +99,26 @@ def test_pending_review_ids_are_strings_not_numbers() -> None:
         assert json.loads(json.dumps({"source_id": source_id}))["source_id"] == source_id
 
 
+def test_requirement_relations_endpoints() -> None:
+    """关系端点冒烟。
+
+    不断言具体关系内容——那需要先审核通过一条与既有 REQ 相关的需求（会写库）。
+    关系边的**生成规则**由 tests/unit/test_requirement_relation.py 覆盖。
+    """
+    response = client.get("/api/v1/requirements/REQ-000001/relations")
+
+    assert response.status_code == 200
+    assert isinstance(response.json()["items"], list)
+
+    # 裁决：不存在的 id → 404；非法 status（proposed 是系统初始态，不允许改回）→ 422
+    assert client.patch(
+        "/api/v1/requirements/relations/999999999", json={"status": "confirmed"}
+    ).status_code == 404
+    assert client.patch(
+        "/api/v1/requirements/relations/999999999", json={"status": "proposed"}
+    ).status_code == 422
+
+
 def test_list_requirements_filter_narrows_results() -> None:
     """列表筛选冒烟：断言的是一条不依赖具体数据的性质（筛选只会收窄，不会放宽）。"""
     items = client.get("/api/v1/requirements").json()["items"]

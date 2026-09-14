@@ -205,6 +205,22 @@ class FailingAuditRepo(FakeAuditRepo):
         raise RuntimeError("audit write failed")
 
 
+class FakeRelationRepo:
+    """记录 commit 节点写出的需求关系边。
+
+    必须显式传入：不传时 ReviewService 会默认构造**真实**的关系仓库，
+    而这里的 session 是 FakeSession（没有 execute），一旦分析结果里带候选就会炸——
+    而且是那种「测试数据恰好为空所以暂时没事」的隐性炸弹。
+    """
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def upsert_many(self, **kwargs) -> int:
+        self.calls.append(kwargs)
+        return len(list(kwargs.get("relations") or []))
+
+
 def test_review_service_approves_and_commits_version() -> None:
     session = FakeSession()
     source_repo = FakeSourceRepo()
@@ -220,6 +236,7 @@ def test_review_service_approves_and_commits_version() -> None:
         version_repo=version_repo,
         audit_repo=FakeAuditRepo(),
         outbox_repo=outbox_repo,
+        relation_repo=FakeRelationRepo(),
         session_factory=lambda: session,
     )
 
@@ -271,6 +288,7 @@ def test_review_service_uses_structured_extraction_without_manual_edit() -> None
         version_repo=version_repo,
         audit_repo=FakeAuditRepo(),
         outbox_repo=outbox_repo,
+        relation_repo=FakeRelationRepo(),
         session_factory=lambda: session,
     )
 

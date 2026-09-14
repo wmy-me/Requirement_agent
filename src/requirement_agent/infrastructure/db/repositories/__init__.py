@@ -16,6 +16,7 @@ from requirement_agent.infrastructure.db.repositories.requirement import (
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
+from requirement_agent.infrastructure.db.repositories.relation import RequirementRelationRepository
 from requirement_agent.infrastructure.db.repositories.review import (
     RequirementFeatureRepository,
     RequirementReviewRepository,
@@ -28,6 +29,7 @@ __all__ = [
     "MemoryRepository",
     "RequirementFeatureRepository",
     "RequirementMasterRepository",
+    "RequirementRelationRepository",
     "RequirementReviewRepository",
     "RequirementSourceRepository",
     "RequirementVersionRepository",

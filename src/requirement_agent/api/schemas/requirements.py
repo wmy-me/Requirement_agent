@@ -50,3 +50,15 @@ class RequirementSubmitResponse(BaseModel):
     source_type: str
     status: str = "pending_review"
     source_id: int | None = None
+
+
+class RequirementRelationUpdateRequest(BaseModel):
+    """需求关系的裁决请求体。
+
+    只允许 confirmed / dismissed：`proposed` 是分析写入时的初始态，
+    由人工改回 proposed 没有语义（那是「撤回裁决」，需要的是重新分析）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["confirmed", "dismissed"]

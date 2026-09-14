@@ -11,6 +11,7 @@ from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
     RequirementFeatureRepository,
     RequirementMasterRepository,
+    RequirementRelationRepository,
     RequirementReviewRepository,
     RequirementSourceRepository,
     RequirementVersionRepository,
@@ -31,6 +32,7 @@ class ReviewService:
         version_repo: RequirementVersionRepository | None = None,
         audit_repo: AuditRepository | None = None,
         outbox_repo: OutboxRepository | None = None,
+        relation_repo: RequirementRelationRepository | None = None,
         session_factory: Callable[[], Session] = SessionLocal,
     ) -> None:
         self.review_repo = review_repo or RequirementReviewRepository()
@@ -40,6 +42,7 @@ class ReviewService:
         self.version_repo = version_repo or RequirementVersionRepository()
         self.audit_repo = audit_repo or AuditRepository()
         self.outbox_repo = outbox_repo or OutboxRepository()
+        self.relation_repo = relation_repo or RequirementRelationRepository()
         self.session_factory = session_factory
 
     def submit_decision(
@@ -83,6 +86,7 @@ class ReviewService:
             "version_repo": self.version_repo,
             "audit_repo": self.audit_repo,
             "outbox_repo": self.outbox_repo,
+            "relation_repo": self.relation_repo,
             "source_id": source_id,
             "decision": decision,
             "reviewer_id": reviewer_id,

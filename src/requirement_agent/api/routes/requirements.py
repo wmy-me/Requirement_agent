@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from requirement_agent.api.dependencies import feature_repo, retrieval_service, version_repo
+from requirement_agent.api.dependencies import feature_repo, relation_repo, retrieval_service, version_repo
+from requirement_agent.api.schemas import RequirementRelationUpdateRequest
+from requirement_agent.config.settings import settings
 
 router = APIRouter()
 
@@ -62,6 +64,33 @@ async def get_requirement_trace(requirement_key: str) -> dict[str, object]:
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requirement not found")
     return trace
+
+
+@router.get("/api/v1/requirements/{requirement_key}/relations")
+async def list_requirement_relations(requirement_key: str) -> dict[str, object]:
+    """需求关系：**双向**返回该需求与其他 REQ 的关系（它指向谁 + 谁指向它）。
+
+    关系边来自分析阶段产出的候选，在审核通过时落库；`status=proposed` 表示尚待人工裁决。
+    没有任何关系时返回空数组而非 404 —— 「这条需求不与谁相关」是正常结果，不是错误。
+    """
+    return {"items": relation_repo.list_for_requirement(requirement_key)}
+
+
+@router.patch("/api/v1/requirements/relations/{relation_id}")
+async def update_requirement_relation(
+    relation_id: int,
+    payload: RequirementRelationUpdateRequest,
+) -> dict[str, object]:
+    """裁决一条需求关系（confirmed / dismissed）；不存在返回 404。
+
+    没有这个入口，`status` / `decided_by` 就会变成只写不读的死列。
+    """
+    updated = relation_repo.update_status(
+        relation_id, payload.status, decided_by=settings.api_actor_id
+    )
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="relation not found")
+    return updated
 
 
 # —— 相似需求检索组（子批次 3.2.2 迁移）——

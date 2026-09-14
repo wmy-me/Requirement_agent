@@ -785,6 +785,9 @@ async function decideReview(sourceId, decision, boxEl) {
 const LIB_TABLE_COLS = 9;
 const LIB_PAGE_LIMIT = 300;
 
+// 需求关系类型 → 中文标签（对应后端 requirement_relation.relation_type 的枚举）
+const RELATION_LABEL = { duplicates_of: '重复', related: '关联', conflict: '冲突', depends: '依赖' };
+
 function openLibrary() {
   $('library-panel').classList.remove('hidden');
   document.querySelector('.workspace').classList.add('library-open');
@@ -905,11 +908,12 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
   detailEl.classList.remove('hidden');
   detailEl.innerHTML = `<div class="empty-hint">加载版本与溯源…</div>`;
   try {
-    const [vers, trace, features, diff] = await Promise.all([
+    const [vers, trace, features, diff, relationRes] = await Promise.all([
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/versions'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/trace'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/features'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/diff'),
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/relations'),
     ]);
     const req = (trace.requirement || {});
     const featureItems = features.items || [];
@@ -919,12 +923,14 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
     html += `<div class="section-label">当前功能明细</div><ul class="timeline feature-lines"></ul>`;
     html += `<div class="section-label">版本 Diff</div><ul class="timeline diff-lines"></ul>`;
     html += `<div class="section-label">版本历史</div><ul class="timeline version-lines"></ul>`;
+    html += `<div class="section-label">需求关系</div><ul class="timeline relation-lines"></ul>`;
     detailEl.innerHTML = html;
     detailEl.querySelector('.d-title').textContent = `${key} · ${name || ''}`;
     if (req.final_requirement) detailEl.querySelector('p').textContent = req.final_requirement;
     const featureLine = detailEl.querySelector('.feature-lines');
     const diffLine = detailEl.querySelector('.diff-lines');
     const versionLine = detailEl.querySelector('.version-lines');
+    const relationLine = detailEl.querySelector('.relation-lines');
     if (!featureItems.length) {
       featureLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无功能条目</span></li>`;
     }
@@ -956,6 +962,61 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
         li.appendChild(pre);
       }
       versionLine.appendChild(li);
+    });
+
+    // —— 需求关系：分析阶段算出、审核通过时落库的 REQ↔REQ 边；proposed 的等待人工裁决 ——
+    const relations = relationRes.items || [];
+    if (!relations.length) {
+      relationLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">暂无关联需求</span></li>`;
+    }
+    relations.forEach((rel) => {
+      const li = document.createElement('li');
+      const head = document.createElement('div');
+      head.className = 't-head';
+      head.textContent = `${rel.other_requirement_key || ''} · ${rel.other_requirement_name || ''}`;
+      const sub = document.createElement('div');
+      sub.className = 't-sub';
+      const arrow = rel.direction === 'outgoing' ? '本需求 → 对方' : '对方 → 本需求';
+      const sim = rel.similarity == null ? '' : ` · 相似度 ${Math.round(rel.similarity * 100)}%`;
+      sub.textContent = `${arrow} · ${RELATION_LABEL[rel.relation_type] || rel.relation_type}${sim}`;
+      li.appendChild(head);
+      li.appendChild(sub);
+      if (rel.reason) {
+        const pre = document.createElement('pre');
+        pre.textContent = rel.reason;
+        li.appendChild(pre);
+      }
+      if (rel.status === 'proposed') {
+        const row = document.createElement('div');
+        row.className = 'doc-actions';
+        ['确认', '驳回'].forEach((label) => {
+          const btn = document.createElement('button');
+          btn.className = 'btn ghost';
+          btn.textContent = label;
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              await apiJson('/api/v1/requirements/relations/' + rel.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: label === '确认' ? 'confirmed' : 'dismissed' }),
+              });
+              showRequirementDetail(key, name, targetId);
+            } catch (err) {
+              toast('裁决失败：' + err.message, 'err');
+              btn.disabled = false;
+            }
+          });
+          row.appendChild(btn);
+        });
+        li.appendChild(row);
+      } else {
+        const tag = document.createElement('span');
+        tag.className = 'status-tag';
+        tag.textContent = rel.status === 'confirmed' ? '已确认' : '已驳回';
+        li.appendChild(tag);
+      }
+      relationLine.appendChild(li);
     });
   } catch (e) {
     detailEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;

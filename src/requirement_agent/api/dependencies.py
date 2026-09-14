@@ -23,6 +23,7 @@ from requirement_agent.infrastructure.db.repositories import (
     DocumentAssetRepository,
     MemoryRepository,
     RequirementFeatureRepository,
+    RequirementRelationRepository,
     RequirementSourceRepository,
     RequirementVersionRepository,
 )
@@ -49,6 +50,7 @@ document_repo = DocumentAssetRepository()
 feature_repo = RequirementFeatureRepository()
 chat_repo = ChatRepository()
 memory_repo = MemoryRepository()
+relation_repo = RequirementRelationRepository()
 
 # —— 记忆 / 记忆抽取 ——
 memory_context_builder = MemoryContextBuilder(memory_repo)
@@ -121,6 +123,7 @@ __all__ = [
     "memory_extractor",
     "memory_repo",
     "object_storage",
+    "relation_repo",
     "requirement_analysis_task",
     "requirement_service",
     "retrieval_service",
