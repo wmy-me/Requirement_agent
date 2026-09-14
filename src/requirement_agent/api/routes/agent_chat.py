@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from queue import Queue
+from queue import Empty, Queue
 from typing import Literal
 from uuid import uuid4
 
@@ -159,7 +159,12 @@ async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | N
         while True:
             try:
                 kind, value = queue.get_nowait()
-            except queue.Empty:
+            except Empty:
+                # 注意别写成 `except queue.Empty`：本模块只 `from queue import Queue`，
+                # 没有导入 queue 模块，而局部变量 queue 会遮蔽模块名——那样 except 子句
+                # 本身会抛 AttributeError（'Queue' object has no attribute 'Empty'），
+                # 被上层 `except Exception: pass` 吞掉后永远退回规则文案。
+                # 这个 bug 让模型叙事从未生效过，用户看到的「最终结论」一直是模板拼的。
                 break
             if kind == "t":
                 yield value
