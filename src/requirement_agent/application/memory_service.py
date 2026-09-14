@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable
 
 from requirement_agent.infrastructure.db.repositories import MemoryRepository
 from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 def _embed_safe(embedding_service: EmbeddingService, text: str) -> list[float] | None:
@@ -109,7 +112,8 @@ class MemoryExtractor:
             if hasattr(self.llm, "is_configured") and not self.llm.is_configured():
                 return {"stored": 0, "superseded": 0, "skipped": 0}
             text = self.llm.generate(self._build_prompt(messages, existing_notes), system_prompt=self.SYSTEM_PROMPT)
-        except Exception:
+        except Exception as exc:
+            logger.warning("event=memory_extract_fallback error=%s", exc)
             return {"stored": 0, "superseded": 0, "skipped": 0}
 
         memories = self._parse(text)

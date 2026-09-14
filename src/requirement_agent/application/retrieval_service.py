@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import datetime
 
 from requirement_agent.infrastructure.db.repositories import RequirementFeatureRepository, RequirementMasterRepository
 from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
 from requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalService:
@@ -149,8 +152,9 @@ class RetrievalService:
         """
         try:
             vector = self.embedding_service.embed(query)
-        except Exception:
+        except Exception as exc:
             # 向量服务不可用：退化到关键词召回（上层 search() 合并）
+            logger.warning("event=vector_recall_fallback error=%s", exc)
             return []
         results = self.vector_repo.search(vector, limit=limit, filters=filters)
         normalized: list[dict[str, object]] = []

@@ -14,7 +14,7 @@ from fastapi import APIRouter
 
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.db.session import check_database_connection
-from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider, llm_call_stats
 
 router = APIRouter()
 
@@ -28,7 +28,11 @@ async def database_health() -> dict[str, object]:
 
 @router.get("/api/v1/health/llm")
 async def llm_health() -> dict[str, object]:
-    """LLM 配置检查：返回 chat 与 embedding 是否配置及所用 provider / model。"""
+    """LLM 配置与调用计量：chat/embedding 是否配置、请求调参、进程内计量快照。
+
+    `stats` 是**进程内**累计值（每次调用递增，进程重启归零）。多 worker 部署时
+    每个 worker 各有一份，取到的只是当前 worker 的视图。
+    """
     provider = LLMProvider()
     return {
         "configured": provider.is_configured(),
@@ -40,4 +44,11 @@ async def llm_health() -> dict[str, object]:
             "model": provider.embedding_model,
             "dimension": settings.embedding_dimension,
         },
+        "request": {
+            "temperature": provider.temperature,
+            "timeout_seconds": provider.timeout,
+            "stream_read_timeout_seconds": provider.stream_read_timeout,
+            "max_retries": provider.max_retries,
+        },
+        "stats": llm_call_stats(),
     }

@@ -7,6 +7,7 @@ lifespan outbox 消费循环）。根 `main.py` 为薄包装转发到 `app = cre
 
 from __future__ import annotations
 
+import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,14 @@ async def lifespan(app: FastAPI):
     与根 main.py 完全一致：worker 服务不常驻部署，由 API 进程承担 embedding /
     文档分片的 outbox 消费（`FOR UPDATE SKIP LOCKED` 保证多实例并发安全）。
     """
+    # 入口此前没有任何日志配置：模块级 logger 的记录会因 root 无 handler 而被
+    # lastResort 丢弃（只放 WARNING 及以上到 stderr，且无时间戳）。这里给 root
+    # 装一次 handler。若外部已通过 --log-config 配好，basicConfig 是空操作。
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
     consumer = OutboxConsumer()
     thread = threading.Thread(target=consumer.start, name="outbox-consumer", daemon=True)
     if settings.outbox_consumer_enabled:

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from requirement_agent.skills.base_skill import BaseSkill
 from requirement_agent.skills.prompts import RISK_SYSTEM_PROMPT, build_risk_user_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class RiskSkill(BaseSkill):
@@ -38,5 +42,6 @@ class RiskSkill(BaseSkill):
                 confidence=max(0.0, min(0.95, float(payload.get("confidence") or fallback.confidence))),
             )
             return result
-        except Exception:
+        except Exception as exc:
+            logger.warning("event=skill_fallback skill=risk error=%s", exc)
             return fallback

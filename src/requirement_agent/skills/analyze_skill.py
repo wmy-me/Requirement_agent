@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from requirement_agent.skills.base_skill import BaseSkill
@@ -10,6 +11,8 @@ from requirement_agent.skills.prompts import ANALYZE_SYSTEM_PROMPT, build_analyz
 if TYPE_CHECKING:
     from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
     from requirement_agent.agents.extract_agent import ExtractedRequirement
+
+logger = logging.getLogger(__name__)
 
 
 class AnalyzeSkill(BaseSkill):
@@ -98,6 +101,7 @@ class AnalyzeSkill(BaseSkill):
                 candidates=normalized_candidates,
             )
             return result
-        except Exception:
+        except Exception as exc:
             # 不做“半模型半规则”混用，失败时整体回退，保证结果语义稳定。
+            logger.warning("event=skill_fallback skill=analyze error=%s", exc)
             return fallback

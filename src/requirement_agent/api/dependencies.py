@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
@@ -29,6 +31,8 @@ from requirement_agent.infrastructure.parser.document_parser import DocumentPars
 from requirement_agent.infrastructure.storage.object_store import ObjectStorage
 from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask
 from requirement_agent.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # —— 领域服务 ——
 requirement_service = RequirementService()
@@ -80,8 +84,9 @@ def summarize_text(text: str) -> str:
             summary = (summary or "").strip()
             if summary:
                 return summary[:200]
-    except Exception:
-        pass
+    except Exception as exc:
+        # 摘要失败不影响会话收尾，但必须留痕：否则失败完全静默
+        logger.warning("event=summarize_fallback error=%s", exc)
     return snippet[:160] or "（空会话）"
 
 

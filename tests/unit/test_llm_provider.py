@@ -4,11 +4,14 @@
 也不引入 HTTP mock 依赖；退避基数设为 0，避免测试真的等待。
 """
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 
 from requirement_agent.config.settings import Settings
-from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.llm import openai_provider
+from requirement_agent.infrastructure.llm.openai_provider import LLMProvider, llm_call_stats
 
 _SSE_OK = [
     'data: {"choices":[{"delta":{"content":"你好"}}]}',
@@ -16,6 +19,22 @@ _SSE_OK = [
     'data: {"choices":[{"delta":{"content":"世界"}}]}',
     "data: [DONE]",
 ]
+
+# 部分网关会在流末回传 usage（choices 为空的收尾块）
+_SSE_WITH_USAGE = [
+    'data: {"choices":[{"delta":{"content":"你好"}}]}',
+    'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3}}',
+    "data: [DONE]",
+]
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_stats() -> Iterator[None]:
+    """计量是模块级全局状态，逐用例重置，避免相互污染。"""
+    with openai_provider._STATS_LOCK:
+        for key in openai_provider._LLM_CALL_STATS:
+            openai_provider._LLM_CALL_STATS[key] = 0.0
+    yield
 
 
 @pytest.fixture()
@@ -225,3 +244,72 @@ def test_embed_retries_and_returns_vector(provider: LLMProvider) -> None:
     provider._http_post = fake_post
     assert provider.embed("文本") == [0.1, 0.2]
     assert len(calls) == 2
+
+
+# ── 可观测性计量 ────────────────────────────────────────────────────────
+
+
+def test_successful_call_counts_and_reports_tokens(provider: LLMProvider) -> None:
+    provider._http_post = lambda *args: _response(
+        200,
+        {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+        },
+    )
+    provider.generate("你好")
+
+    stats = llm_call_stats()
+    assert stats["calls_total"] == 1
+    assert stats["failures_total"] == 0
+    assert stats["retries_total"] == 0
+    assert stats["prompt_tokens_total"] == 12
+    assert stats["completion_tokens_total"] == 7
+
+
+def test_call_without_usage_still_counted(provider: LLMProvider) -> None:
+    # 响应体没有 usage 段时不应报错，token 按 0 计
+    provider._http_post = lambda *args: _chat_ok("ok")
+    provider.generate("你好")
+    stats = llm_call_stats()
+    assert stats["calls_total"] == 1
+    assert stats["prompt_tokens_total"] == 0
+
+
+def test_failed_call_counts_as_failure(provider: LLMProvider) -> None:
+    provider._http_post = lambda *args: _response(400)
+    with pytest.raises(httpx.HTTPStatusError):
+        provider.generate("你好")
+    stats = llm_call_stats()
+    assert stats["calls_total"] == 1
+    assert stats["failures_total"] == 1
+
+
+def test_retry_is_counted(provider: LLMProvider) -> None:
+    calls: list[int] = []
+
+    def fake_post(url, payload, headers, timeout):
+        calls.append(1)
+        return _response(503) if len(calls) == 1 else _chat_ok("ok")
+
+    provider._http_post = fake_post
+    provider.generate("你好")
+    stats = llm_call_stats()
+    assert stats["calls_total"] == 1  # 一次逻辑调用
+    assert stats["retries_total"] == 1  # 其中含一次重试
+
+
+def test_stream_collects_usage_when_gateway_sends_it(provider: LLMProvider) -> None:
+    provider._http_stream = lambda *args: _StubStream(_StubStreamResponse(_SSE_WITH_USAGE))
+    assert "".join(provider.generate_stream("你好")) == "你好"
+
+    stats = llm_call_stats()
+    assert stats["calls_total"] == 1
+    assert stats["prompt_tokens_total"] == 5
+    assert stats["completion_tokens_total"] == 3
+
+
+def test_stats_snapshot_is_a_copy() -> None:
+    snapshot = llm_call_stats()
+    snapshot["calls_total"] = 999
+    assert llm_call_stats()["calls_total"] == 0

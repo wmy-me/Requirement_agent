@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from requirement_agent.skills.base_skill import BaseSkill
@@ -9,6 +10,8 @@ from requirement_agent.skills.prompts import EXTRACT_SYSTEM_PROMPT, build_extrac
 
 if TYPE_CHECKING:
     from requirement_agent.agents.extract_agent import ExtractedRequirement
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractSkill(BaseSkill):
@@ -52,6 +55,8 @@ class ExtractSkill(BaseSkill):
                 "raw_text": payload.get("raw_text") or raw_text,
             })
             return result
-        except Exception:
+        except Exception as exc:
             # JSON 无法解析、字段不合法、模型超时等场景都不阻断主流程。
+            # 但必须留痕：否则失败完全静默，计量里只剩成功侧数据。
+            logger.warning("event=skill_fallback skill=extract error=%s", exc)
             return fallback
