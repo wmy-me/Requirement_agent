@@ -34,7 +34,17 @@ class DocumentAssetRepository:
         metadata: dict[str, object] | None = None,
         source_id: int | None = None,
     ) -> dict[str, object]:
-        """落库一条上传文档 asset（含校验字段），返回规范化后的 asset 行。"""
+        """落库一条上传文档 asset（含校验字段），返回规范化后的 asset 行。
+
+        **按内容校验和去重**：checksum 相同的文件视为同一份资产，直接返回既有行。
+
+        为什么必须去重：对象存储的 key 由内容哈希生成，同一份文件重复上传会写同一个
+        key（幂等），但这里照插新行的话，资产表就会有 N 条记录、N 份分片与向量，
+        检索结果里同一条内容重复出现。实测出现过「表里 2 条、存储里 1 个对象」的错位。
+        """
+        existing = self.find_by_checksum(checksum)
+        if existing is not None:
+            return existing
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -66,6 +76,34 @@ class DocumentAssetRepository:
             ).mappings().one()
             session.commit()
         return self._normalize_asset_row(row)
+
+    def find_by_checksum(self, checksum: str) -> dict[str, object] | None:
+        """按内容校验和取已入库的资产（取最早的一条）；checksum 为空时返回 None。"""
+        if not checksum:
+            return None
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, file_name, content_type, storage_uri, checksum, size_bytes, "
+                    "source_type, source_id, original_text, extracted_text, metadata, created_at "
+                    "FROM document_asset WHERE checksum = :checksum ORDER BY created_at LIMIT 1"
+                ),
+                {"checksum": checksum},
+            ).mappings().first()
+        return self._normalize_asset_row(row)
+
+    def has_chunks(self, document_id: int) -> bool:
+        """该文档是否已经切分过。
+
+        用于在命中内容去重后**不再重复入队切片**：否则同一份文件传两次会得到两份分片
+        与两份向量，检索结果里同一条内容重复出现。
+        """
+        with SessionLocal() as session:
+            count = session.execute(
+                text("SELECT count(*) FROM document_chunk WHERE document_id = :id"),
+                {"id": document_id},
+            ).scalar()
+        return bool(count)
 
     def list_documents(self, limit: int = 20) -> list[dict[str, object]]:
         """按创建时间倒序列出上传文档 asset，返回规范化行列表。"""

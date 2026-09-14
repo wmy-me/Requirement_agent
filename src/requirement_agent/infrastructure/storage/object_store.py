@@ -85,8 +85,8 @@ class ObjectStorage:
         始终计算 `payload` 的 SHA-256 作为校验和，供后续去重/一致性核对。
         """
         actual_bucket = bucket or self.bucket
-        object_key = self._build_object_key(file_name)
         checksum = hashlib.sha256(payload).hexdigest()
+        object_key = self._build_object_key(file_name, checksum)
 
         if self._client is not None:
             try:
@@ -125,9 +125,17 @@ class ObjectStorage:
             checksum=checksum,
         )
 
-    def _build_object_key(self, file_name: str) -> str:
-        """构造对象键：`uploads/{文件名}-{名称sha1前12位}{后缀}`，避免同名覆盖与路径穿越。"""
+    def _build_object_key(self, file_name: str, checksum: str) -> str:
+        """构造对象键：`uploads/{文件名}-{内容 sha256 前12位}{后缀}`。
+
+        用**内容**哈希而非文件名哈希：早先只对文件名做 sha1，同名文件的 key 必然相同，
+        第二次上传会静默覆盖第一个对象。若两次同名但内容不同（改了再传），旧资产记录
+        与它指向的对象就对不上了——静默的数据损坏。
+
+        内容寻址后：内容相同 → 同一 key（重复写入是幂等的）；内容不同 → 不同 key，
+        两个版本都留得住。文件名只用于可读性，并在 `_` 替换中做路径穿越防护。
+        """
         suffix = Path(file_name).suffix or ".bin"
         stem = Path(file_name).stem or "attachment"
-        key = f"{stem}-{hashlib.sha1(file_name.encode('utf-8')).hexdigest()[:12]}{suffix}"
+        key = f"{stem}-{checksum[:12]}{suffix}"
         return f"uploads/{key}"

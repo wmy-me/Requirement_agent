@@ -419,7 +419,8 @@ async def _collect_files(run_text: str, files: list[UploadFile] | None) -> tuple
                     },
                     source_id=None,
                 )
-                if parsed.content:
+                # 命中了内容去重（同一份文件此前已传过）就不再切片，否则会产生重复分片与向量
+                if parsed.content and not document_repo.has_chunks(int(doc_asset["id"])):
                     document_chunk_task.enqueue(
                         document_id=int(doc_asset["id"]),
                         content=parsed.content,

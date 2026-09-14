@@ -9,6 +9,9 @@ description = "Requirement management agent built around PostgreSQL, pgvector, a
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    # FastAPI 解析 multipart/form-data（Form / UploadFile）必需。
+    # 此前的缺失被本地 venv 里恰好装过掩盖了：全新安装后上传接口会直接 500。
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.7.0",
@@ -20,6 +23,9 @@ dependencies = [
     # 飞书回调的 AES-256-CBC 解密。此前只是其他包的传递依赖，
     # 安全相关的 import 不应依赖传递关系，故显式声明。
     "cryptography>=42.0.0",
+    # 上传 PDF 的正文抽取。此前 document_parser 里有 try/except 静默降级，
+    # 缺库时只有占位文案入库——向量化的就是那句占位符，检索毫无意义。
+    "pypdf>=4.0.0",
     "langgraph>=1.2.11",
 ]
 
