@@ -58,11 +58,34 @@ def test_decrypt_recovers_documented_construction() -> None:
     assert FeishuClient(encrypt_key=ENCRYPT_KEY).decrypt(encrypt_for_test(plain)) == plain
 
 
-def test_decrypt_with_wrong_key_raises() -> None:
-    """密钥不对时填充必然非法——必须报错，不能返回半截明文。"""
-    encrypted = encrypt_for_test('{"a":1}', encrypt_key="another-key")
+def test_decrypt_with_wrong_key_never_returns_plaintext() -> None:
+    """密钥不对时必须报错；极小概率填充恰好合法时，也绝不能还原出原文。
+
+    不能断言「必然抛错」——错密钥解出的末字节是随机的，约 1/256 概率构成合法填充。
+    """
+    plain = '{"a":1}'
+    encrypted = encrypt_for_test(plain, encrypt_key="another-key")
+
+    try:
+        result = FeishuClient(encrypt_key=ENCRYPT_KEY).decrypt(encrypted)
+    except FeishuPayloadError:
+        return
+    assert result != plain
+
+
+def test_unpad_rejects_invalid_padding() -> None:
+    """填充校验是确定性的，直接测它的边界值。"""
     with pytest.raises(FeishuPayloadError):
-        FeishuClient(encrypt_key=ENCRYPT_KEY).decrypt(encrypted)
+        FeishuClient._unpad(b"")  # 空
+    with pytest.raises(FeishuPayloadError):
+        FeishuClient._unpad(b"\x01\x02\x03\x00")  # 末字节 0 非法
+    with pytest.raises(FeishuPayloadError):
+        FeishuClient._unpad(b"\x01\x02\x03\x20")  # 末字节 32 > 分组大小
+    with pytest.raises(FeishuPayloadError):
+        FeishuClient._unpad(b"\x08")  # 末字节 8 比数据还长
+    assert FeishuClient._unpad(b"abc\x01") == b"abc"  # 合法填充照常剥掉
+    # 末字节等于长度是合法的整块填充（PKCS#7 允许），别把它当错误
+    assert FeishuClient._unpad(b"\x04\x04\x04\x04") == b""
 
 
 def test_decode_plaintext_envelope() -> None:

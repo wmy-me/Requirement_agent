@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +29,24 @@ _CHANNEL_EVENT_CONSTRAINT = "uq_requirement_source_channel_event"
 def _is_channel_event_conflict(exc: IntegrityError) -> bool:
     """判断是否撞上了渠道事件唯一索引，而非其它完整性错误（避免误吞真正的写入失败）。"""
     return _CHANNEL_EVENT_CONSTRAINT in str(exc)
+
+
+# 来源侧的元数据取值表达式：聚合（SELECT）与筛选（HAVING）共用同一份定义。
+# 这几个 JSON 路径写错一个字符就会静默查不到数据，所以只允许有一处事实源。
+_SOURCE_REQUESTER = "COALESCE(s.requester_name, s.requester_id)"
+_SOURCE_DEPARTMENT = (
+    "COALESCE(s.metadata->>'department', "
+    "s.metadata #>> '{standardized_document,normalized_fields,department}')"
+)
+_SOURCE_BUSINESS_DOMAIN = (
+    "COALESCE(s.metadata->>'business_domain', "
+    "s.metadata #>> '{standardized_document,normalized_fields,business_domain}', "
+    "s.metadata #>> '{extracted,business_domain}')"
+)
+_SOURCE_SENSITIVITY = (
+    "COALESCE(s.metadata->>'sensitivity_level', "
+    "s.metadata #>> '{standardized_document,normalized_fields,sensitivity_level}')"
+)
 
 
 class RequirementSourceRepository:
@@ -546,29 +565,88 @@ class RequirementMasterRepository:
             for item in rows
         ]
 
-    def list_with_source_context(self, limit: int = 100) -> list[dict[str, object]]:
-        """聚合主需求 + 来源上下文（领域/来源渠道/输入人/密级/最新提交时间/功能数），供列表与检索使用。"""
+    @staticmethod
+    def _build_master_filter(
+        filters: Mapping[str, object],
+    ) -> tuple[str, str, dict[str, object]]:
+        """把筛选条件编译成 (WHERE 段, HAVING 段, 绑定参数)。
+
+        为什么要分成两处：本查询靠 `GROUP BY m.id` 聚合出行，`channel` / `department` 这类
+        条件比的是**聚合值**，只能写 HAVING；若写进 WHERE 或 JOIN 的 ON，会把不匹配的来源
+        从聚合里剔除，行本身还在却少了几列——那不是「筛掉这条需求」而是「改写这条需求」。
+
+        `status` / `has_version_ge` / `q` 比的是主表列，放 WHERE 更省事也更快。
+
+        匹配语义与 `RetrievalService._matches_filters` 保持一致：**单值精确匹配、大小写敏感**。
+        值为空串或 None 的键一律忽略；参数全部走绑定，不做字符串拼接。
+        """
+        where: list[str] = []
+        having: list[str] = []
+        params: dict[str, object] = {}
+
+        def normalize(key: str) -> str | None:
+            value = filters.get(key)
+            if value is None:
+                return None
+            stripped = str(value).strip()
+            return stripped or None
+
+        if (value := normalize("status")) is not None:
+            where.append("m.status = :status")
+            params["status"] = value
+        if (value := filters.get("has_version_ge")) is not None:
+            where.append("m.current_version >= :has_version_ge")
+            params["has_version_ge"] = int(value)
+        if (value := normalize("q")) is not None:
+            where.append("(m.requirement_name ILIKE :q OR m.final_requirement ILIKE :q)")
+            params["q"] = f"%{value}%"
+
+        if (value := normalize("channel")) is not None:
+            having.append("bool_or(s.source_type = :channel)")
+            params["channel"] = value
+        if (value := normalize("requester")) is not None:
+            having.append(f"bool_or({_SOURCE_REQUESTER} = :requester)")
+            params["requester"] = value
+        if (value := normalize("department")) is not None:
+            having.append(f"bool_or({_SOURCE_DEPARTMENT} = :department)")
+            params["department"] = value
+        if (value := normalize("business_domain")) is not None:
+            having.append(f"bool_or({_SOURCE_BUSINESS_DOMAIN} = :business_domain)")
+            params["business_domain"] = value
+        if (value := normalize("sensitivity_level")) is not None:
+            having.append(f"bool_or({_SOURCE_SENSITIVITY} = :sensitivity_level)")
+            params["sensitivity_level"] = value
+        if (value := normalize("submitted_from")) is not None:
+            having.append("bool_or(s.submitted_at >= CAST(:submitted_from AS TIMESTAMPTZ))")
+            params["submitted_from"] = value
+        if (value := normalize("submitted_to")) is not None:
+            having.append("bool_or(s.submitted_at <= CAST(:submitted_to AS TIMESTAMPTZ))")
+            params["submitted_to"] = value
+
+        where_clause = ("\n                    WHERE " + " AND ".join(where)) if where else ""
+        having_clause = ("\n                    HAVING " + " AND ".join(having)) if having else ""
+        return where_clause, having_clause, params
+
+    def list_with_source_context(
+        self, limit: int = 100, filters: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        """聚合主需求 + 来源上下文（领域/来源渠道/输入人/密级/最新提交时间/功能数），供列表与检索使用。
+
+        `filters` 见 `_build_master_filter`；传空时不产生任何额外子句，SQL 与加筛选前逐字一致。
+        """
+        where_clause, having_clause, params = self._build_master_filter(filters or {})
+        params["limit"] = limit
         with SessionLocal() as session:
             rows = session.execute(
                 text(
-                    """
+                    f"""
                     SELECT m.id, m.requirement_key, m.requirement_name, m.final_requirement,
                            m.current_version, m.status, m.lock_version,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.source_type), NULL) AS source_types,
-                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(s.requester_name, s.requester_id)), NULL) AS requester_names,
-                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
-                               s.metadata->>'department',
-                               s.metadata #>> '{standardized_document,normalized_fields,department}'
-                           )), NULL) AS departments,
-                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
-                               s.metadata->>'business_domain',
-                               s.metadata #>> '{standardized_document,normalized_fields,business_domain}',
-                               s.metadata #>> '{extracted,business_domain}'
-                           )), NULL) AS business_domains,
-                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(
-                               s.metadata->>'sensitivity_level',
-                               s.metadata #>> '{standardized_document,normalized_fields,sensitivity_level}'
-                           )), NULL) AS sensitivity_levels,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_REQUESTER}), NULL) AS requester_names,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_DEPARTMENT}), NULL) AS departments,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_BUSINESS_DOMAIN}), NULL) AS business_domains,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_SENSITIVITY}), NULL) AS sensitivity_levels,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT f.content), NULL) AS feature_contents,
                            COUNT(DISTINCT CASE WHEN f.status = 'active' THEN f.id END) AS feature_count,
                            MIN(s.submitted_at) AS first_source_submitted_at,
@@ -577,14 +655,14 @@ class RequirementMasterRepository:
                     LEFT JOIN requirement_version v ON v.requirement_id = m.id
                     LEFT JOIN requirement_version_source vs ON vs.version_id = v.id
                     LEFT JOIN requirement_source s ON s.id = vs.source_id
-                    LEFT JOIN requirement_feature f ON f.requirement_id = m.id
+                    LEFT JOIN requirement_feature f ON f.requirement_id = m.id{where_clause}
                     GROUP BY m.id, m.requirement_key, m.requirement_name, m.final_requirement,
-                            m.current_version, m.status, m.lock_version
+                            m.current_version, m.status, m.lock_version{having_clause}
                     ORDER BY m.updated_at DESC
                     LIMIT :limit
                     """
                 ),
-                {"limit": limit},
+                params,
             ).mappings().all()
         return [
             {

@@ -18,7 +18,7 @@
 | 1′. 收尾：`apps/` 并入、死代码清理 | ✅ 完成 | `d67fe0c`、`9ae7b2d` |
 | 2. LLM / Agent / Prompt / Skill / Embedding 整改 | ✅ 完成 | `c554fd5`、`6343d18`、`f03f664`、`0a13127`、`3c99293`、`c1226b6` |
 | 3. ChannelAdapter + 飞书 Webhook | 🟡 代码完成，待真实凭据联调 | `949bf22`（地基）、飞书协议部分见下方说明 |
-| 4. 需求库表格视图 + 组合筛选 + CSV 导出 | ⬜ 未开始 | — |
+| 4. 需求库表格视图 + 组合筛选 + CSV 导出 | ✅ 完成 | 全宽面板 `#library-panel`；`GET /api/v1/requirements`（含筛选）与 `/export`（CSV） |
 | 5. 需求关系表 + 影响分析 | ⬜ 未开始 | — |
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | ⬜ 未开始 | — |
 | 7. 完整回归 + 生产验收 | ⬜ 未开始 | — |
@@ -71,7 +71,8 @@
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
 | 6 | **雪花 ID 经 JSON number 传给前端有精度风险** | 后端把 `source_id` 序列化为 JSON number，前端用 JS `Number` 承载，而雪花 ID 普遍超过 `2^53`（`MAX_SAFE_INTEGER`）。当前库里这几个 ID 恰好能被 double 精确表示才没出事；一旦不巧，前端会发出一个不存在的 ID。修法是后端把该字段序列化成字符串（契约变更，需授权）。 |
-| 7 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
+| 7 | **需求库筛选下拉的候选项来自当前结果集** | 无 facets 接口，选项由返回行聚合而来；只在「无筛选」时刷新，避免一筛选项就只剩当前命中值。代价：**首次加载前**（或结果为空时）下拉是空的。要彻底解决需加一个 distinct 值接口。 |
+| 8 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
 
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
 > `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`。

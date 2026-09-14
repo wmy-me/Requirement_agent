@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.api.dependencies import (
@@ -24,10 +24,73 @@ from requirement_agent.api.schemas import RequirementSubmitRequest, RequirementS
 router = APIRouter()
 
 
+def library_filters(
+    q: str = Query(default="", max_length=500),
+    channel: str | None = Query(default=None, max_length=60),
+    status_: str | None = Query(default=None, alias="status", max_length=60),
+    requester: str | None = Query(default=None, max_length=120),
+    department: str | None = Query(default=None, max_length=120),
+    business_domain: str | None = Query(default=None, max_length=120),
+    sensitivity_level: str | None = Query(default=None, max_length=60),
+    submitted_from: str | None = Query(default=None, max_length=40),
+    submitted_to: str | None = Query(default=None, max_length=40),
+    has_version_ge: int | None = Query(default=None, ge=1),
+) -> dict[str, object]:
+    """需求库的组合筛选参数（列表与 CSV 导出共用一份定义，避免两处漂移）。
+
+    键名与 `RetrievalService` 的 filters 对齐（`status` 除外——它只在本查询里支持，
+    参数名用别名，因为 `status` 在本模块已被 fastapi.status 占用）。
+    空串与纯空白一律视为「未筛选」，与既有 `/requirements/search` 的归一化方式一致。
+    """
+    raw: dict[str, object] = {
+        "q": q,
+        "channel": channel,
+        "status": status_,
+        "requester": requester,
+        "department": department,
+        "business_domain": business_domain,
+        "sensitivity_level": sensitivity_level,
+        "submitted_from": submitted_from,
+        "submitted_to": submitted_to,
+        "has_version_ge": has_version_ge,
+    }
+    return {
+        key: value
+        for key, value in raw.items()
+        if value is not None and (not isinstance(value, str) or value.strip())
+    }
+
+
 @router.get("/api/v1/requirements")
-async def list_requirements() -> dict[str, list[dict[str, object]]]:
-    """需求列表：返回存量需求数组 {"items": [...]}。"""
-    return {"items": requirement_service.list_requirements()}
+async def list_requirements(
+    filters: dict[str, object] = Depends(library_filters),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, list[dict[str, object]]]:
+    """需求列表：返回存量需求数组 {"items": [...]}，支持组合筛选。
+
+    不带任何筛选参数时行为与加筛选前一致（仅多返回渠道/部门/密级等字段供表格使用）。
+    """
+    return {"items": requirement_service.list_requirements(filters=filters, limit=limit)}
+
+
+@router.get("/api/v1/requirements/export")
+async def export_requirements(
+    filters: dict[str, object] = Depends(library_filters),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> Response:
+    """把需求库当前视图导出为 CSV：与列表接口同一套筛选参数，导出所见即所得。
+
+    响应带 UTF-8 BOM，Excel 双击即可正常显示中文。上限比列表放宽（列表 500、导出 5000）。
+    """
+    content = requirement_service.export_requirements_csv(filters=filters, limit=limit)
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="requirements.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/api/v1/requirements/submit", response_model=RequirementSubmitResponse)

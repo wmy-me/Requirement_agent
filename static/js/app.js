@@ -660,7 +660,13 @@ function newChat() {
 }
 
 /* ---------------- Right rail: tabs ---------------- */
+// 「需求库」不再占用右栏窄栏，改为打开全宽面板（见下方 library panel 一节），
+// 所以这里记下最后一个普通标签，收起面板时好还回去。
+let libraryLastTab = 'pending';
+
 function setRailTab(name) {
+  if (name === 'library') { openLibrary(); return; }
+  libraryLastTab = name;
   document.querySelectorAll('.wb-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.wb-pane').forEach((p) => p.classList.remove('active'));
   const pane = $('tab-' + name);
@@ -775,47 +781,127 @@ async function decideReview(sourceId, decision, boxEl) {
 }
 
 /* ---------------- Workbench: library ---------------- */
-async function loadLibrary(query) {
-  const listEl = $('library-list');
+/* ---------------- 需求库：全宽面板 ---------------- */
+const LIB_TABLE_COLS = 9;
+const LIB_PAGE_LIMIT = 300;
+
+function openLibrary() {
+  $('library-panel').classList.remove('hidden');
+  document.querySelector('.workspace').classList.add('library-open');
+  document.querySelectorAll('.wb-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'library'));
+  loadLibraryTable();
+}
+
+function closeLibrary() {
+  $('library-panel').classList.add('hidden');
+  document.querySelector('.workspace').classList.remove('library-open');
+  setRailTab(libraryLastTab === 'library' ? 'pending' : libraryLastTab);
+}
+
+function libraryQuery() {
+  const parts = [];
+  const put = (k, v) => { if (v) parts.push(k + '=' + encodeURIComponent(v)); };
+  put('q', $('lib-filter-q').value.trim());
+  put('channel', $('lib-filter-channel').value);
+  put('status', $('lib-filter-status').value);
+  put('business_domain', $('lib-filter-domain').value);
+  put('department', $('lib-filter-department').value);
+  put('submitted_from', $('lib-filter-from').value);
+  // 「至」当天要含进去：日期控件给的是 YYYY-MM-DD，若原样传给后端会被当成当天 00:00，
+  // 于是当天提交的需求全被排除。补到 23:59:59 才是用户理解的「截至今天」。
+  const to = $('lib-filter-to').value;
+  if (to) put('submitted_to', to + 'T23:59:59');
+  return parts.join('&');
+}
+
+function resetLibraryFilters() {
+  ['lib-filter-q', 'lib-filter-channel', 'lib-filter-status', 'lib-filter-domain',
+   'lib-filter-department', 'lib-filter-from', 'lib-filter-to'].forEach((id) => { $(id).value = ''; });
+  $('lib-panel-detail').classList.add('hidden');
+}
+
+async function loadLibraryTable() {
+  const body = $('lib-table-body');
+  body.innerHTML = `<tr><td colspan="${LIB_TABLE_COLS}" class="empty-hint">加载中…</td></tr>`;
+  const qs = libraryQuery();
   try {
-    let items;
-    if (query) {
-      const res = await apiJson('/api/v1/requirements/search?q=' + encodeURIComponent(query) + '&limit=20');
-      items = res.items || [];
-    } else {
-      const res = await apiJson('/api/v1/requirements');
-      items = res.items || [];
-    }
-    listEl.innerHTML = '';
-    if (!items.length) { listEl.innerHTML = `<div class="empty-hint">暂无需求数据</div>`; return; }
-    items.forEach((it) => listEl.appendChild(buildLibraryItem(it)));
+    const res = await apiJson('/api/v1/requirements?limit=' + LIB_PAGE_LIMIT + (qs ? '&' + qs : ''));
+    const items = res.items || [];
+    // 筛选下拉的候选项只在「无筛选」时刷新：否则一筛选，选项就只剩当前命中的值，
+    // 用户再也切不回上一个条件。（没有 facets 接口，这是最省事且不误导的做法。）
+    if (!qs) syncFilterOptions(items);
+    renderLibraryRows(items);
+    $('lib-count').textContent = items.length + ' 条';
   } catch (e) {
-    listEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+    body.innerHTML = `<tr><td colspan="${LIB_TABLE_COLS}" class="empty-hint">加载失败：${esc(e.message)}</td></tr>`;
   }
 }
 
-function buildLibraryItem(it) {
-  const key = it.requirement_key || it.requirement_name || '';
-  const name = it.requirement_name || it.final_requirement || firstLine(it.summary, 30) || key;
-  const box = document.createElement('div');
-  box.className = 'wb-item';
-  box.innerHTML = `
-    <div class="w-title"></div>
-    <div class="w-meta">
-      <span class="src-tag">${esc(it.requirement_key || '')}</span>
-      <span class="status-tag ${it.status === 'active' ? 'active' : ''}">${esc(it.status || '')}</span>
-      ${it.business_domain ? `<span class="status-tag">${esc(it.business_domain)}</span>` : ''}
-      ${it.current_version != null ? `<span class="status-tag">V${esc(it.current_version)}</span>` : ''}
-      ${it.feature_count != null ? `<span class="status-tag">${esc(it.feature_count)} 条功能</span>` : ''}
-      ${it.score != null ? `<span style="margin-left:auto">相似 ${Math.round(it.score * 100)}%</span>` : ''}
-    </div>`;
-  box.querySelector('.w-title').textContent = name;
-  box.addEventListener('click', () => showRequirementDetail(it.requirement_key, name));
-  return box;
+function renderLibraryRows(items) {
+  const body = $('lib-table-body');
+  if (!items.length) {
+    body.innerHTML = `<tr><td colspan="${LIB_TABLE_COLS}" class="empty-hint">没有符合条件的需求</td></tr>`;
+    return;
+  }
+  body.innerHTML = '';
+  items.forEach((it) => {
+    const name = it.requirement_name || it.final_requirement || it.requirement_key || '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">${esc(it.requirement_key || '')}</td>
+      <td class="lib-name"></td>
+      <td><span class="status-tag ${it.status === 'active' ? 'active' : ''}">${esc(it.status || '')}</span></td>
+      <td>${esc((it.business_domains || []).join('、'))}</td>
+      <td>V${esc(it.current_version == null ? '' : it.current_version)}</td>
+      <td>${esc(it.feature_count == null ? 0 : it.feature_count)}</td>
+      <td>${esc((it.source_types || []).join('、'))}</td>
+      <td>${esc((it.requester_names || []).join('、'))}</td>
+      <td>${esc(it.latest_source_submitted_at || '')}</td>`;
+    tr.querySelector('.lib-name').textContent = name;
+    tr.addEventListener('click', () => showRequirementDetail(it.requirement_key, name, 'lib-panel-detail'));
+    body.appendChild(tr);
+  });
 }
 
-async function showRequirementDetail(key, name) {
-  const detailEl = $('lib-detail');
+function fillSelect(id, values, placeholder) {
+  const el = $(id);
+  const current = el.value;
+  el.innerHTML = `<option value="">${esc(placeholder)}</option>` +
+    values.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  if (values.includes(current)) el.value = current;
+}
+
+function syncFilterOptions(items) {
+  const fromArrays = (key) => {
+    const set = new Set();
+    items.forEach((it) => (it[key] || []).forEach((v) => { if (v) set.add(v); }));
+    return [...set].sort();
+  };
+  const fromScalar = (key) => {
+    const set = new Set();
+    items.forEach((it) => { if (it[key]) set.add(it[key]); });
+    return [...set].sort();
+  };
+  fillSelect('lib-filter-channel', fromArrays('source_types'), '全部渠道');
+  fillSelect('lib-filter-status', fromScalar('status'), '全部状态');
+  fillSelect('lib-filter-domain', fromArrays('business_domains'), '全部领域');
+  fillSelect('lib-filter-department', fromArrays('departments'), '全部部门');
+}
+
+function exportLibraryCsv() {
+  // 不能用 apiJson —— 它写死了 resp.json()。这里让浏览器按 Content-Disposition 直接下载。
+  const qs = libraryQuery();
+  const a = document.createElement('a');
+  a.href = '/api/v1/requirements/export?limit=5000' + (qs ? '&' + qs : '');
+  a.download = 'requirements.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
+  const detailEl = $(targetId);
+  if (!detailEl) return;
   detailEl.classList.remove('hidden');
   detailEl.innerHTML = `<div class="empty-hint">加载版本与溯源…</div>`;
   try {
@@ -1098,10 +1184,12 @@ document.querySelectorAll('.wb-tab').forEach((b) => b.addEventListener('click', 
 $('refresh-pending').addEventListener('click', refreshPending);
 $('refresh-documents').addEventListener('click', loadDocuments);
 $('refresh-audit').addEventListener('click', loadAuditEvents);
-$('lib-all').addEventListener('click', () => { $('lib-q').value = ''; loadLibrary(''); });
-$('lib-search').addEventListener('submit', (e) => {
-  e.preventDefault();
-  loadLibrary($('lib-q').value.trim());
+$('lib-close').addEventListener('click', closeLibrary);
+$('lib-apply').addEventListener('click', loadLibraryTable);
+$('lib-reset').addEventListener('click', () => { resetLibraryFilters(); loadLibraryTable(); });
+$('lib-export').addEventListener('click', exportLibraryCsv);
+$('lib-filter-q').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); loadLibraryTable(); }
 });
 $('document-search').addEventListener('submit', (e) => {
   e.preventDefault();

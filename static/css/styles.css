@@ -376,6 +376,47 @@ input, textarea { font-family: inherit; }
 ::-webkit-scrollbar-thumb { background: #d5dae6; border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: #c2c8d9; }
 
+/* ---------------- 需求库：全宽面板 ---------------- */
+/* 面板是 .workspace 的 flex 兄弟节点，展开时把中栏与右栏 display:none 掉。
+   不用绝对定位是为了让左栏折叠时不留空隙（它的宽度是可变的）。 */
+.workspace.library-open .chat-pane,
+.workspace.library-open .rail-workbench { display: none; }
+
+.library-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.lib-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.lib-head strong { font-size: 14px; }
+.lib-head #lib-close { margin-left: auto; }
+
+.lib-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.lib-filters input, .lib-filters select {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+  color: var(--text); font-size: 13px; padding: 6px 9px; font-family: inherit;
+}
+.lib-filters input:focus, .lib-filters select:focus { outline: none; border-color: var(--border-strong); }
+.lib-filters #lib-filter-q { flex: 1 1 220px; min-width: 180px; }
+.lib-date { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+
+.lib-table-wrap { flex: 1; overflow: auto; padding: 0 16px 16px; }
+.lib-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.lib-table th, .lib-table td {
+  text-align: left; padding: 8px 10px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.lib-table th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg); color: var(--text-3); font-weight: 600; font-size: 12px;
+}
+.lib-table tbody tr { cursor: pointer; }
+.lib-table tbody tr:hover { background: var(--surface-2); }
+.lib-table td.lib-name { white-space: normal; min-width: 220px; }
+.library-panel .lib-detail { max-height: 40%; }
+
 @media (max-width: 1100px) {
   .rail-sessions { width: 210px; min-width: 210px; }
   .rail-workbench { width: 300px; min-width: 300px; }

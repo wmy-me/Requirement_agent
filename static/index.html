@@ -69,19 +69,6 @@
             <div id="pending-list" class="item-scroll"></div>
           </section>
 
-          <section id="tab-library" class="wb-pane">
-            <form id="lib-search" class="lib-search">
-              <input id="lib-q" placeholder="检索存量需求…" />
-              <button class="link-btn" type="submit">搜索</button>
-            </form>
-            <div class="pane-toolbar">
-              <span>需求库</span>
-              <button id="lib-all" class="link-btn" type="button">显示全部</button>
-            </div>
-            <div id="library-list" class="item-scroll"></div>
-            <div id="lib-detail" class="lib-detail hidden"></div>
-          </section>
-
           <section id="tab-documents" class="wb-pane">
             <form id="document-search" class="lib-search">
               <input id="document-q" placeholder="搜索文档 / 证据词…" />
@@ -106,10 +93,52 @@
             <div id="audit-list" class="item-scroll"></div>
           </section>
         </aside>
+
+        <!-- 需求库：全宽面板（点右栏「需求库」标签展开，覆盖中栏 + 右栏）-->
+        <section id="library-panel" class="library-panel hidden">
+          <div class="lib-head">
+            <strong>需求库</strong>
+            <span id="lib-count" class="status-tag"></span>
+            <button id="lib-close" class="btn ghost" type="button">收起</button>
+          </div>
+
+          <div class="lib-filters">
+            <input id="lib-filter-q" placeholder="检索需求名称 / 正文…" />
+            <select id="lib-filter-channel"><option value="">全部渠道</option></select>
+            <select id="lib-filter-status"><option value="">全部状态</option></select>
+            <select id="lib-filter-domain"><option value="">全部领域</option></select>
+            <select id="lib-filter-department"><option value="">全部部门</option></select>
+            <label class="lib-date">提交自 <input id="lib-filter-from" type="date" /></label>
+            <label class="lib-date">至 <input id="lib-filter-to" type="date" /></label>
+            <button id="lib-apply" class="btn primary" type="button">查询</button>
+            <button id="lib-reset" class="btn ghost" type="button">重置</button>
+            <button id="lib-export" class="btn" type="button">导出 CSV</button>
+          </div>
+
+          <div class="lib-table-wrap">
+            <table class="lib-table">
+              <thead>
+                <tr>
+                  <th>需求编号</th>
+                  <th>需求名称</th>
+                  <th>状态</th>
+                  <th>业务领域</th>
+                  <th>版本</th>
+                  <th>功能数</th>
+                  <th>来源渠道</th>
+                  <th>来源人</th>
+                  <th>最近提交</th>
+                </tr>
+              </thead>
+              <tbody id="lib-table-body"></tbody>
+            </table>
+          </div>
+          <div id="lib-panel-detail" class="lib-detail hidden"></div>
+        </section>
       </div>
     </div>
 
     <div id="toast" class="toast hidden"></div>
-    <script src="/static/js/app.js?v=20260909-3"></script>
+    <script src="/static/js/app.js?v=20260914-1"></script>
   </body>
 </html>

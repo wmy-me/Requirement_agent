@@ -86,7 +86,12 @@ class FeishuClient(ChannelAdapter):
             plain = decryptor.update(ciphertext) + decryptor.finalize()
         except ValueError as exc:
             raise FeishuPayloadError(f"解密失败：{exc}") from exc
-        return self._unpad(plain).decode("utf-8")
+        try:
+            return self._unpad(plain).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            # 密钥不对时，末字节有约 1/256 的概率恰好构成合法填充，于是走到这里。
+            # 必须归一成 FeishuPayloadError：路由只捕获它，漏出去就是 500 而非 400。
+            raise FeishuPayloadError(f"解密结果不是合法 UTF-8：{exc}") from exc
 
     @staticmethod
     def _unpad(data: bytes) -> bytes:

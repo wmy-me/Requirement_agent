@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import io
+from collections.abc import Mapping
+
 from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
@@ -10,6 +14,15 @@ from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.workflows.graphs import run_analysis
 from requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
 from requirement_agent.infrastructure.parser.document_parser import DocumentParser
+
+
+def _csv_cell(value: object) -> str:
+    """CSV 单元格取值：多值字段用顿号连接，None 归一为空串。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "、".join(str(item) for item in value if item is not None)
+    return str(value)
 
 
 class RequirementService:
@@ -151,23 +164,78 @@ class RequirementService:
             "next_action": result.get("decision") or result.get("next_action"),
         }
 
-    def list_requirements(self) -> list[dict[str, object]]:
-        """返回主需求列表（含领域/当前版本/功能行数/来源人/最近提交时间）。
+    def list_requirements(
+        self,
+        *,
+        filters: Mapping[str, object] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, object]]:
+        """返回主需求列表（含领域/当前版本/功能行数/来源人/渠道/部门/密级/提交时间）。
 
-        供“需求库”表格视图使用；按 master 表带来源上下文聚合，最多 100 条。
+        供「需求库」表格视图与 CSV 导出使用；筛选条件见
+        `RequirementMasterRepository._build_master_filter`。不带筛选时行为与加筛选前一致。
         """
-        rows = self.master_repo.list_with_source_context(limit=100)
-        return [
-            {
-                "requirement_key": item["requirement_key"],
-                "requirement_name": item["requirement_name"],
-                "final_requirement": item["final_requirement"],
-                "status": item["status"],
-                "business_domain": item["business_domains"][0] if item.get("business_domains") else "general",
-                "current_version": item.get("current_version", 0),
-                "feature_count": item.get("feature_count", 0),
-                "requester_names": item.get("requester_names", []),
-                "latest_source_submitted_at": item.get("latest_source_submitted_at"),
-            }
-            for item in rows
-        ]
+        rows = self.master_repo.list_with_source_context(limit=limit, filters=filters)
+        return [self._present_requirement(item) for item in rows]
+
+    @staticmethod
+    def _present_requirement(item: Mapping[str, object]) -> dict[str, object]:
+        """把 repository 的聚合行裁剪成对外字段（列表与 CSV 共用同一份映射）。
+
+        多值字段（渠道/部门/领域/密级）一律返回**数组**而非首元素——前端要用它们聚合
+        出筛选下拉，只取第一个会让选项残缺。`business_domain` 保留为兼容字段（取首个），
+        新代码请用 `business_domains`。
+        """
+        domains = list(item.get("business_domains") or [])
+        return {
+            "requirement_key": item["requirement_key"],
+            "requirement_name": item["requirement_name"],
+            "final_requirement": item["final_requirement"],
+            "status": item["status"],
+            "business_domain": domains[0] if domains else "general",
+            "business_domains": domains,
+            "current_version": item.get("current_version", 0),
+            "feature_count": item.get("feature_count", 0),
+            "requester_names": list(item.get("requester_names") or []),
+            "source_types": list(item.get("source_types") or []),
+            "departments": list(item.get("departments") or []),
+            "sensitivity_levels": list(item.get("sensitivity_levels") or []),
+            "first_source_submitted_at": item.get("first_source_submitted_at"),
+            "latest_source_submitted_at": item.get("latest_source_submitted_at"),
+        }
+
+    # CSV 的列顺序与中文表头；改这里要同步改 tests/unit/test_requirements_export.py
+    CSV_COLUMNS: tuple[tuple[str, str], ...] = (
+        ("requirement_key", "需求编号"),
+        ("requirement_name", "需求名称"),
+        ("final_requirement", "最终需求"),
+        ("status", "状态"),
+        ("business_domains", "业务领域"),
+        ("current_version", "当前版本"),
+        ("feature_count", "功能数"),
+        ("source_types", "来源渠道"),
+        ("requester_names", "来源人"),
+        ("departments", "部门"),
+        ("sensitivity_levels", "密级"),
+        ("latest_source_submitted_at", "最近提交时间"),
+    )
+
+    def export_requirements_csv(
+        self,
+        *,
+        filters: Mapping[str, object] | None = None,
+        limit: int = 100,
+    ) -> str:
+        """把需求库当前视图导出为 CSV 文本（带 UTF-8 BOM，Excel 打开中文不乱码）。
+
+        用标准库 `csv` 生成而非手工拼接字符串：需求正文里出现逗号、引号、换行是常态，
+        手拼必然出错。
+        """
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow([header for _key, header in self.CSV_COLUMNS])
+        for item in self.list_requirements(filters=filters, limit=limit):
+            writer.writerow([_csv_cell(item.get(key)) for key, _header in self.CSV_COLUMNS])
+        # 函数体首行这个不可见字符是 UTF-8 BOM（U+FEFF）：Excel 靠它识别编码，
+        # 没有它中文列名会乱码。编辑器里看不见，不要顺手删掉。
+        return "﻿" + buffer.getvalue()
