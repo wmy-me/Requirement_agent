@@ -14,11 +14,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query, status
 
 from requirement_agent.config.settings import settings
 from requirement_agent.api.dependencies import review_service, source_repo
 from requirement_agent.api.schemas import ReviewSubmitRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()         # 只读查询组
 submit_router = APIRouter()  # 审核提交（写库 / 强事务）
@@ -54,4 +58,13 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
             feature_overrides=payload.feature_overrides,
         )
     except ValueError as exc:
+        # 409 的两个常见签名：「source_id=X not found」多为前端拿着已失效的 id（列表陈旧）；
+        # 「source_id=X is not pending review」多为重复点击或该条已处理。
+        # 只有前端 toast 看得到详情，服务端不留痕就没法排查——这里补上。
+        logger.warning(
+            "event=review_conflict source_id=%s decision=%s reason=%s",
+            payload.source_id,
+            payload.decision,
+            exc,
+        )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
