@@ -51,9 +51,10 @@ def test_feishu_parse_tolerates_non_json_content() -> None:
     assert inbound.text == "不是JSON"
 
 
-def test_feishu_verify_defaults_to_allow() -> None:
-    """签名校验尚未实现、默认放行——这是已知缺口，接线时必须覆写 verify。"""
-    assert FeishuClient().verify({}, b"{}") is True
+def test_feishu_verify_fails_closed_when_unconfigured() -> None:
+    """未配置 Encrypt Key 时无从验签——必须拒绝，而不是沿用基类的默认放行。"""
+    assert FeishuClient().verify({}, b"{}") is False
+    assert FeishuClient().is_configured is False
 
 
 def test_inbound_requirement_rejects_empty_text() -> None:

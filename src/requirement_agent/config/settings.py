@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     )
     # 可恢复错误（网络层异常 / 408,409,425,429,5xx）的最大重试次数，0 表示不重试。
     llm_max_retries: int = Field(default=2, ge=0, alias="LLM_MAX_RETRIES")
+
+    # —— 飞书渠道（事件订阅）——
+    # verification_token / encrypt_key 至少配一个，否则 Webhook 端点会拒绝所有请求
+    # （未配置的渠道端点不能接受任意输入）。两者都配时签名校验与 token 校验都会执行。
+    feishu_app_id: str = Field(default="", alias="FEISHU_APP_ID")
+    feishu_app_secret: SecretStr = Field(default=SecretStr(""), alias="FEISHU_APP_SECRET")
+    feishu_verification_token: SecretStr = Field(
+        default=SecretStr(""), alias="FEISHU_VERIFICATION_TOKEN"
+    )
+    # 配置后飞书回调为密文，需 AES-256-CBC 解密；同时强制要求签名校验
+    feishu_encrypt_key: SecretStr = Field(default=SecretStr(""), alias="FEISHU_ENCRYPT_KEY")
     # 重试退避基数（秒）：第 n 次重试等待 base * 2**n 并叠加抖动。
     llm_retry_backoff_seconds: float = Field(
         default=0.5, ge=0.0, alias="LLM_RETRY_BACKOFF_SECONDS"

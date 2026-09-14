@@ -56,8 +56,12 @@ memory_extractor = MemoryExtractor(memory_repo)
 
 # —— 渠道接入 ——
 # 分析任务要调用应用层服务，装配点在这里注入（见 RequirementAnalysisTask 的说明）。
-# 飞书的 app_id/app_secret 目前为空——settings 还没有飞书字段，接线时再补。
-feishu_client = FeishuClient()
+feishu_client = FeishuClient(
+    app_id=settings.feishu_app_id,
+    app_secret=settings.feishu_app_secret.get_secret_value(),
+    verification_token=settings.feishu_verification_token.get_secret_value(),
+    encrypt_key=settings.feishu_encrypt_key.get_secret_value(),
+)
 requirement_analysis_task = RequirementAnalysisTask(requirement_service.process_requirement)
 channel_ingest_service = ChannelIngestService(requirement_analysis_task)
 

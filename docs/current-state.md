@@ -17,7 +17,7 @@
 | 1. 项目结构重组（src-layout） | ✅ 完成 | `df44749` → `1f88419` → `180578b` → `5d2d551` → `17379f4` → `dc91f43` |
 | 1′. 收尾：`apps/` 并入、死代码清理 | ✅ 完成 | `d67fe0c`、`9ae7b2d` |
 | 2. LLM / Agent / Prompt / Skill / Embedding 整改 | ✅ 完成 | `c554fd5`、`6343d18`、`f03f664`、`0a13127`、`3c99293`、`c1226b6` |
-| 3. ChannelAdapter + 飞书 Webhook | ⬜ 未开始 | — |
+| 3. ChannelAdapter + 飞书 Webhook | 🟡 代码完成，待真实凭据联调 | `949bf22`（地基）、飞书协议部分见下方说明 |
 | 4. 需求库表格视图 + 组合筛选 + CSV 导出 | ⬜ 未开始 | — |
 | 5. 需求关系表 + 影响分析 | ⬜ 未开始 | — |
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | ⬜ 未开始 | — |
@@ -64,26 +64,40 @@
 
 | # | 问题 | 位置 / 证据 |
 |---|---|---|
-| 1 | **飞书渠道未接线**，且 stub 返回的 `source_type='feishu'` 不在对外枚举内 | `infrastructure/channels/feishu_client.py:23`；枚举见 `api/schemas/agent.py:15,53`，取值为 `web/email/meeting/manual`。注意 DB 层 `source_type TEXT` **无约束**，冲突只在 Python 契约层。飞书事件走哪条入库路径属阶段 3 的设计决定。 |
+| 1 | **飞书渠道代码已就绪，但未与真实飞书应用联调** | 端点 `POST /api/v1/channels/feishu/webhook`（`api/routes/channels.py`）；协议实现见 `infrastructure/channels/feishu_client.py`。**未验证项**：解密/签名按官方文档实现但无官方测试向量，单测是自洽回环；URL 校验、加密回调、签名头是否与真实飞书一致，需要配一个测试应用实测。 |
+| 1b | **`source_type` 对外枚举未放宽** | `api/schemas/agent.py:15,53` 与 `api/schemas/requirements.py:20` 仍为 `web/email/meeting/manual`。渠道入库走 service 不经该校验，所以**功能上不阻塞**；但若要让 `feishu` 能经 `/requirements/submit` 等端点提交，需放宽（属对外契约变更，需授权）。 |
 | 2 | **E2E 测试为空** | `tests/` 下只有 `unit/` 与 `integration/`（集成测试仅 1 个文件），原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。 |
 | 3 | **worker 未部署** | `workers/tasks.py` 提供了独立的 FastAPI 入口（:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。 |
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
-| 6 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
+| 6 | **雪花 ID 经 JSON number 传给前端有精度风险** | 后端把 `source_id` 序列化为 JSON number，前端用 JS `Number` 承载，而雪花 ID 普遍超过 `2^53`（`MAX_SAFE_INTEGER`）。当前库里这几个 ID 恰好能被 double 精确表示才没出事；一旦不巧，前端会发出一个不存在的 ID。修法是后端把该字段序列化成字符串（契约变更，需授权）。 |
+| 7 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
 
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
 > `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`。
 
 ---
 
-## 四、阶段 3 起点的已知地形
+## 四、渠道接入现状（阶段 3）
 
-- **`feishu_client.py` 是未接线 stub**（`infrastructure/channels/`），返回 `source_type='feishu'`。
-- **幂等索引已就绪**：`migrations/001_init_business_schema.sql:26-28`
-  对 `requirement_source(source_type, source_event_id)` 建了唯一索引（`WHERE source_event_id IS NOT NULL`），
-  渠道事件重复投递可直接依赖它去重。
-- **尚无** Webhook 端点、签名校验、事件队列。
-- 阶段 3 之前建议先看 **§二** 的四项拍板，尤其鉴权。
+入库链路：**验签（飞书自身）→ 归一化 → 落 source(received) → 入 outbox → 立即返回**，
+分析由后台 `RequirementAnalysisTask` 补上。之所以不等分析，是因为飞书事件订阅（HTTP Webhook
+与长连接两种模式）都要求在 3 秒内应答，而分析图要跑 4 个 LLM 步骤。
+
+| 组件 | 位置 |
+|---|---|
+| 通道抽象 | `infrastructure/channels/base.py`（`InboundRequirement` + `ChannelAdapter`） |
+| 飞书协议 | `infrastructure/channels/feishu_client.py`（AES-256-CBC 解密 / 签名 / token / 归一化） |
+| 接入服务 | `application/channel_service.py`（幂等预查 → 落库 → 入队） |
+| 异步消费 | `infrastructure/worker/tasks.py::RequirementAnalysisTask` |
+| 端点 | `api/routes/channels.py` → `POST /api/v1/channels/feishu/webhook` |
+| 内部入口 | `tools.ingest_channel_event()`（不必等 Webhook 即可调用） |
+
+**⚠️ 该端点是全项目唯一对外暴露且不经 HTTP 鉴权的路径**，安全性完全依赖飞书自身的
+签名校验与 Verification Token（`FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`，
+至少配一个，否则端点直接返回 503）。**将来上全局鉴权中间件（阶段 6）必须把本路径豁免。**
+
+配置见 `.env.example` 的「飞书渠道」段。
 
 ---
 
