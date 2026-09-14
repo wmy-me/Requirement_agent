@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import logging
-
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
-
-logger = logging.getLogger(__name__)
 
 
 class EmbeddingDimensionError(RuntimeError):
@@ -18,11 +14,23 @@ class EmbeddingDimensionError(RuntimeError):
     """
 
 
+class EmbeddingUnavailableError(RuntimeError):
+    """没有可用的向量：网关未配置，或输入为空。
+
+    这里以前返回等维全零占位「保证链路不崩」，实际后果是**假向量落库**：
+    - pgvector 对零向量的余弦距离是 `NaN`（实测 `[0,0,0] <=> [1,2,3] = nan`），
+      于是 `1 - NaN = NaN` 作为检索分一路传到前端，渲染成乱码百分比；
+    - outbox 事件仍然被标成 `completed`，没有任何地方会察觉。
+
+    改为抛错后行为从「静默写脏数据」变成「可见地失败」——所有调用方本来就捕获异常
+    并降级：`_embed_safe` 返回 None、检索退回关键词、outbox 任务标记失败并重试/死信。
+    """
+
+
 class EmbeddingService:
     """负责将需求文本转换为向量表示，供检索和相似度比较使用。
 
-    不再产出哈希伪向量：配置了 embedding 即返回真实向量；未配置时返回
-    `EMBEDDING_DIMENSION` 维全零占位向量，并把“占位”意图留待调用方感知。
+    配置了 embedding 即返回真实向量；**未配置或输入为空则抛错**，绝不返回占位向量。
     """
 
     def __init__(self, provider: LLMProvider | None = None) -> None:
@@ -31,23 +39,18 @@ class EmbeddingService:
     def embed(self, text: str) -> list[float]:
         """返回 embedding 向量（维度取 `embedding_dimension`）。
 
-        - 已配置 embedding 网关：走真实模型，调用失败时**异常向上抛**，由 outbox 任务
-          负责重试/死信，避免静默写入零向量或伪向量。
-        - 完全未配置（既无独立 embedding 也无 chat provider）：返回等维全零占位，
-          保证链路不至于崩掉——但此时调用方应感知到配置缺失。
+        - 输入为空、或完全未配置（既无独立 embedding 也无 chat provider）：抛
+          `EmbeddingUnavailableError`；
+        - 已配置但调用失败：异常向上抛，由调用方决定（outbox 重试 / 退化关键词）；
+        - 维度与 `EMBEDDING_DIMENSION` 不符：抛 `EmbeddingDimensionError`。
         """
-        if not text:
-            return [0.0] * settings.embedding_dimension
-        if self.is_configured():
-            return self._validated(self.provider.embed(text))
-        # 未配置时仍返回等维占位以保证链路不崩，但不再静默：占位向量检索无意义，
-        # 必须有痕迹可查（容器部署曾因漏传 EMBEDDING_* 长期走这条路而不自知）。
-        logger.warning(
-            "event=embedding_placeholder reason=unconfigured dimension=%d "
-            "（未配置 embedding 网关，写入的是全零占位向量，检索无意义）",
-            settings.embedding_dimension,
-        )
-        return [0.0] * settings.embedding_dimension
+        if not text.strip():
+            raise EmbeddingUnavailableError("空文本没有可嵌入的内容")
+        if not self.is_configured():
+            raise EmbeddingUnavailableError(
+                "未配置 embedding 网关（EMBEDDING_BASE_URL + EMBEDDING_API_KEY）"
+            )
+        return self._validated(self.provider.embed(text))
 
     @staticmethod
     def _validated(vector: list[float]) -> list[float]:

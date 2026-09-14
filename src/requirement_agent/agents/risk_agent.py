@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from requirement_agent.agents.extract_agent import ExtractedRequirement
@@ -13,12 +15,17 @@ class RiskAssessment(BaseModel):
 
     三类风险供人工审核与前端标签展示使用；
     `confidence` 表示当前规则/模型对该判断的把握，不等于业务优先级。
+
+    `source` 标明这组结论**来自模型还是规则**。这个字段是必需的：启发式兜底也会给出
+    confidence（基底 0.55 起、按条件加分），而前端此前无条件渲染成「**模型**置信度」，
+    等于替规则结论宣称了不存在的来源。
     """
 
     quality_risk: str = "low"
     change_risk: str = "low"
     technical_impact_risk: str = "low"
     confidence: float = 0.7
+    source: Literal["llm", "heuristic"] = "heuristic"
 
 
 class RiskAgent:
@@ -50,6 +57,7 @@ class RiskAgent:
             change_risk=change_risk,
             technical_impact_risk=technical_impact_risk,
             confidence=confidence,
+            source="heuristic",
         )
 
     def _evaluate_quality(self, extracted: ExtractedRequirement) -> str:

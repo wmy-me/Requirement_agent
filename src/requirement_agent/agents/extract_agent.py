@@ -14,6 +14,11 @@ class ExtractedRequirement(BaseModel):
 
     该对象会贯穿检索、关系分析、风险评估、审核落库与对话回放；
     `requirements` 表示按功能条目拆分后的候选行，后续版本管理直接复用它做 feature 初稿。
+
+    `extraction_source` 标明这些字段**来自模型还是规则兜底**。这个字段是必需的：
+    兜底抽取只能按行切割原文，遇到 PDF 这类版式文本会把「一、文档基础信息」这种
+    排版行当成功能条目，而它一路直通 `requirement_feature` 与 `requirement_master`，
+    界面上显示为「要点拆解」，看不出与模型抽取的区别。
     """
 
     requirement_title: str
@@ -25,6 +30,8 @@ class ExtractedRequirement(BaseModel):
     tags: list[str] = Field(default_factory=list)
     requirements: list[str] = Field(default_factory=list)
     raw_text: str
+    # 默认 heuristic：不做无据的声称。模型路径会显式覆盖为 llm。
+    extraction_source: Literal["llm", "heuristic"] = "heuristic"
 
 
 class ExtractAgent:
@@ -87,6 +94,7 @@ class ExtractAgent:
             tags=tags,
             requirements=requirements,
             raw_text=cleaned,
+            extraction_source="heuristic",
         )
 
     def _extract_title(self, raw_text: str, lines: list[str]) -> str:

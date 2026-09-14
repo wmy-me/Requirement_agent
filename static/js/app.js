@@ -322,6 +322,11 @@ function buildArtifact(p) {
   if (extracted.requirements && extracted.requirements.length) {
     b1.insertAdjacentHTML('beforeend', `<div class="section-label">要点拆解</div><ul class="list-plain">${extracted.requirements.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`);
   }
+  // 兜底抽取只能按行切割原文：PDF 这类版式文本会把「一、文档基础信息」当成功能点。
+  // 这些条目会一路进 requirement_feature 与 master，不标出来看不出与模型抽取的区别。
+  if (extracted.extraction_source === 'heuristic') {
+    b1.insertAdjacentHTML('beforeend', `<div style="margin-top:8px;font-size:12px;color:var(--warning)">⚠️ 模型抽取不可用，以上字段由规则按原文切分得到（版式文本可能把排版行当成功能点）</div>`);
+  }
   if (extracted.raw_text) {
     const orig = document.createElement('details');
     orig.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-3);';
@@ -331,20 +336,38 @@ function buildArtifact(p) {
   frag.appendChild(c1);
 
   // 2) similar / related
-  const cands = extCands.length ? extCands : topCands.map((c) => ({
-    requirement_key: c.requirement_key, title: c.requirement_name || c.title, similarity: c.score, reason: '检索命中（' + (c.match_type || '') + '）',
-  }));
+  // 两个来源的百分比**含义不同**，必须标出来：分析候选是模型基于语义给的判断；
+  // 回退到检索结果时那个数是「关键词命中 +0.35、短语命中 +0.4」的手工加和，
+  // 既不是余弦也不是模型判断。此前两者渲染成一模一样的进度条，无法分辨。
+  const cands = extCands.length
+    ? extCands.map((c) => ({ ...c, simSource: '模型判断' }))
+    : topCands.map((c) => ({
+        requirement_key: c.requirement_key,
+        title: c.requirement_name || c.title,
+        similarity: c.score,
+        reason: '检索命中（' + (c.match_type || '') + '）',
+        simSource: '检索分',
+      }));
   const c2 = card('相似 / 关联需求', '🔗', false);
   const b2 = c2.querySelector('.acard-body');
   if (cands.length) {
-    b2.innerHTML = cands.map((c) => `
+    b2.innerHTML = cands.map((c) => {
+      // 相似度非有限值时显示「—」而不是算出一个假的百分比
+      const sim = Number(c.similarity);
+      const pct = Number.isFinite(sim) ? `${Math.round(sim * 100)}%` : '—';
+      const width = Number.isFinite(sim) ? Math.max(2, Math.round(sim * 100)) : 0;
+      return `
       <div class="cand">
-        <div class="cand-top"><span class="cand-key">${esc(c.requirement_key || '')}</span><span style="font-size:12px;color:var(--text-2)">${Math.round((c.similarity || 0) * 100)}%</span></div>
+        <div class="cand-top">
+          <span class="cand-key">${esc(c.requirement_key || '')}</span>
+          <span style="font-size:12px;color:var(--text-2)">${pct}<span class="status-tag" style="margin-left:6px">${esc(c.simSource)}</span></span>
+        </div>
         <div class="cand-title">${esc(c.title || '历史需求')}</div>
-        <div class="score"><span class="track"><span class="fill" style="width:${Math.max(2, Math.round((c.similarity || 0) * 100))}%"></span></span></div>
+        <div class="score"><span class="track"><span class="fill" style="width:${width}%"></span></span></div>
         <div class="reason">${esc(c.reason || '')}</div>
         ${Array.isArray(c.evidence) && c.evidence.length ? `<div class="reason">证据：${c.evidence.map((e) => `<span class="chip">${esc(e)}</span>`).join(' ')}</div>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } else {
     b2.innerHTML = `<div class="empty-hint">未检索到存量相似需求</div>`;
   }
@@ -368,7 +391,14 @@ function buildArtifact(p) {
   const b4 = c4.querySelector('.acard-body');
   const risks = [['质量风险', risk.quality_risk], ['变更风险', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
   b4.innerHTML = `<div class="risk-line">${risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)} · ${levelText(lvl)}</span>`).join('')}</div>`;
-  if (risk.confidence != null) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:6px">模型置信度 ${Math.round(risk.confidence * 100)}%</div>`);
+  if (risk.confidence != null) {
+    // 只在这组结论真的来自模型时才写「模型置信度」。启发式兜底同样会给 confidence
+    // （基底 0.55 起按条件加分），此前无条件写「模型置信度」等于替规则宣称来源。
+    // 历史数据没有 source 字段 —— 那种情况下不替它认领任何一方。
+    const riskLabel = risk.source === 'llm' ? '模型置信度' : risk.source === 'heuristic' ? '规则估算置信度' : '置信度';
+    const riskNote = risk.source === 'heuristic' ? '（模型不可用，风险等级由规则给出）' : '';
+    b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:6px">${riskLabel} ${Math.round(risk.confidence * 100)}%${riskNote}</div>`);
+  }
   if (p.analysis_mode) b4.insertAdjacentHTML('beforeend', `<div style="font-size:12px;color:var(--text-3);margin-top:4px">审核模式：${esc(p.analysis_mode)}</div>`);
   frag.appendChild(c4);
 

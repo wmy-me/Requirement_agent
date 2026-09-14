@@ -352,7 +352,12 @@ class LLMProvider:
         与 chat provider 解耦——避免 chat 是 deepseek（无 /embeddings 端点）时 404。
         """
         if not (self.embedding_configured() or self.is_configured()):
-            return [0.0] * settings.embedding_dimension
+            # 不返回全零占位：零向量在 pgvector 里余弦距离是 NaN，会顺着检索一路变成
+            # 界面上的乱码分数，且写入方（outbox）还会标成 completed，无人察觉。
+            # 抛错让调用方走各自的降级路径。EmbeddingService 也会先行拦截。
+            raise RuntimeError(
+                "embedding 未配置（EMBEDDING_BASE_URL + EMBEDDING_API_KEY 或 chat provider）"
+            )
 
         payload = {"model": self.embedding_model, "input": text}
         result = self._request_with_retry(

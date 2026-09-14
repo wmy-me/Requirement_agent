@@ -40,6 +40,8 @@ class RiskSkill(BaseSkill):
                 technical_impact_risk=str(payload.get("technical_impact_risk") or fallback.technical_impact_risk),
                 # 置信度只作为解释信号，限制在 0~0.95，避免错误的 100% 绝对表达。
                 confidence=max(0.0, min(0.95, float(payload.get("confidence") or fallback.confidence))),
+                # 标明来源：前端据此决定写「模型置信度」还是「规则估算置信度」
+                source="llm",
             )
             return result
         except Exception as exc:

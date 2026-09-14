@@ -89,6 +89,8 @@ class ExtractSkill(BaseSkill):
                 "tags": _coerce_str_list(payload.get("tags")) or fallback.tags,
                 "requirements": _coerce_str_list(payload.get("requirements")) or fallback.requirements,
                 "raw_text": payload.get("raw_text") or raw_text,
+                # 标明来源：前端据此判断「要点拆解」是不是模型抽取的
+                "extraction_source": "llm",
             })
             return result
         except Exception as exc:
