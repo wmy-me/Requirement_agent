@@ -8,9 +8,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import re
 from collections.abc import AsyncIterator
 from queue import Queue
 from typing import Literal
@@ -22,7 +20,6 @@ from fastapi.responses import StreamingResponse
 
 from requirement_agent.agents.analyze_agent import score_label, thresholds_for
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
-from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.api.dependencies import (
@@ -36,7 +33,6 @@ from requirement_agent.api.dependencies import (
     extract_agent,
     memory_context_builder,
     object_storage,
-    requirement_service,
     retrieval_service,
     risk_agent,
 )
@@ -68,75 +64,6 @@ NARRATIVE_SYSTEM_PROMPT = (
 def _sse(name: str, payload: object) -> str:
     """构造一行安全的 SSE 帧（payload 以 JSON 编码，避免原始换行破坏协议）。"""
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-# —— 「需要我提交吗？」的自然语言应答 ——
-# 助手是用自然语言提问的（「需要我把这条正式提交进待办审核队列吗？」），用户自然会用
-# 自然语言回答。此前这类回答会被当成一条新需求重新分析，属于交互缺陷。
-# 判定刻意收得很紧：措辞必须明确指向「提交/待办/审核」，且上一轮助手确实问了这个问题。
-_SUBMIT_CONFIRM_WORDS = frozenset(
-    {"需要", "好的", "好", "可以", "确认", "是的", "是", "行", "提交", "通过", "ok", "okay", "嗯"}
-)
-_SUBMIT_CONFIRM_PREFIXES = ("需要", "好的", "好", "可以", "确认", "是的", "行", "提交", "通过", "嗯")
-_SUBMIT_KEYWORDS = ("提交", "待办", "审核")
-_SUBMIT_CONFIRM_MAX_LEN = 60
-
-
-def _is_submit_confirmation(text: str) -> bool:
-    """这句话是不是在回答「要不要提交」。
-
-    两种形态：整句就是一个肯定词；或以肯定词开头、且明确提到提交/待办/审核。
-    像「需要支持导出」这种真需求不会命中（以「需要」开头但不含提交类关键词）。
-    """
-    stripped = re.sub(r"[\s。.!！,，、~～]+", "", text or "")
-    if not stripped or len(stripped) > _SUBMIT_CONFIRM_MAX_LEN:
-        return False
-    if stripped.lower() in _SUBMIT_CONFIRM_WORDS:
-        return True
-    return stripped.startswith(_SUBMIT_CONFIRM_PREFIXES) and any(k in stripped for k in _SUBMIT_KEYWORDS)
-
-
-def _find_confirmable_analysis(messages: list[dict[str, object]]) -> dict[str, object] | None:
-    """找出「最近一条助手消息里、正在征询提交且可提交」的分析结果。
-
-    两个必要条件缺一不可：最近一条助手消息确实问了要不要提交，且它的 artifacts 里有可用正文。
-    任一不满足都返回 None，让这句话按普通需求走——宁可漏判，不可误判。
-    """
-    for message in reversed(messages):
-        if message.get("role") != "assistant":
-            continue
-        if "提交进待办审核" not in str(message.get("content") or ""):
-            return None
-        artifacts = message.get("artifacts") or {}
-        if not (artifacts.get("extracted") or {}).get("raw_text"):
-            return None
-        return artifacts
-    return None
-
-
-def _build_source_from_artifacts(
-    artifacts: dict[str, object], *, session_id: str
-) -> RequirementSource:
-    """把对话里的分析结果组装成一条可入库的来源。
-
-    幂等键用「会话 + 正文指纹」：同一段分析连说两次「需要」也不会重复入库。
-    """
-    extracted = dict(artifacts.get("extracted") or {})
-    raw_text = str(extracted.get("raw_text") or "")[:20000]
-    return RequirementSource(
-        idempotency_key=f"chat:{session_id}:{hashlib.sha1(raw_text.encode('utf-8')).hexdigest()[:16]}",
-        source_type=str(artifacts.get("source_type") or "web"),
-        requester_id="chat",
-        requester_name=extracted.get("requester_name"),
-        original_text=raw_text,
-        original_payload={"input_mode": "chat", "chat_session_id": session_id},
-        metadata={
-            "chat_session_id": session_id,
-            "extracted": extracted,
-            "analysis": artifacts.get("analysis") or {},
-            "risk": artifacts.get("risk") or {},
-        },
-    )
 
 
 def _fallback_narrative(pipeline: dict[str, object]) -> str:
@@ -318,31 +245,6 @@ async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[
     return _replay()
 
 
-async def _stream_confirmed_submission(
-    *,
-    session_id: str,
-    run_id: str,
-    artifacts: dict[str, object],
-    history: list[dict[str, object]],
-) -> AsyncIterator[str]:
-    """把已确认的分析结果提交进待办审核，产出与主管线兼容的 SSE 帧。"""
-    yield _sse("step", {"step": "submit", "label": "正在写入待办审核…"})
-    source = _build_source_from_artifacts(artifacts, session_id=session_id)
-    submitted = await run_in_threadpool(requirement_service.submit_requirement, source)
-    content = (
-        f"已提交待办审核（来源 #{submitted.get('source_id')}，状态 {submitted.get('status')}）。"
-        "可到右侧「待办」进行审核。"
-    )
-    for i in range(0, len(content), 10):
-        yield _sse("narrative", {"t": content[i : i + 10]})
-    history.append({"role": "assistant", "content": content, "artifacts": None})
-    chat_repo.append_assistant_message(
-        conversation_id=session_id, content=content, artifacts=None, run_id=run_id
-    )
-    chat_repo.update_run(run_id=run_id, status="completed", meta={"conversation_id": session_id})
-    yield _sse("done", {"run_id": run_id})
-
-
 async def _stream_chat_pipeline(
     *,
     session_id: str,
@@ -384,16 +286,6 @@ async def _stream_chat_pipeline(
 
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
-
-        # —— 这句若是在回答「需要我提交吗」，直接落库，不再当新需求重跑一遍分析 ——
-        if _is_submit_confirmation(run_text):
-            confirmable = _find_confirmable_analysis(chat_repo.get_messages(session_id))
-            if confirmable is not None:
-                async for frame in _stream_confirmed_submission(
-                    session_id=session_id, run_id=run_id, artifacts=confirmable, history=history
-                ):
-                    yield frame
-                return
 
         yield _sse("step", {"step": "extract", "label": "正在理解你的需求…"})
         extracted = await run_in_threadpool(
