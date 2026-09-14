@@ -1,4 +1,4 @@
-# 周末新机快速上手 & 下一步计划
+# 周末新机快速上手（环境搭建）
 
 > 面向：换到另一台电脑继续开发
 > 依据：当前仓库状态（`master`，HEAD = 全部已推送）
@@ -107,23 +107,18 @@ pg_restore -d requirement_agent reqagent.dump
 
 ---
 
-## 6. 下一步计划（阶段 2：LLM / Agent / Prompt / Skill / Embedding / 检索配置整改）
+## 6. 下一步做什么
 
-依据 `docx/LLM_Agent_Prompt_Skill_审计报告_2026-09-11.md`：
+**进度与未决事项统一看 [`docs/current-state.md`](../current-state.md)。**
 
-| 优先级 | 事项 |
-|---|---|
-| P1 | **Prompt 去重**：三个 Skill 各自内联 prompt，`skills/prompts.py` 未被引用 → 收敛为单一事实源 + 版本号 |
-| P1 | **`.env` 未生效的 `OPENAI_*`**（provider=deepseek 不读取）→ 清理或启用 |
-| P1 | **`analysis_mode`**（strict/balanced/broad）是被接受但**从未使用**的死参数 → 接线或移除 |
-| P2 | **模型参数透传**（temperature / timeout / retry / 退避）——当前 Provider 一个都不传 |
-| P2 | **LLM 可观测性**：调用计数/耗时/token/错误结构化日志 |
-| P2 | **向量检索**：3 张表 4096 维**无索引**（pgvector 上限 2000，靠精确扫描）→ 规划模型/降维 |
+本文件只负责「把环境跑起来」。原先写在这里的阶段 2 计划与阶段 1 遗留待决项均已过时或完成：
 
-### 阶段 1 遗留待决项（`docs/refactoring/phase-1-review-packet.md` §8）
-1. `apps/`（api 薄壳 + worker）是否也迁入 `requirement_agent/workers/`？
-2. `requirement_key`（`REQ-000001`）是否去序列化？
-3. `/health` 重复注册、OpenAPI tags 双层重复 —— 是否授权修正（会变更 OpenAPI）？
+- **阶段 2 六项已完成**：Prompt 去重（`c554fd5`）、清理 `OPENAI_*` 与补 `.env.example`（`f03f664`）、
+  `analysis_mode` 接线（`6343d18`）、模型参数透传（`0a13127`）、LLM 可观测性（`3c99293`）、
+  向量维度决策与守卫（`c1226b6`）。
+- **阶段 1 三个待决项**：「`apps/` 是否迁入」已随 `d67fe0c` 落地；「`requirement_key` 去序列化」
+  定为**保持现状**（业务友好编号）；「`/health` 重复注册 + tags 重复」**仍待授权**
+  （会变更 OpenAPI）—— 详见 `current-state.md` §二。
 
 ---
 
