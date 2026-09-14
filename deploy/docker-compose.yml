@@ -94,6 +94,12 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      # embedding 走独立网关：chat provider 是 deepseek 时它没有 /embeddings 端点。
+      # 下面三键缺失会让容器内 embedding 回落到 chat base_url 并 404，向量写入静默失败。
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      # 必须与数据库向量列维度一致（001/003/004 建列 1536，006 迁移后为 4096）
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-4096}
     depends_on:
       migrate:
         condition: service_completed_successfully

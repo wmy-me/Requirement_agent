@@ -8,7 +8,12 @@ __pycache__/
 docx/
 .env
 .env.*
+!.env.example
 *.egg-info/
 .DS_Store
 .coverage
 htmlcov/
+
+# 本地数据库导出（含真实数据，勿入库）
+*.dump
+db_data.sql
