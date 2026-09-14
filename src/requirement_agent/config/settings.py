@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     # 需要确定性输出时显式设 LLM_TEMPERATURE=0。
     llm_temperature: float | None = Field(default=None, alias="LLM_TEMPERATURE")
     # 非流式与 embedding 请求的总超时（秒）。
-    llm_timeout_seconds: float = Field(default=30.0, gt=0, alias="LLM_TIMEOUT_SECONDS")
+    # 60 而非 30：实测长文档抽取耗时约 28s，30s 只差不到 2 秒，稍有抖动就超时降级到启发式，
+    # 而失败只留一条 skill_fallback 告警，很难发现。
+    llm_timeout_seconds: float = Field(default=60.0, gt=0, alias="LLM_TIMEOUT_SECONDS")
     # 流式请求的 read 超时（秒）——首字节后每段增量的等待上限。
     llm_stream_read_timeout_seconds: float = Field(
         default=120.0, gt=0, alias="LLM_STREAM_READ_TIMEOUT_SECONDS"
