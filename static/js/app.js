@@ -1053,6 +1053,87 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
   }
 }
 
+/* ---------------- Workbench: 运维 ---------------- */
+async function loadOps() {
+  const summaryEl = $('ops-summary');
+  const listEl = $('ops-dead-letters');
+  if (!summaryEl || !listEl) return;
+  try {
+    const res = await apiJson('/api/v1/ops/outbox?limit=20');
+    const counts = res.counts || {};
+    const consumer = res.consumer;
+    setOpsBadge(counts.dead_letter || 0);
+
+    const cells = [
+      ['待处理', counts.pending, ''],
+      ['处理中', counts.processing, ''],
+      ['已完成', counts.completed, ''],
+      ['死信', counts.dead_letter, counts.dead_letter ? 'warn' : ''],
+      ['已放弃', counts.discarded, ''],
+    ];
+    const consumerLine = consumer
+      ? `消费循环 · 运行中 ${consumer.running ? '是' : '否'} · 轮询 ${consumer.poll_count} 次 · 成功 ${consumer.processed_total} · 退回重试 ${consumer.retried_total} · 转死信 ${consumer.dead_letter_total} · 最近活动 ${consumer.last_active_at ? fmtTime(consumer.last_active_at) : '—'}`
+      : '消费循环未启动（该统计由 API 进程的 lifespan 提供；测试客户端或未启用 outbox 时为未知）';
+    summaryEl.innerHTML = `
+      <div class="ops-counts">${cells.map(([label, n, cls]) => `
+        <div class="ops-cell ${cls}"><div class="ops-n">${esc(n == null ? '—' : n)}</div><div class="ops-l">${esc(label)}</div></div>`).join('')}
+      </div>
+      <div class="ops-consumer">${esc(consumerLine)}</div>`;
+
+    const items = res.dead_letters || [];
+    listEl.innerHTML = '';
+    if (!items.length) {
+      listEl.innerHTML = `<div class="empty-hint">当前没有死信事件</div>`;
+      return;
+    }
+    items.forEach((it) => listEl.appendChild(buildDeadLetterItem(it)));
+  } catch (e) {
+    summaryEl.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function setOpsBadge(n) {
+  const el = $('ops-count');
+  if (!el) return;
+  if (n > 0) { el.textContent = n > 99 ? '99+' : n; el.classList.remove('hidden'); }
+  else el.classList.add('hidden');
+}
+
+function buildDeadLetterItem(it) {
+  const box = document.createElement('div');
+  box.className = 'wb-item';
+  box.innerHTML = `
+    <div class="w-title"></div>
+    <div class="w-meta">
+      <span class="src-tag">${esc(it.event_type || '')}</span>
+      <span class="status-tag">重试 ${esc(it.retries == null ? 0 : it.retries)} 次</span>
+      <span style="margin-left:auto">${esc(fmtTime(it.created_at) || '')}</span>
+    </div>
+    <pre class="ops-error"></pre>
+    <div class="doc-actions"></div>`;
+  box.querySelector('.w-title').textContent = `${it.aggregate_type || ''} · ${it.aggregate_id || ''}`;
+  box.querySelector('.ops-error').textContent = it.last_error || '（无错误信息）';
+  const actions = box.querySelector('.doc-actions');
+  [['重试', 'retry'], ['丢弃', 'discard']].forEach(([label, action]) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn ghost';
+    btn.textContent = label;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await apiJson(`/api/v1/ops/outbox/dead-letters/${it.id}/${action}`, { method: 'POST' });
+        toast(action === 'retry' ? '已重新入队，等待下一轮消费' : '已放弃该事件', 'ok');
+        loadOps();
+      } catch (e) {
+        toast(`${label}失败：` + e.message, 'err');
+        btn.disabled = false;
+      }
+    });
+    actions.appendChild(btn);
+  });
+  return box;
+}
+
 /* ---------------- Workbench: documents ---------------- */
 async function loadDocuments(query = '') {
   const listEl = $('document-list');
@@ -1275,6 +1356,7 @@ document.querySelectorAll('.wb-tab').forEach((b) => b.addEventListener('click', 
 $('refresh-pending').addEventListener('click', refreshPending);
 $('refresh-documents').addEventListener('click', loadDocuments);
 $('refresh-audit').addEventListener('click', loadAuditEvents);
+$('refresh-ops').addEventListener('click', loadOps);
 $('lib-close').addEventListener('click', closeLibrary);
 $('lib-apply').addEventListener('click', loadLibraryTable);
 $('lib-reset').addEventListener('click', () => { resetLibraryFilters(); loadLibraryTable(); });
@@ -1302,7 +1384,14 @@ async function init() {
   loadPendingReviews();
   loadDocuments();
   loadAuditEvents();
+  loadOps();
   loadStatus();
-  setInterval(() => { if (!state.streaming) loadStatus(); }, 30000);
+  // 运维面板与状态灯一起轮询：死信是「需要人去处理」的东西，tab 上的徽标要能自己亮起来
+  setInterval(() => {
+    if (!state.streaming) {
+      loadStatus();
+      loadOps();
+    }
+  }, 30000);
 }
 init();

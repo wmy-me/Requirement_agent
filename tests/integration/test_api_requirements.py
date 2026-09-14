@@ -119,6 +119,38 @@ def test_requirement_relations_endpoints() -> None:
     ).status_code == 422
 
 
+def test_ops_outbox_status_endpoint() -> None:
+    """运维端点冒烟：状态计数键必须齐全（缺失的状态补 0，前端不必处理 undefined）。"""
+    response = client.get("/api/v1/ops/outbox")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["counts"]) == {"pending", "processing", "completed", "dead_letter", "discarded"}
+    assert all(isinstance(value, int) for value in body["counts"].values())
+    assert isinstance(body["dead_letters"], list)
+
+
+def test_ops_dead_letter_actions_reject_unknown_id() -> None:
+    """retry / discard 只认死信：不存在的 id 返回 404。
+
+    这里断言 404 而非 200 —— 守护的是「误点重试不能把运行中或已完成的事件重置」
+    （重置会导致 embedding 重复写、文档重复切片）。
+    """
+    for action in ("retry", "discard"):
+        response = client.post(f"/api/v1/ops/outbox/dead-letters/999999999/{action}")
+
+        assert response.status_code == 404, action
+
+
+def test_request_logging_sets_request_id_header() -> None:
+    """请求头 X-Request-ID 必须回写，便于把前端报错与服务端日志对上。"""
+    generated = client.get("/api/v1/ops/outbox")
+    assert generated.headers.get("X-Request-ID")
+
+    echoed = client.get("/api/v1/ops/outbox", headers={"X-Request-ID": "trace-abc"})
+    assert echoed.headers["X-Request-ID"] == "trace-abc"
+
+
 def test_list_requirements_filter_narrows_results() -> None:
     """列表筛选冒烟：断言的是一条不依赖具体数据的性质（筛选只会收窄，不会放宽）。"""
     items = client.get("/api/v1/requirements").json()["items"]

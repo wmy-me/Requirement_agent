@@ -15,6 +15,10 @@ from requirement_agent.common.time import utc_now
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.db.session import SessionLocal
 
+# 供运维面板展示的状态全集。`sent` / `failed` 是建表时的历史遗留、从未被写入，
+# 故意不列进来——统计里出现恒为 0 的键只会让人以为"有东西卡在那儿"。
+_OUTBOX_STATUSES = ("pending", "processing", "completed", "dead_letter", "discarded")
+
 
 @dataclass(slots=True)
 class OutboxEvent:
@@ -237,6 +241,62 @@ class OutboxRepository:
                 session.rollback()
                 session.close()
             raise
+
+    def count_by_status(self) -> dict[str, int]:
+        """按状态统计事件数，供运维面板判断积压与死信规模。
+
+        缺失的状态补 0（前端不必处理 undefined），但只补 `_OUTBOX_STATUSES` 里的键。
+        """
+        with SessionLocal() as session:
+            rows = session.execute(
+                text("SELECT status, count(*) AS n FROM outbox_event GROUP BY status")
+            ).mappings().all()
+        counts = {name: 0 for name in _OUTBOX_STATUSES}
+        counts.update({str(row["status"]): int(row["n"]) for row in rows})
+        return counts
+
+    def retry_dead_letter(self, event_id: int) -> bool:
+        """把一条死信重置回 pending 等待重投；成功返回 True。
+
+        **只认 `dead_letter`**：若不限定状态，一次误点的「重试」会把正在处理或已完成的
+        事件也重置，造成重复执行（embedding 重复写、文档重复切片）。
+        """
+        with SessionLocal() as session:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE outbox_event
+                    SET status = 'pending',
+                        retry_count = 0,
+                        last_error = NULL,
+                        locked_at = NULL,
+                        updated_at = NOW()
+                    WHERE id = :id AND status = 'dead_letter'
+                    """
+                ),
+                {"id": event_id},
+            )
+            session.commit()
+            return result.rowcount > 0
+
+    def discard_dead_letter(self, event_id: int) -> bool:
+        """放弃一条死信：置为终态 `discarded`，保留行与错误信息留档；成功返回 True。
+
+        同样只认 `dead_letter`。`discarded` 不在 claim_pending 的候选状态里，不会被重投。
+        """
+        with SessionLocal() as session:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE outbox_event
+                    SET status = 'discarded', locked_at = NULL, updated_at = NOW()
+                    WHERE id = :id AND status = 'dead_letter'
+                    """
+                ),
+                {"id": event_id},
+            )
+            session.commit()
+            return result.rowcount > 0
 
     def list_dead_letters(self, limit: int = 50) -> list[OutboxEvent]:
         """返回已死亡（status='dead_letter'）事件，按最近更新时间倒序，供人工介入排查。"""

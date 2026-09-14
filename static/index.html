@@ -59,6 +59,7 @@
             <button class="wb-tab" data-tab="library" type="button">需求库</button>
             <button class="wb-tab" data-tab="documents" type="button">文档库</button>
             <button class="wb-tab" data-tab="audit" type="button">审计</button>
+            <button class="wb-tab" data-tab="ops" type="button">运维<span id="ops-count" class="count-badge hidden">0</span></button>
           </div>
 
           <section id="tab-pending" class="wb-pane active">
@@ -91,6 +92,18 @@
               <button id="refresh-audit" class="link-btn" type="button">刷新</button>
             </div>
             <div id="audit-list" class="item-scroll"></div>
+          </section>
+
+          <section id="tab-ops" class="wb-pane">
+            <div class="pane-toolbar">
+              <span>异步队列</span>
+              <button id="refresh-ops" class="link-btn" type="button">刷新</button>
+            </div>
+            <div id="ops-summary" class="ops-summary"></div>
+            <div class="pane-toolbar">
+              <span>死信事件</span>
+            </div>
+            <div id="ops-dead-letters" class="item-scroll"></div>
           </section>
         </aside>
 

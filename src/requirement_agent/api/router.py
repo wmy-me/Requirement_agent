@@ -18,6 +18,7 @@ from requirement_agent.api.routes.conversations import router as _conversations_
 from requirement_agent.api.routes.documents import router as _documents_router
 from requirement_agent.api.routes.health import router as _health_router
 from requirement_agent.api.routes.memory import router as _memory_router
+from requirement_agent.api.routes.ops import router as _ops_router
 from requirement_agent.api.routes.requirements import router as _requirements_query_router
 from requirement_agent.api.routes.requirements import search_router as _requirements_search_router
 from requirement_agent.api.routes.requirements_write import router as _requirements_write_router
@@ -43,6 +44,7 @@ rest_router.include_router(_audit_router)
 rest_router.include_router(_reviews_submit_router)
 # 渠道 Webhook 追加在末尾：不打扰既有路由的注册顺序
 rest_router.include_router(_channels_router)
+rest_router.include_router(_ops_router)
 
 
 # —— 总聚合：REST 域 + Agent 域 ——

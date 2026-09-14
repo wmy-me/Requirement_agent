@@ -376,6 +376,25 @@ input, textarea { font-family: inherit; }
 ::-webkit-scrollbar-thumb { background: #d5dae6; border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: #c2c8d9; }
 
+/* ---------------- 运维面板 ---------------- */
+.ops-summary { padding: 10px 12px 4px; border-bottom: 1px solid var(--border); }
+.ops-counts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ops-cell {
+  flex: 1 1 56px; min-width: 56px; text-align: center;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); padding: 6px 4px;
+}
+.ops-cell.warn { border-color: var(--warning); background: var(--warning-soft); }
+.ops-n { font-size: 17px; font-weight: 600; }
+.ops-cell.warn .ops-n { color: var(--warning); }
+.ops-l { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.ops-consumer { margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--text-3); }
+.ops-error {
+  margin: 6px 0 0; padding: 6px 8px; border-radius: 7px; background: var(--surface-3);
+  font-size: 11px; color: var(--text-2); font-family: inherit;
+  white-space: pre-wrap; word-break: break-all; max-height: 96px; overflow-y: auto;
+}
+.ops-summary + .pane-toolbar { margin-top: 4px; }
+
 /* ---------------- 需求库：全宽面板 ---------------- */
 /* 面板是 .workspace 的 flex 兄弟节点，展开时把中栏与右栏 display:none 掉。
    不用绝对定位是为了让左栏折叠时不留空隙（它的宽度是可变的）。 */

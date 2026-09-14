@@ -32,6 +32,7 @@ from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.infrastructure.parser.document_parser import DocumentParser
 from requirement_agent.infrastructure.storage.object_store import ObjectStorage
 from requirement_agent.infrastructure.channels.feishu_client import FeishuClient
+from requirement_agent.infrastructure.worker.outbox import OutboxRepository
 from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, RequirementAnalysisTask
 from requirement_agent.config.settings import settings
 
@@ -51,6 +52,8 @@ feature_repo = RequirementFeatureRepository()
 chat_repo = ChatRepository()
 memory_repo = MemoryRepository()
 relation_repo = RequirementRelationRepository()
+# 运维面（/api/v1/ops）用：查看异步队列积压与处理死信
+outbox_repo = OutboxRepository()
 
 # —— 记忆 / 记忆抽取 ——
 memory_context_builder = MemoryContextBuilder(memory_repo)
@@ -123,6 +126,7 @@ __all__ = [
     "memory_extractor",
     "memory_repo",
     "object_storage",
+    "outbox_repo",
     "relation_repo",
     "requirement_analysis_task",
     "requirement_service",
