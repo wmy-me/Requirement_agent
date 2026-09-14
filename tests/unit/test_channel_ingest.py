@@ -7,7 +7,7 @@ import pytest
 
 from requirement_agent.application.channel_service import ChannelIngestService
 from requirement_agent.application.requirement_service import RequirementService
-from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 from requirement_agent.infrastructure.channels.base import InboundRequirement
 from requirement_agent.infrastructure.channels.feishu_client import FeishuClient
 from requirement_agent.infrastructure.worker.outbox import OutboxEvent
@@ -123,7 +123,9 @@ def test_ingest_new_event_saves_and_enqueues() -> None:
     saved = req_service.accepted[0]
     assert saved.source_type == "feishu"
     assert saved.source_event_id == "evt-1"
-    assert saved.idempotency_key == "feishu:event:evt-1"
+    # 事件 ID 走摘要：键长必须与事件 ID 长度无关（唯一索引有 btree 行上限）
+    assert saved.idempotency_key.startswith("feishu:event:")
+    assert len(saved.idempotency_key) < 100
 
 
 def test_ingest_duplicate_event_is_deduplicated_and_not_requeued() -> None:
@@ -156,7 +158,9 @@ def test_ingest_without_event_id_falls_back_to_content_key() -> None:
     service.ingest(InboundRequirement(channel="feishu", text="无事件号", requester_id="u1"))
 
     assert repo.lookups == []  # 没有事件 ID 就不查渠道幂等
-    assert req_service.accepted[0].idempotency_key == "feishu:u1:无事件号"
+    assert req_service.accepted[0].idempotency_key == build_idempotency_key(
+        source_type="feishu", requester="u1", text="无事件号"
+    )
 
 
 def test_ingest_does_not_requeue_when_source_already_advanced() -> None:

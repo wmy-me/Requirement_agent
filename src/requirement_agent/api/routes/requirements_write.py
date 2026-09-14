@@ -11,7 +11,7 @@ import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 
-from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 from requirement_agent.api.dependencies import (
     document_chunk_task,
     document_parser,
@@ -97,12 +97,12 @@ async def export_requirements(
 async def submit_requirement(payload: RequirementSubmitRequest) -> RequirementSubmitResponse:
     """提交文本需求进入评审流程：返回提交状态与 source_id。"""
     source = RequirementSource(
-        idempotency_key=(
-            payload.source_type
-            + ":"
-            + (payload.requester_id or "anonymous")
-            + ":"
-            + payload.original_text
+        # 幂等键用正文摘要而非正文本身：直接拼接会让长文本（如 PDF 正文）超出
+        # Postgres btree 索引行上限 2704 字节，INSERT 被拒 —— 需求根本存不进库。
+        idempotency_key=build_idempotency_key(
+            source_type=payload.source_type,
+            requester=payload.requester_id,
+            text=payload.original_text,
         ),
         source_type=payload.source_type,
         source_event_id=payload.source_event_id,
@@ -184,7 +184,9 @@ async def ingest_requirement(
         }
 
     source = RequirementSource(
-        idempotency_key=source_type + ":" + (requester_id or "anonymous") + ":" + merged_text,
+        idempotency_key=build_idempotency_key(
+            source_type=source_type, requester=requester_id, text=merged_text
+        ),
         source_type=source_type,
         source_event_id=(source_event_id or "").strip() or None,
         requester_id=(requester_id or "").strip() or None,

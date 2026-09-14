@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 from requirement_agent.infrastructure.channels.base import InboundRequirement
 from requirement_agent.tools._deps import (
     channel_ingest_service,
@@ -57,7 +57,9 @@ def submit_requirement(
     不会直接写入正式需求主表；审核通过后才生成 REQ。返回值含 source_id / status / analysis / risk。
     """
     source = RequirementSource(
-        idempotency_key=f"{source_type}:{(requester_id or 'tool')}:{original_text}",
+        idempotency_key=build_idempotency_key(
+            source_type=source_type, requester=requester_id or "tool", text=original_text
+        ),
         source_type=source_type,
         source_event_id=(source_event_id or "").strip() or None,
         requester_id=(requester_id or "").strip() or None,

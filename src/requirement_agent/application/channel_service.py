@@ -7,11 +7,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
 from requirement_agent.application.requirement_service import RequirementService
-from requirement_agent.domain.requirement import RequirementSource
+from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 from requirement_agent.infrastructure.channels.base import InboundRequirement
 from requirement_agent.infrastructure.db.repositories import RequirementSourceRepository
 from requirement_agent.infrastructure.worker.tasks import RequirementAnalysisTask
@@ -91,7 +92,14 @@ class ChannelIngestService:
 
     @staticmethod
     def _idempotency_key(inbound: InboundRequirement) -> str:
-        """构造幂等键；有渠道事件 ID 时以事件 ID 为准（渠道内唯一），否则退回内容指纹。"""
+        """构造幂等键；有渠道事件 ID 时以事件 ID 为准（渠道内唯一），否则退回内容指纹。
+
+        两条分支都必须**长度有界**：该键上有唯一索引，超出 Postgres btree 行上限
+        （约 2704 字节）会让 INSERT 直接被拒，详见 `build_idempotency_key`。
+        """
         if inbound.event_id:
-            return f"{inbound.channel}:event:{inbound.event_id}"
-        return f"{inbound.channel}:{inbound.requester_id or 'anonymous'}:{inbound.text}"
+            digest = hashlib.sha256(inbound.event_id.encode("utf-8")).hexdigest()[:32]
+            return f"{inbound.channel}:event:{digest}"
+        return build_idempotency_key(
+            source_type=inbound.channel, requester=inbound.requester_id, text=inbound.text
+        )

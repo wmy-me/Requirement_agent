@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from requirement_agent.common.time import utc_now
+
+
+def build_idempotency_key(*, source_type: str, requester: str | None, text: str) -> str:
+    """构造 requirement_source 的幂等键：`{渠道}:{发起人}:{正文摘要}`。
+
+    **长度必须有界。** `requirement_source.idempotency_key` 上有唯一索引，而 Postgres 的
+    btree 索引行上限约 2704 字节。早先的实现直接把正文拼进键里，稍长的需求（实测一份
+    2750 字的 PDF 正文）插入时会被拒绝：
+
+        index row size 4424 exceeds btree version 4 maximum 2704
+
+    表现就是「需求怎么也存不进库」，且短文本能过、长文本必挂，很难联想到键长度。
+    改用 sha256 摘要后语义不变（同渠道 + 同发起人 + 同正文 → 同键），长度恒定。
+    """
+    digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:32]
+    return f"{source_type}:{requester or 'anonymous'}:{digest}"
 
 
 @dataclass(slots=True)
