@@ -23,11 +23,22 @@ class AnalyzeSkill(BaseSkill):
         self,
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
+        *,
+        duplicate_threshold: float = 0.7,
+        related_threshold: float = 0.45,
     ) -> AnalysisResult:
-        """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。"""
+        """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。
+
+        `duplicate_threshold` / `related_threshold` 由 AnalyzeAgent 按 analysis_mode 下发。
+        """
         from requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
 
-        fallback = AnalyzeAgent._heuristic_analyze(extracted, historical_requirements)
+        fallback = AnalyzeAgent._heuristic_analyze(
+            extracted,
+            historical_requirements,
+            duplicate_threshold=duplicate_threshold,
+            related_threshold=related_threshold,
+        )
         if not self.provider.is_configured():
             return fallback
 
@@ -67,14 +78,14 @@ class AnalyzeSkill(BaseSkill):
             related = bool(payload.get("related"))
             conflict = bool(payload.get("conflict"))
             # duplicate=true 但没有任何 ≥0.7 的相似候选 → 降为 false（防假阳性）
-            if duplicate and max_similarity < 0.7:
+            if duplicate and max_similarity < duplicate_threshold:
                 duplicate = False
-                related = related or max_similarity >= 0.45
-            # 有 ≥0.7 候选但 LLM 漏报 → 按证据补上
-            if not duplicate and max_similarity >= 0.7:
+                related = related or max_similarity >= related_threshold
+            # 达到重复阈值但 LLM 漏报 → 按证据补上
+            if not duplicate and max_similarity >= duplicate_threshold:
                 duplicate = True
                 related = True
-            if not related and max_similarity >= 0.45:
+            if not related and max_similarity >= related_threshold:
                 related = True
             independent = not (duplicate or related or conflict)
 

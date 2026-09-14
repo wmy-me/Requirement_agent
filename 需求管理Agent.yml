@@ -633,7 +633,7 @@ workflow:
         model:
           completion_params: {}
           mode: chat
-          name: gpt-5.5
+          name: gpt-4o-mini
           provider: langgenius/openai/openai
         prompt_template:
         - id: f4106e66-e0b0-47ed-b16f-92c9e5db9c2f

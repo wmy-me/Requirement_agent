@@ -18,6 +18,7 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
+from requirement_agent.agents.analyze_agent import score_label, thresholds_for
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
@@ -305,14 +306,17 @@ async def _stream_chat_pipeline(
         pipeline["candidates"] = candidates
 
         yield _sse("step", {"step": "analyze", "label": "正在分析冲突与重复…"})
-        analysis = await run_in_threadpool(analyze_agent.analyze, extracted, candidates)
+        analysis = await run_in_threadpool(
+            analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
+        )
         analysis_payload = analysis.model_dump(mode="python")
         pipeline["analysis"] = analysis_payload
+        thresholds = thresholds_for(analysis_mode)
         pipeline["analysis"]["candidates"] = [
             {
                 **candidate,
                 "evidence": candidate.get("evidence") or [],
-                "score_label": "高" if float(candidate.get("similarity") or 0) >= 0.7 else "中" if float(candidate.get("similarity") or 0) >= 0.45 else "低",
+                "score_label": score_label(float(candidate.get("similarity") or 0), thresholds),
             }
             for candidate in pipeline["analysis"].get("candidates") or []
         ]
@@ -558,7 +562,7 @@ async def stream_agent_chat_with_files(
     session_id: str | None = Form(default=None),
     client_message_id: str | None = Form(default=None),
     requester_name: str | None = Form(default=None),
-    analysis_mode: str = Form(default="strict"),
+    analysis_mode: Literal["strict", "balanced", "broad"] = Form(default="strict"),
     files: list[UploadFile] = File(default=[]),
 ) -> StreamingResponse:
     """豆包式多文件 + 文字组合聊天（multipart/form-data，SSE 响应）。

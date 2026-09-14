@@ -10,6 +10,35 @@ from requirement_agent.agents.extract_agent import ExtractedRequirement
 from requirement_agent.skills.analyze_skill import AnalyzeSkill
 
 
+# 分析模式 → 阈值映射。
+# strict 使用历史默认阈值（保持既有行为）；balanced / broad 逐级放宽——
+# 阈值越低，越容易把候选判为「重复 / 相关」。
+ANALYSIS_MODE_THRESHOLDS: dict[str, dict[str, float]] = {
+    "strict": {"duplicate": 0.70, "related": 0.45, "candidate": 0.35},
+    "balanced": {"duplicate": 0.60, "related": 0.38, "candidate": 0.30},
+    "broad": {"duplicate": 0.50, "related": 0.30, "candidate": 0.25},
+}
+
+
+def thresholds_for(analysis_mode: str | None) -> dict[str, float]:
+    """按分析模式取阈值；未知/缺省模式回退 strict（保持历史默认行为）。"""
+    key = (analysis_mode or "strict").strip().lower()
+    return ANALYSIS_MODE_THRESHOLDS.get(key, ANALYSIS_MODE_THRESHOLDS["strict"])
+
+
+def score_label(similarity: float, thresholds: dict[str, float]) -> str:
+    """把相似度映射为展示用的「高/中/低」标签。
+
+    用当前分析模式的阈值而非硬编码值，避免展示与判定不一致：
+    例如 broad 模式下 0.55 已是「重复」，标签却仍显示「中」。
+    """
+    if similarity >= thresholds["duplicate"]:
+        return "高"
+    if similarity >= thresholds["related"]:
+        return "中"
+    return "低"
+
+
 class CandidateMatch(BaseModel):
     """单个历史候选与当前需求的关系证据。"""
 
@@ -49,16 +78,37 @@ class AnalyzeAgent:
         self,
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
+        *,
+        analysis_mode: str = "strict",
     ) -> AnalysisResult:
-        """判断当前需求与历史需求是重复、关联、冲突还是独立。"""
+        """判断当前需求与历史需求是重复、关联、冲突还是独立。
+
+        `analysis_mode`（strict/balanced/broad）控制判定阈值；缺省 strict = 历史默认。
+        """
+        thresholds = thresholds_for(analysis_mode)
         if not self.skill.provider.is_configured():
-            return self._heuristic_analyze(extracted, historical_requirements)
-        return self.skill.analyze(extracted, historical_requirements)
+            return self._heuristic_analyze(
+                extracted,
+                historical_requirements,
+                duplicate_threshold=thresholds["duplicate"],
+                related_threshold=thresholds["related"],
+                candidate_threshold=thresholds["candidate"],
+            )
+        return self.skill.analyze(
+            extracted,
+            historical_requirements,
+            duplicate_threshold=thresholds["duplicate"],
+            related_threshold=thresholds["related"],
+        )
 
     @staticmethod
     def _heuristic_analyze(
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
+        *,
+        duplicate_threshold: float = 0.70,
+        related_threshold: float = 0.45,
+        candidate_threshold: float = 0.35,
     ) -> AnalysisResult:
         """本地证据规则。
 
@@ -71,9 +121,9 @@ class AnalyzeAgent:
             title = str(item.get("requirement_name") or item.get("title") or "")
             summary = str(item.get("final_requirement") or item.get("summary") or "")
             score, evidence = AnalyzeAgent()._score_similarity(extracted, title, summary)
-            if score >= 0.35:
+            if score >= candidate_threshold:
                 reason = "业务语义相近，存在重合功能面"
-                if score >= 0.7:
+                if score >= duplicate_threshold:
                     reason = "高度相似，可能为重复需求"
                 candidates.append(
                     CandidateMatch(
@@ -85,9 +135,9 @@ class AnalyzeAgent:
                     )
                 )
 
-        # 0.7 以上才视为重复倾向；0.45~0.7 视为需要人工确认的关联信号。
-        duplicate = any(candidate.similarity >= 0.7 for candidate in candidates)
-        related = any(0.45 <= candidate.similarity < 0.7 for candidate in candidates)
+        # 达到重复阈值 → 重复倾向；关联阈值~重复阈值之间 → 需要人工确认的关联信号。
+        duplicate = any(candidate.similarity >= duplicate_threshold for candidate in candidates)
+        related = any(related_threshold <= candidate.similarity < duplicate_threshold for candidate in candidates)
         conflict = "权限" in " ".join(extracted.tags) and any("权限" in str(item.get("requirement_name") or "") for item in historical)
         independent = not duplicate and not related and not conflict
 
