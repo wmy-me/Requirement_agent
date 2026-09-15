@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     outbox_poll_batch: int = Field(default=50, alias="OUTBOX_POLL_BATCH")
     outbox_stale_timeout_seconds: int = Field(default=300, alias="OUTBOX_STALE_TIMEOUT_SECONDS")
 
+    # 对话运行被判为「僵尸」的静默阈值（秒）：超过它的 running / paused run 会被判为 failed。
+    # 同一对话只允许一个活跃运行（migrations/012），而进程中断留下的 run 不会自己收尾 ——
+    # 没有这个阈值，一次崩溃就把该对话永久堵死。取 30 分钟，远大于任何正常分析耗时
+    # （4 个 LLM 步骤 × 60s 超时 × 重试次数），避免误杀正在跑的分析。
+    chat_run_stale_timeout_seconds: int = Field(
+        default=1800, gt=0, alias="CHAT_RUN_STALE_TIMEOUT_SECONDS"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

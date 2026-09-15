@@ -8,10 +8,33 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from requirement_agent.common.snowflake import new_id
 from requirement_agent.common.time import as_display_iso
+from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.db.session import SessionLocal
+
+# 并发隔离用的部分唯一索引（migrations/012）：(conversation_id) WHERE status IN ('running','paused')
+_ACTIVE_RUN_CONSTRAINT = "uq_run_active_per_conversation"
+
+
+class ConversationBusyError(RuntimeError):
+    """该对话已有正在进行的思考 —— 同一对话一次只允许一个活跃运行。
+
+    约束落在数据库而不是进程内锁：前端 `state.streaming` 是页面级的，多标签页、
+    多客户端、直连 curl 都能绕过，且进程内锁在多 worker 下形同虚设。
+    **跨对话不受影响** —— 唯一索引的键是 conversation_id，开新对话即可并行。
+    """
+
+    def __init__(self, conversation_id: str) -> None:
+        super().__init__(f"conversation {conversation_id} already has an active run")
+        self.conversation_id = conversation_id
+
+
+def is_active_run_conflict(exc: IntegrityError) -> bool:
+    """判断是否撞上了「同对话只允许一个活跃 run」的唯一索引（而非其它完整性错误）。"""
+    return _ACTIVE_RUN_CONSTRAINT in str(exc)
 
 
 class ChatRepository:
@@ -183,7 +206,40 @@ class ChatRepository:
         error: str | None = None,
         meta: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        """创建/更新一次 Agent run（按 client_message_id 幂等），返回规范化后的 run 行。"""
+        """创建/更新一次 Agent run（按 client_message_id 幂等），返回规范化后的 run 行。
+
+        并发约束（`migrations/012`）：同一对话最多一个活跃运行（running / paused）。
+        撞上该约束时抛 `ConversationBusyError` —— **除非**挡路的那条是崩溃留下的僵尸
+        （静默超过 `chat_run_stale_timeout_seconds`）：那种情况先把它判为 failed 再重试一次。
+
+        没有这段自愈，一次进程中断留下的 running 行会把该对话**永久**堵死：用户只看到 409，
+        而没有任何地方会去清理它。库里就躺过一条静默 3 天的 running run。
+        """
+        values = {
+            "id": new_id(),
+            "conversation_id": conversation_id,
+            "client_message_id": client_message_id,
+            "status": status,
+            "error": error,
+            "meta": json.dumps(meta or {}),
+        }
+        try:
+            return self._insert_run(values)
+        except IntegrityError as exc:
+            if not is_active_run_conflict(exc):
+                raise
+            if not self.expire_stale_runs(conversation_id):
+                raise ConversationBusyError(conversation_id) from exc
+            # 僵尸已判死，重试一次；再冲突说明确实有人在跑
+            try:
+                return self._insert_run(values)
+            except IntegrityError as retry_exc:
+                if is_active_run_conflict(retry_exc):
+                    raise ConversationBusyError(conversation_id) from retry_exc
+                raise
+
+    def _insert_run(self, values: dict[str, object]) -> dict[str, object]:
+        """执行 run 的 upsert（幂等键仍是 client_message_id）。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -198,17 +254,55 @@ class ChatRepository:
                     RETURNING id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
                     """
                 ),
-                {
-                    "id": new_id(),
-                    "conversation_id": conversation_id,
-                    "client_message_id": client_message_id,
-                    "status": status,
-                    "error": error,
-                    "meta": json.dumps(meta or {}),
-                },
+                values,
             ).mappings().one()
             session.commit()
         return self._normalize_run_row(row)
+
+    def get_active_run(self, conversation_id: str) -> dict[str, object] | None:
+        """取该对话当前的活跃运行（running / paused），供「本对话在忙」的 409 提示用。"""
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    FROM agent_run
+                    WHERE conversation_id = CAST(:conversation_id AS UUID)
+                      AND status IN ('running', 'paused')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"conversation_id": conversation_id},
+            ).mappings().first()
+        return self._normalize_run_row(row) if row else None
+
+    def expire_stale_runs(self, conversation_id: str, *, older_than_seconds: int | None = None) -> int:
+        """把该对话里静默过久的活跃 run 判为 failed，返回判死的条数。
+
+        阈值默认 `settings.chat_run_stale_timeout_seconds`（远大于任何正常分析耗时）。
+        被进程中断的运行不会自己收尾，留着就会一直占着并发位。
+        """
+        threshold = (
+            settings.chat_run_stale_timeout_seconds if older_than_seconds is None else older_than_seconds
+        )
+        with SessionLocal() as session:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE agent_run
+                    SET status = 'failed',
+                        error = 'stale: 运行超时未收尾（进程中断或客户端长时间无响应）',
+                        updated_at = NOW()
+                    WHERE conversation_id = CAST(:conversation_id AS UUID)
+                      AND status IN ('running', 'paused')
+                      AND updated_at < NOW() - make_interval(secs => :secs)
+                    """
+                ),
+                {"conversation_id": conversation_id, "secs": threshold},
+            )
+            session.commit()
+            return result.rowcount
 
     def update_run(
         self,

@@ -9,18 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from queue import Empty, Queue
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from requirement_agent.agents.analyze_agent import score_label, thresholds_for
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
+from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.api.dependencies import (
     actor_id_or_default,
@@ -37,6 +39,8 @@ from requirement_agent.api.dependencies import (
     risk_agent,
 )
 from requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["agent"])
 
@@ -64,6 +68,42 @@ NARRATIVE_SYSTEM_PROMPT = (
 def _sse(name: str, payload: object) -> str:
     """构造一行安全的 SSE 帧（payload 以 JSON 编码，避免原始换行破坏协议）。"""
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+CONVERSATION_BUSY_MESSAGE = "本对话正在思考上一个问题；可以等它跑完，或新建对话去问。"
+
+
+def _ensure_conversation_idle(session_id: str | None) -> None:
+    """同对话并发隔离的前置检查：本对话在忙就直接 409。
+
+    **必须在返回 StreamingResponse 之前做** —— 一旦 SSE 开始，响应头已经是 200，
+    再想报 409 就来不及了。这里只是「友好提示」那条路；真正的互斥由
+    `migrations/012` 的唯一索引保证（竞态下 create_run 抛 ConversationBusyError，
+    由生成器兜底成 error 帧）。跨对话不受影响：检查的键是 session_id。
+    """
+    if not session_id:
+        return
+    # 先让僵尸出局：进程中断留下的 running 行不会自己收尾，而它会让下面的检查
+    # 直接 409 —— 那样 create_run 里的自愈永远走不到，该对话被**永久**堵死。
+    expired = chat_repo.expire_stale_runs(session_id)
+    if expired:
+        logger.warning(
+            "event=stale_run_expired conversation_id=%s count=%d", session_id, expired
+        )
+    active = chat_repo.get_active_run(session_id)
+    if active is None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": CONVERSATION_BUSY_MESSAGE,
+            "active_run": {
+                "run_id": active["run_id"],
+                "status": active["status"],
+                "created_at": active["created_at"],
+            },
+        },
+    )
 
 
 def _fallback_narrative(pipeline: dict[str, object]) -> str:
@@ -272,12 +312,20 @@ async def _stream_chat_pipeline(
         client_message_id=client_message_id,
         meta=user_meta,
     )
-    run = chat_repo.create_run(
-        conversation_id=session_id,
-        client_message_id=client_message_id,
-        status="running",
-        meta={"source_type": source_type, "requester_name": requester_name},
-    )
+    try:
+        run = chat_repo.create_run(
+            conversation_id=session_id,
+            client_message_id=client_message_id,
+            status="running",
+            meta={"source_type": source_type, "requester_name": requester_name},
+        )
+    except ConversationBusyError:
+        # 竞态兜底：端点里的前置检查已经拦掉绝大多数情况，但两个请求同时通过检查时
+        # 唯一索引才真正生效。此时 SSE 已经开始，只能以 error 帧收场。
+        logger.warning("event=conversation_busy conversation_id=%s", session_id)
+        yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE})
+        yield _sse("done", {"run_id": ""})
+        return
     run_id = str(run["run_id"])
 
     pipeline: dict[str, object] = {
@@ -550,7 +598,12 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
 
 @router.post("/api/v1/agent/chat/stream")
 async def stream_agent_chat(payload: AgentChatRequest) -> StreamingResponse:
-    """流式 Agent 对话：以 SSE 事件输出状态、总结与结构化卡片。"""
+    """流式 Agent 对话：以 SSE 事件输出状态、总结与结构化卡片。
+
+    同对话并发隔离（方案 §2）：本对话已有活跃运行时直接 409，并带上它的 run 信息，
+    便于前端提示「等它跑完 / 新建对话去问」。
+    """
+    _ensure_conversation_idle(payload.session_id)
     return StreamingResponse(
         _chat_stream_events(payload),
         media_type="text/event-stream",
@@ -574,7 +627,9 @@ async def stream_agent_chat_with_files(
     """豆包式多文件 + 文字组合聊天（multipart/form-data，SSE 响应）。
 
     各文件由后端解析，正文与输入文字合并后进入完整 Agent 管线。
+    与纯文本入口共用同一套同对话并发隔离（方案 §2）。
     """
+    _ensure_conversation_idle(session_id)
     return StreamingResponse(
         _chat_stream_files_events(
             message=message,

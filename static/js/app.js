@@ -22,10 +22,27 @@ const SESSIONS_KEY = 'ra.sessions.v1';
 
 const state = {
   sessionId: null,
-  streaming: false,
   pendingFiles: [],
   convos: [],
+  // 按会话隔离的运行态：{ [clientId]: { sessionId, controller, analysis, final, done } }
+  //
+  // 之前这里是一个页面级布尔量 `streaming`：流式期间 newChat() 与 loadSession() 都被它
+  // return 掉，于是「开新对话问另一个」根本走不通，用户除了等没有别的选择。
+  // 隔离的粒度是「对话」——不同会话各跑各的，互不阻塞（见 docs/方案_对话状态机与Git式版本管理.md §2）。
+  streams: {},
 };
+
+/** 该会话当前是否有正在进行的运行（门禁只按当前会话判断）。 */
+function activeStreamFor(sessionId) {
+  if (!sessionId) return null;
+  return Object.values(state.streams).find((s) => s.sessionId === sessionId && !s.done) || null;
+}
+function isBusy(sessionId) {
+  return Boolean(activeStreamFor(sessionId));
+}
+function hasActiveStream() {
+  return Object.values(state.streams).some((s) => !s.done);
+}
 
 /* ---------------- helpers ---------------- */
 function esc(v) {
@@ -416,7 +433,7 @@ function buildArtifact(p) {
   actRow.appendChild(submitBtn);
   actRow.appendChild(againBtn);
   submitBtn.addEventListener('click', async () => {
-    if (state.streaming) return;
+    if (isBusy(state.sessionId)) return;
     submitBtn.disabled = true;
     submitBtn.textContent = '正在写入…';
     try {
@@ -464,7 +481,8 @@ async function doSubmitRequirement(p) {
 
 /* ---------------- Streaming chat ---------------- */
 function setSendEnabled() {
-  sendBtn.disabled = state.streaming || (!inputEl.value.trim() && !state.pendingFiles.length);
+  // 只看当前会话忙不忙——别的会话在跑不该冻住这里
+  sendBtn.disabled = isBusy(state.sessionId) || (!inputEl.value.trim() && !state.pendingFiles.length);
 }
 
 function resizeInput() {
@@ -475,17 +493,28 @@ function resizeInput() {
 async function runChat(text, files) {
   const msg = String(text || '').trim();
   const attached = Array.isArray(files) ? files : [];
-  if ((!msg && !attached.length) || state.streaming) return;
+  // 门禁只按**当前会话**判断：别的会话正在跑，不该冻住这里
+  if ((!msg && !attached.length) || isBusy(state.sessionId)) return;
 
-  state.streaming = true;
-  setSendEnabled();
   const needRecord = !state.sessionId;
   const clientId = uuidv4();
+  let busyDraftKept = false;
 
-  appendUser(msg, attached.map((f) => ({ name: f.name, size: f.size })));
+  const userEl = appendUser(msg, attached.map((f) => ({ name: f.name, size: f.size })));
   // 一条“分析消息”（步骤 + 结构化卡片），最终结论另起一条独立气泡
   const analysis = appendAnalysisMessage();
   let final = null;
+  // 该流自己的运行态与 DOM 元素。切换会话时 `clearChatInner()` 只是把它们摘下来，
+  // 引用留在这里，所以内容不会丢，切回来 reattachActiveStream() 接上即可。
+  const stream = {
+    sessionId: state.sessionId, // 新会话要等 session 事件才知道真实 id
+    controller: new AbortController(),
+    analysis,
+    final: null,
+    done: false,
+  };
+  state.streams[clientId] = stream;
+  setSendEnabled();
 
   try {
     let resp;
@@ -497,7 +526,11 @@ async function runChat(text, files) {
       form.append('requester_name', '我');
       form.append('analysis_mode', 'strict');
       attached.forEach((f) => form.append('files', f.file || f, f.name));
-      resp = await fetch(STREAM_URL_FILES, { method: 'POST', body: form });
+      resp = await fetch(STREAM_URL_FILES, {
+        method: 'POST',
+        body: form,
+        signal: stream.controller.signal,
+      });
     } else {
       const payload = {
         message: msg,
@@ -511,32 +544,65 @@ async function runChat(text, files) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: stream.controller.signal,
       });
     }
     if (!resp.ok) {
+      // 409 = 本对话已有运行在思考（后端按 conversation_id 互斥）。
+      // 它返回的是结构化 detail，取 message 字段而不是整对象转字符串。
+      if (resp.status === 409) {
+        let info = null;
+        try { info = (await resp.json()).detail; } catch (e) { /* ignore */ }
+        const busy = new Error((info && info.message) || '本对话正在思考上一个问题。');
+        busy.conversationBusy = true;
+        throw busy;
+      }
       let detail = resp.statusText;
-      try { const b = await resp.json(); detail = b.detail || detail; } catch (e) { /* ignore */ }
+      try {
+        const b = await resp.json();
+        detail = (b.detail && b.detail.message) || b.detail || detail;
+      } catch (e) { /* ignore */ }
       throw new Error(detail);
     }
     for await (const ev of parseSSE(resp)) {
       let data = {};
       try { data = ev.data ? JSON.parse(ev.data) : {}; } catch (e) { /* ignore */ }
-      if (ev.event === 'session') state.sessionId = data.session_id || state.sessionId;
+      if (ev.event === 'session') {
+        state.sessionId = data.session_id || state.sessionId;
+        stream.sessionId = state.sessionId; // 新会话在这一刻才对得上号
+      }
       else if (ev.event === 'step') analysis.setStep(data.label || '');
       else if (ev.event === 'artifacts') analysis.addArtifacts(data.artifacts);
       else if (ev.event === 'narrative') {
-        if (data.start) { if (!final) final = createFinalBubble(); }
-        else if (data.t) { if (!final) final = createFinalBubble(); final.token(data.t); }
+        if (data.t) { if (!final) { final = createFinalBubble(); stream.final = final; } final.token(data.t); }
+        else if (data.start && !final) { final = createFinalBubble(); stream.final = final; }
       } else if (ev.event === 'error') (final || analysis).error(data.message);
       else if (ev.event === 'done') { if (final) final.finish(); else analysis.completeAnalysis(); }
     }
     if (final) final.finish();
     else analysis.completeAnalysis();
   } catch (err) {
-    (final || analysis).error(err && err.message ? err.message : '网络异常，请重试');
+    if (err && err.conversationBusy) {
+      // 这次发送**没有产生任何服务端记录**（后端在建立 run 之前就拒了），
+      // 所以把刚画上的两个气泡收回，不留一条没有下文的提问；
+      // 同时把内容还给输入框，方便直接拿去新对话里问。
+      userEl.remove();
+      analysis.art.remove();
+      toast(err.message, 'err');
+      appendSystem('⏳ ' + err.message);
+      inputEl.value = msg;
+      state.pendingFiles = attached.slice();
+      busyDraftKept = true;
+      resizeInput();
+      renderAttachList();
+      inputEl.focus();
+    } else {
+      (final || analysis).error(err && err.message ? err.message : '网络异常，请重试');
+    }
   } finally {
-    state.streaming = false;
-    state.pendingFiles = [];
+    stream.done = true;
+    delete state.streams[clientId];
+    if (!busyDraftKept) state.pendingFiles = [];
     renderAttachList();
     setSendEnabled();
     if (needRecord && state.sessionId) {
@@ -576,7 +642,7 @@ function renderHistory(history) {
 }
 
 async function loadSession(id) {
-  if (state.streaming) return;
+  // 同样不设「正在流式就返回」的门禁：切换会话在任何时候都该可用
   state.sessionId = id;
   renderSessions();
   try {
@@ -593,6 +659,24 @@ async function loadSession(id) {
   } catch (e) {
     toast('加载会话失败：' + e.message, 'err');
   }
+  reattachActiveStream(id);
+}
+
+/**
+ * 把仍在流式的那个会话的元素重新挂回视图。
+ *
+ * 切换会话时 `clearChatInner()` 只是把它们从 DOM 上摘下来，引用一直留在
+ * `state.streams` 里 —— 所以内容没丢，切回来接上就能继续看。
+ * 正在跑的那轮产物还没写进历史（assistant 消息要等管线收尾才落库），
+ * 因此挂在历史之后是正确顺序。
+ */
+function reattachActiveStream(sessionId) {
+  const live = activeStreamFor(sessionId);
+  if (!live) return;
+  msgs.appendChild(live.analysis.art);
+  if (live.final) msgs.appendChild(live.final.art);
+  scrollBottom();
+  setSendEnabled();
 }
 
 function clearChatInner() {
@@ -675,7 +759,9 @@ function renderSessions() {
   });
 }
 function newChat() {
-  if (state.streaming) return;
+  // 注意：这里**故意没有**「正在流式就返回」的门禁。开新对话、切换会话在任何时候都不该被拦
+  // ——被拦就意味着「上一个问题没答完，我就没法问别的」，而那正是这次要修掉的体验。
+  // 上一个会话的运行不受影响：它的 DOM 元素只是从当前视图脱离，引用仍在 state.streams 里。
   // 收尾上一个会话：后台 finalize（一句话摘要 + 沉淀长期记忆），完成后刷新列表显示摘要名
   if (state.sessionId) {
     apiJson('/api/v1/conversations/' + encodeURIComponent(state.sessionId) + '/finalize', { method: 'POST' })
@@ -1290,7 +1376,7 @@ async function loadStatus() {
 composerForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
-  if ((!text && !state.pendingFiles.length) || state.streaming) return;
+  if ((!text && !state.pendingFiles.length) || isBusy(state.sessionId)) return;
   const files = state.pendingFiles.splice(0);
   inputEl.value = '';
   resizeInput();
@@ -1388,7 +1474,8 @@ async function init() {
   loadStatus();
   // 运维面板与状态灯一起轮询：死信是「需要人去处理」的东西，tab 上的徽标要能自己亮起来
   setInterval(() => {
-    if (!state.streaming) {
+    // 任一会话在流式就跳过这一轮轮询：不是怕阻塞，而是不想在用户正看着输出时刷新状态灯
+    if (!hasActiveStream()) {
       loadStatus();
       loadOps();
     }
