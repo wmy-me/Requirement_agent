@@ -337,6 +337,21 @@ async def _stream_chat_pipeline(
     }
     narrative_parts: list[str] = []
 
+    # 逐阶段落盘（对话状态机 B 批）：每个 LLM 阶段完成就把已算出的结果写进 run 的
+    # checkpoint。这样即使后面断开，之前花掉的 token 也不白费——stage 表示「已完成到哪」，
+    # 续跑（C 批）据此跳过已完成阶段。
+    def save_progress(stage: str) -> None:
+        chat_repo.update_run(
+            run_id=run_id,
+            status="running",
+            stage=stage,
+            checkpoint={
+                key: pipeline[key]
+                for key in ("extracted", "candidates", "analysis", "risk")
+                if key in pipeline
+            },
+        )
+
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
 
@@ -349,6 +364,7 @@ async def _stream_chat_pipeline(
         )
         extracted_payload = extracted.model_dump(mode="python")
         pipeline["extracted"] = extracted_payload
+        save_progress("extracted")
 
         yield _sse("step", {"step": "retrieve", "label": "正在检索相似需求…"})
         candidates = await run_in_threadpool(
@@ -357,6 +373,7 @@ async def _stream_chat_pipeline(
             limit=5,
         )
         pipeline["candidates"] = candidates
+        save_progress("retrieved")
 
         yield _sse("step", {"step": "analyze", "label": "正在分析冲突与重复…"})
         analysis = await run_in_threadpool(
@@ -373,6 +390,7 @@ async def _stream_chat_pipeline(
             }
             for candidate in pipeline["analysis"].get("candidates") or []
         ]
+        save_progress("analyzed")
 
         yield _sse("step", {"step": "risk", "label": "正在评估风险…"})
         risk = await run_in_threadpool(risk_agent.assess, extracted)
@@ -380,6 +398,7 @@ async def _stream_chat_pipeline(
         pipeline["risk"] = risk_payload
 
         pipeline["risk"]["confidence"] = round(float(pipeline["risk"].get("confidence") or 0.0), 2)
+        save_progress("assessed")
 
         pipeline["review_required"] = decision_review_required(analysis_payload, risk_payload)
         pipeline["next_action"] = decision_next_action(analysis_payload, risk_payload)
@@ -388,6 +407,9 @@ async def _stream_chat_pipeline(
         memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
 
         yield _sse("artifacts", {"artifacts": pipeline})
+
+        # 进入叙事阶段前标一下：后面若断开，续跑可以跳过四个分析步骤、只重拼叙事
+        save_progress("narrating")
 
         yield _sse("narrative", {"start": True})
         try:
@@ -416,7 +438,7 @@ async def _stream_chat_pipeline(
             artifacts=pipeline,
             run_id=run_id,
         )
-        chat_repo.update_run(run_id=run_id, status="completed", meta={"conversation_id": session_id, "assistant_message_id": user_message["id"]})
+        chat_repo.update_run(run_id=run_id, status="completed", stage="done", meta={"conversation_id": session_id, "assistant_message_id": user_message["id"]})
         yield _sse("done", {"run_id": run_id})
     except asyncio.CancelledError:
         chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")

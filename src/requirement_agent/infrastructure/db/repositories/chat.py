@@ -251,7 +251,7 @@ class ChatRepository:
                         error = EXCLUDED.error,
                         meta = EXCLUDED.meta,
                         updated_at = NOW()
-                    RETURNING id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    RETURNING id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     """
                 ),
                 values,
@@ -265,7 +265,7 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     FROM agent_run
                     WHERE conversation_id = CAST(:conversation_id AS UUID)
                       AND status IN ('running', 'paused')
@@ -311,22 +311,40 @@ class ChatRepository:
         status: str,
         error: str | None = None,
         meta: dict[str, object] | None = None,
+        stage: str | None = None,
+        checkpoint: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
-        """更新一次 run 的状态/错误/元数据，返回更新后的 run 行。"""
+        """更新一次 run 的状态/错误/元数据/阶段/断点，返回更新后的 run 行。
+
+        只有**传了的字段**才更新（其余保持原值）——尤其 checkpoint 是逐阶段累积的，
+        不能每次整体覆盖。`stage` 用「已完成态」命名（extracted/retrieved/analyzed/
+        assessed/done），续跑时据此跳过已完成阶段。
+        """
+        sets = ["status = :status", "error = :error", "meta = CAST(:meta AS JSONB)", "updated_at = NOW()"]
+        values: dict[str, object] = {
+            "run_id": run_id,
+            "status": status,
+            "error": error,
+            "meta": json.dumps(meta or {}),
+        }
+        if stage is not None:
+            sets.append("stage = :stage")
+            values["stage"] = stage
+        if checkpoint is not None:
+            sets.append("checkpoint = CAST(:checkpoint AS JSONB)")
+            values["checkpoint"] = json.dumps(checkpoint)
         with SessionLocal() as session:
             row = session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE agent_run
-                    SET status = :status,
-                        error = :error,
-                        meta = CAST(:meta AS JSONB),
-                        updated_at = NOW()
+                    SET {", ".join(sets)}
                     WHERE run_id = CAST(:run_id AS UUID)
-                    RETURNING id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    RETURNING id, run_id, conversation_id, client_message_id, status, error, meta,
+                              stage, checkpoint, created_at, updated_at
                     """
                 ),
-                {"run_id": run_id, "status": status, "error": error, "meta": json.dumps(meta or {})},
+                values,
             ).mappings().first()
             session.commit()
         return self._normalize_run_row(row) if row else None
@@ -337,7 +355,7 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     FROM agent_run
                     WHERE run_id = CAST(:run_id AS UUID)
                     """
@@ -352,7 +370,7 @@ class ChatRepository:
             row = session.execute(
                 text(
                     """
-                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, created_at, updated_at
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     FROM agent_run
                     WHERE conversation_id = CAST(:conversation_id AS UUID) AND client_message_id = :client_message_id
                     ORDER BY updated_at DESC
@@ -451,6 +469,8 @@ class ChatRepository:
             "status": row["status"],
             "error": row["error"],
             "meta": dict(row["meta"] or {}),
+            "stage": str(row.get("stage") or "queued"),
+            "checkpoint": dict(row.get("checkpoint") or {}),
             "created_at": as_display_iso(row["created_at"]),
             "updated_at": as_display_iso(row["updated_at"]),
         }
