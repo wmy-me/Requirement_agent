@@ -1,6 +1,6 @@
 # 项目现状（Current State）
 
-> 最后更新：2026-09-14
+> 最后更新：2026-09-15（本次更新：修正测试基线、补记对话状态机批次行、补文档导航、修编号重复）
 > 用途：接手本项目时的**第一份文档**。记录真实进度与当前未决事项。
 >
 > ⚠️ **`docs/refactoring/archive/` 下的进度表写于各阶段施工期间，已过时，勿据此排期。**
@@ -22,11 +22,18 @@
 | 5. 需求关系表 + 影响分析 | 🟡 关系表已建，影响分析的传播计算未做 | `migrations/009` + 审核通过时写入 + 双向读端点 + 详情页关系块 |
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | 🟡 可观测性与死信处理已完成，其余三项未做 | `/api/v1/ops/*` + 请求日志中间件 + 前端「运维」tab |
 | 7. 完整回归 + 生产验收 | ⬜ 未开始 | — |
+| ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D 四批已完成，E/F/G 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`（迁移 `012`–`014`） |
 
 **阶段 2 六项明细**：P1-1 Prompt 去重 ✅ ｜ P1-2 配置卫生 ✅ ｜ P1-3 `analysis_mode` 接线 ✅
 ｜ P2-1 模型参数透传 ✅ ｜ P2-2 LLM 可观测性 ✅ ｜ P2-3 向量维度决策与守卫 ✅
 
-**测试基线**：`pytest -q` → **73 passed, 2 skipped**。
+**★ 七批明细**（方案见 `docs/方案_对话状态机与Git式版本管理.md`）：A 并发隔离 ✅ ｜ B 断点落库 ✅
+｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ⬜** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ⬜**。
+E/F/G 是「Git 式版本管理」的后半段（§3.2–3.5），**尚未动工**；E 是 F/G 的前置。
+
+**测试基线**：`pytest -q` → **194 passed, 2 skipped**（32 个测试文件）。
+> 此前本文写的是「73 passed, 2 skipped」，那是阶段 2 结束时的数（阶段 2 六项 + 阶段 4/5/6
+> 与 ★ 四批的单测/集成测试陆续加入后涨到 194）。以 194 为准。
 
 **当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
 入口 `main.py`（薄壳 → `requirement_agent.api.app`），`src/` 顶层只剩该包。
@@ -34,19 +41,21 @@
 
 ---
 
-## 二、待拍板（这几项挡在阶段 3 门口）
+## 二、待拍板（仍未决）
 
-阶段 3 要做的是**对外暴露的飞书 Webhook 端点**，下面几项建议在动它之前定下来。
+> **注意时态**：这几项原本记作「阶段 3 动工前要先定」。实际结果是**阶段 3 照常施工、这些都没定**
+> —— 飞书 Webhook 端点已经上线（见 §四）。所以它们不再是「门口的路障」，而是
+> **已经带着债务上线的、仍未处理的决定**。其中第 1 项因为端点已真实对外暴露，紧迫性反而变高了。
 
-1. **鉴权是否提前到阶段 3**
-   `require_api_auth()`（`src/requirement_agent/config/settings.py:149`）**全仓零调用方**：
+1. **鉴权是否提前到阶段 3**（现应读作：**鉴权到底什么时候做**）
+   `require_api_auth()`（`src/requirement_agent/config/settings.py:170`）**全仓零调用方**（已复核）：
    `API_AUTH_TOKEN` 在 `.env` 与 `.env.example` 里都配了，但没有任何代码校验它。
    HTTP 层也没有鉴权中间件（`api/app.py` 的 middleware 只加安全响应头）。
-   阶段 3 要加的正是对外暴露的 Webhook 端点，建议一并处理。
+   而那个对外暴露的 Webhook 端点**已经上线了**（§四）—— 它现在完全靠飞书自身的验签兜底。
 
 2. **`/health` 重复注册 + OpenAPI tags 双层重复**
-   两个 `/health`：`api/app.py:81` 与 `api/routes/system.py:20`；
-   tags 重复：`api/router.py:30` 与 `:46` 两级都带 `tags=["requirements"]`，结果叠加成
+   两个 `/health`：`api/app.py:131` 与 `api/routes/system.py:20`；
+   tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级都带 `tags=["requirements"]`，结果叠加成
    `['requirements','requirements']`。修正会**变更 OpenAPI**，需明确授权后再动。
 
 3. **根目录 `需求管理Agent.yml`（87KB，仍被 git 跟踪）去留**
@@ -66,15 +75,15 @@
 |---|---|---|
 | 1 | **飞书渠道代码已就绪，但未与真实飞书应用联调** | 端点 `POST /api/v1/channels/feishu/webhook`（`api/routes/channels.py`）；协议实现见 `infrastructure/channels/feishu_client.py`。**未验证项**：解密/签名按官方文档实现但无官方测试向量，单测是自洽回环；URL 校验、加密回调、签名头是否与真实飞书一致，需要配一个测试应用实测。 |
 | 1b | **`source_type` 对外枚举未放宽** | `api/schemas/agent.py:15,53` 与 `api/schemas/requirements.py:20` 仍为 `web/email/meeting/manual`。渠道入库走 service 不经该校验，所以**功能上不阻塞**；但若要让 `feishu` 能经 `/requirements/submit` 等端点提交，需放宽（属对外契约变更，需授权）。 |
-| 2 | **E2E 测试为空** | `tests/` 下只有 `unit/` 与 `integration/`（集成测试仅 1 个文件），原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。 |
-| 3 | **worker 未部署** | `workers/tasks.py` 提供了独立的 FastAPI 入口（:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。 |
+| 2 | **E2E 测试为空** | `tests/` 下只有 `unit/`（25 个文件）与 `integration/`（7 个文件），原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有任何测试真的启动前端跑一遍**，前端改动只能靠 §五 的浏览器手动清单验。 |
+| 3 | **worker 未部署** | `workers/tasks.py` 提供了独立的 FastAPI 入口（`python -m requirement_agent.workers`，:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/requirement-analysis/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。**注意有两个 `worker` 包**：`infrastructure/worker/`（任务实现 + outbox，被引用的那个）与 `workers/`（仅 HTTP 入口薄壳 + `__main__.py`）。 |
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
 | 6 | **雪花 ID 经 JSON number 传给前端有精度风险** | 后端把 `source_id` 序列化为 JSON number，前端用 JS `Number` 承载，而雪花 ID 普遍超过 `2^53`（`MAX_SAFE_INTEGER`）。当前库里这几个 ID 恰好能被 double 精确表示才没出事；一旦不巧，前端会发出一个不存在的 ID。修法是后端把该字段序列化成字符串（契约变更，需授权）。 |
 | 7 | **需求库筛选下拉的候选项来自当前结果集** | 无 facets 接口，选项由返回行聚合而来；只在「无筛选」时刷新，避免一筛选项就只剩当前命中值。代价：**首次加载前**（或结果为空时）下拉是空的。要彻底解决需加一个 distinct 值接口。 |
 | 8 | **`/api/v1/ops/*` 的死信重投/放弃没有鉴权** | 与现有全部写端点处境相同（阶段 6 的鉴权批次尚未做），**不是新增暴露面**，但接入鉴权时必须一并纳入保护范围。 |
 | 9 | **相似度阈值仍是粗校准，且该模型的相似度基线偏高** | 实测「语义无关」的中文业务文本余弦可达 **0.788**（甘特图排期 vs 报表导出），而 duplicate 阈值是 0.80 —— 只差 0.012，随时可能假阳性。当前值（0.80/0.72/0.60）只是把常见噪声挡在外面，**不是可靠的分界线**。已把「达到阈值就补判」的规则全部拆掉（判断权交回模型），阈值本身待库里有几十条需求后重跑校准。 |
-| 9 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
+| 10 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
 
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
 > `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`。
@@ -108,6 +117,11 @@
 
 > 实施方案见 `docs/方案_对话状态机与Git式版本管理.md`。四批（A/B/C/D）已实现，
 > 对应迁移 `012`/`013`/`014`。下个接手的人想知道「这些能力还能不能用」，照这个清单验。
+>
+> **⚠️ 该方案只做了前半段。** §3「Git 式版本管理」共五节，只落地了 §3.1（模块化 = D 批）；
+> **§3.2 合并闭环（E）、§3.3 版本链 DAG（F）、§3.4 revert / §3.5 `lock_version` 乐观锁（G）
+> 均未动工**。所以现在「版本」只有单向的 feature 模块标签，**没有合并、没有版本链可视化、不能回滚**。
+> 详见下方「未实现的批次」。
 
 ### 能力清单
 
@@ -163,6 +177,14 @@ SELECT content, module_key, module_name FROM requirement_feature;
 
 ⚠️ D 的模块标签、C 的继续卡片**需要新提交+审核才有数据**（历史数据无 stage/checkpoint/module）。
 
+### 未实现的批次（E/F/G）—— 现状与依赖
+
+| 批 | 计划内容 | 依赖 | 现在能不能做 |
+|---|---|---|---|
+| **E** | 合并闭环（§3.2）：预合并预览 + 审核页入口 + 关系状态联动。**前置**：先修 `sync_features` 的匹配键（否则级联误判） | D ✅ | ✅ 可开工，是 F/G 的前置 |
+| **F** | 版本链 DAG（§3.3）：`merged_from` 两列 + trace 补字段 + 前端时间轴 | **E** | ⬜ 等 E |
+| **G** | revert（§3.4）+ `lock_version` 乐观锁（§3.5，该列当前是死的） | **E** | ⬜ 等 E |
+
 ---
 
 ## 六、文档导航
@@ -170,7 +192,10 @@ SELECT content, module_key, module_name FROM requirement_feature;
 | 文档 | 用途 |
 |---|---|
 | `docs/current-state.md`（本文） | 真实进度与未决事项 —— **先看这个** |
-| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次** |
+| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（A–G 全量，含未做的 E/F/G） |
+| `docs/History/需求规格.md` | 需求规格原稿 |
+| `docs/History/数据模型与实施史.md` | 数据模型的演进与实施记录 |
+| `docs/History/工程史附录.md` | 工程史附录 |
 | `README.md` | 环境搭建、常用接口、目录结构 |
 | `docs/refactoring/archive/*` | 阶段 0/1 施工快照与决策依据（**进度信息已过时**） |
 | `migrations/README.md` | 迁移清单 + 向量维度与索引的决策 |
