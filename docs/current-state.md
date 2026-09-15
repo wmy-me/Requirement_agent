@@ -104,11 +104,73 @@
 
 ---
 
-## 五、文档导航
+## 五、对话状态机 / 并发隔离 / 版本管理 —— 能力与验证
+
+> 实施方案见 `docs/方案_对话状态机与Git式版本管理.md`。四批（A/B/C/D）已实现，
+> 对应迁移 `012`/`013`/`014`。下个接手的人想知道「这些能力还能不能用」，照这个清单验。
+
+### 能力清单
+
+| 批 | 新增能力 | 落点 |
+|---|---|---|
+| **A** | 同一对话一次只答一个；跨对话可并行；崩溃留下的僵尸 run 自动清理 | 迁移 `012` 唯一索引 + 409 + `expire_stale_runs` |
+| **B** | 每个 LLM 阶段完成即把产物落进 `agent_run.checkpoint`，断开不白算 | 迁移 `013` 的 `stage`/`checkpoint` 列 |
+| **C** | 「继续上次分析」从断点续跑，不重算已完成步骤 | `POST /runs/{id}/resume`、`pause`、`GET /chat/{sid}/resumable` |
+| **D** | 抽取按模块分组，feature 带 `module_key`/`module_name` | 迁移 `014` + 抽取提示词 + `_module_lines` |
+
+### 自动验证（已写进测试，一条命令）
+
+```
+pytest -q   → 194 passed
+```
+
+| 测试文件 | 验证的能力 | 关键断言 |
+|---|---|---|
+| `test_conversation_isolation.py` | A | 同对话二次活跃被拒（409）、跨对话并行、僵尸清理后对话恢复、新 run 不误杀 |
+| `test_run_checkpoint.py` | B | 断点逐阶段累积、部分更新不清旧断点、done |
+| `test_run_resume.py` | C | **哨兵断言四步 agent 一个不被调用**（续跑不重算）、端点校验 404/409 |
+| `test_feature_module.py` | D | `create_features` 落 module 列后直接查库确认 |
+
+### 接口验证（curl）
+
+**A · 并发隔离**
+```bash
+# 同一对话发第二条流式请求（第一条还在跑）→ 应 409，detail 带正在跑的 run
+curl -i -X POST :8888/api/v1/agent/chat/stream -H 'Content-Type: application/json' \
+  -d '{"message":"问题一","session_id":"<会话id>","client_message_id":"a"}'
+```
+
+**C · 续跑**
+```bash
+curl :8888/api/v1/agent/chat/<会话id>/resumable          # → 返回 run + steps_done
+curl -i -X POST :8888/api/v1/agent/runs/<run_id>/resume  # → SSE，且很快（跳过已算步骤）
+```
+
+**D · 模块化**
+```bash
+# 提交一份可分模块的需求 → 审核通过 → feature 表应带 module 列
+SELECT content, module_key, module_name FROM requirement_feature;
+```
+
+### 浏览器手动验证（前端无自动化测试）
+
+| 场景 | 步骤 | 预期 |
+|---|---|---|
+| 跨对话并行 | 会话 A 提问（分析中）→ 新建对话 → 在 B 提问 | B 能开始，不被 A 卡住（改前被 `if (state.streaming) return` 拦） |
+| 切回内容不丢 | A 分析中切到 B、再切回 A | A 内容完整（stream buffer 回填） |
+| 继续卡片 | 分析未完成时断开/刷新 → 回该会话 | 「上次分析未完成（N/4 步）+ 继续」卡片 |
+| 模块标签 | 打开一条带模块的 REQ 详情 | 功能明细行有 📦 模块名 |
+
+⚠️ D 的模块标签、C 的继续卡片**需要新提交+审核才有数据**（历史数据无 stage/checkpoint/module）。
+
+---
+
+## 六、文档导航
 
 | 文档 | 用途 |
 |---|---|
 | `docs/current-state.md`（本文） | 真实进度与未决事项 —— **先看这个** |
+| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次** |
 | `README.md` | 环境搭建、常用接口、目录结构 |
 | `docs/refactoring/archive/*` | 阶段 0/1 施工快照与决策依据（**进度信息已过时**） |
 | `migrations/README.md` | 迁移清单 + 向量维度与索引的决策 |
