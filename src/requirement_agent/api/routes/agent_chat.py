@@ -39,6 +39,7 @@ from requirement_agent.api.dependencies import (
     risk_agent,
 )
 from requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
+from requirement_agent.agents.extract_agent import ExtractedRequirement
 
 logger = logging.getLogger(__name__)
 
@@ -302,9 +303,15 @@ async def _stream_chat_pipeline(
     requester_name: str | None,
     analysis_mode: Literal["strict", "balanced", "broad"],
     history: list[dict[str, object]],
+    resume: dict[str, object] | None = None,
 ) -> AsyncIterator[str]:
     """共享的 Agent 分析管线（extract → retrieve → analyze → risk → narrative），
-    纯文本与「文件+文字」两种入口复用。产出 SSE 事件并落库。"""
+    纯文本与「文件+文字」两种入口复用。产出 SSE 事件并落库。
+
+    `resume`（续跑，C 批）：`{"stage": ..., "checkpoint": {...}}`。非空时从断点继续——
+    已完成阶段的产物从 checkpoint 预填，跳过对应步骤；narrative 永远重跑
+    （它便宜，且用户能接受换一种说法）。
+    """
     user_message = chat_repo.upsert_user_message(
         conversation_id=session_id,
         content=user_content,
@@ -352,53 +359,84 @@ async def _stream_chat_pipeline(
             },
         )
 
+    # —— 续跑初始化：从 checkpoint 预填已完成阶段的产物，算出「已完成几步」——
+    # stage 序列表示「已完成到哪」：extracted=1步、retrieved=2、analyzed=3、assessed/narrating=4。
+    _STAGE_SEQUENCE = ("extracted", "retrieved", "analyzed", "assessed")
+    done_steps = 0
+    if resume is not None:
+        checkpoint = resume.get("checkpoint") or {}
+        for key in ("extracted", "candidates", "analysis", "risk"):
+            if key in checkpoint:
+                pipeline[key] = checkpoint[key]
+        resume_stage = resume.get("stage") or "queued"
+        if resume_stage in _STAGE_SEQUENCE:
+            done_steps = _STAGE_SEQUENCE.index(resume_stage) + 1
+        elif resume_stage in ("narrating", "done"):
+            done_steps = 4
+
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
 
-        yield _sse("step", {"step": "extract", "label": "正在理解你的需求…"})
-        extracted = await run_in_threadpool(
-            extract_agent.extract,
-            run_text,
-            source_type=source_type,
-            requester_name=requester_name,
-        )
-        extracted_payload = extracted.model_dump(mode="python")
-        pipeline["extracted"] = extracted_payload
-        save_progress("extracted")
+        # extract（第 1 步）
+        if done_steps < 1:
+            yield _sse("step", {"step": "extract", "label": "正在理解你的需求…"})
+            extracted = await run_in_threadpool(
+                extract_agent.extract,
+                run_text,
+                source_type=source_type,
+                requester_name=requester_name,
+            )
+            extracted_payload = extracted.model_dump(mode="python")
+            pipeline["extracted"] = extracted_payload
+            save_progress("extracted")
+        else:
+            extracted = ExtractedRequirement.model_validate(pipeline["extracted"])
 
-        yield _sse("step", {"step": "retrieve", "label": "正在检索相似需求…"})
-        candidates = await run_in_threadpool(
-            retrieval_service.search,
-            extracted_payload.get("summary") or run_text,
-            limit=5,
-        )
-        pipeline["candidates"] = candidates
-        save_progress("retrieved")
+        # retrieve（第 2 步）
+        if done_steps < 2:
+            yield _sse("step", {"step": "retrieve", "label": "正在检索相似需求…"})
+            candidates = await run_in_threadpool(
+                retrieval_service.search,
+                extracted.summary or run_text,
+                limit=5,
+            )
+            pipeline["candidates"] = candidates
+            save_progress("retrieved")
+        else:
+            candidates = pipeline["candidates"]
 
-        yield _sse("step", {"step": "analyze", "label": "正在分析冲突与重复…"})
-        analysis = await run_in_threadpool(
-            analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
-        )
-        analysis_payload = analysis.model_dump(mode="python")
-        pipeline["analysis"] = analysis_payload
-        thresholds = thresholds_for(analysis_mode)
-        pipeline["analysis"]["candidates"] = [
-            {
-                **candidate,
-                "evidence": candidate.get("evidence") or [],
-                "score_label": score_label(float(candidate.get("similarity") or 0), thresholds),
-            }
-            for candidate in pipeline["analysis"].get("candidates") or []
-        ]
-        save_progress("analyzed")
+        # analyze（第 3 步）
+        if done_steps < 3:
+            yield _sse("step", {"step": "analyze", "label": "正在分析冲突与重复…"})
+            analysis = await run_in_threadpool(
+                analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
+            )
+            analysis_payload = analysis.model_dump(mode="python")
+            pipeline["analysis"] = analysis_payload
+            thresholds = thresholds_for(analysis_mode)
+            pipeline["analysis"]["candidates"] = [
+                {
+                    **candidate,
+                    "evidence": candidate.get("evidence") or [],
+                    "score_label": score_label(float(candidate.get("similarity") or 0), thresholds),
+                }
+                for candidate in pipeline["analysis"].get("candidates") or []
+            ]
+            save_progress("analyzed")
+        else:
+            analysis_payload = pipeline["analysis"]
 
-        yield _sse("step", {"step": "risk", "label": "正在评估风险…"})
-        risk = await run_in_threadpool(risk_agent.assess, extracted)
-        risk_payload = risk.model_dump(mode="python")
-        pipeline["risk"] = risk_payload
+        # risk（第 4 步）
+        if done_steps < 4:
+            yield _sse("step", {"step": "risk", "label": "正在评估风险…"})
+            risk = await run_in_threadpool(risk_agent.assess, extracted)
+            risk_payload = risk.model_dump(mode="python")
+            pipeline["risk"] = risk_payload
 
-        pipeline["risk"]["confidence"] = round(float(pipeline["risk"].get("confidence") or 0.0), 2)
-        save_progress("assessed")
+            pipeline["risk"]["confidence"] = round(float(pipeline["risk"].get("confidence") or 0.0), 2)
+            save_progress("assessed")
+        else:
+            risk_payload = pipeline["risk"]
 
         pipeline["review_required"] = decision_review_required(analysis_payload, risk_payload)
         pipeline["next_action"] = decision_next_action(analysis_payload, risk_payload)
@@ -449,6 +487,40 @@ async def _stream_chat_pipeline(
         chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
         yield _sse("error", {"message": str(exc)})
         yield _sse("done", {"run_id": run_id})
+
+
+async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
+    """从 run 的断点继续分析管线，产出与首跑一致的 SSE（C 批：续跑）。
+
+    已算出的阶段从 checkpoint 预填（`_stream_chat_pipeline(resume=...)` 跳过它们），
+    只补跑缺失的部分与叙事。`run` 里的 client_message_id 会经 create_run 的幂等
+    ON CONFLICT 复用同一个 run_id。
+    """
+    session_id = str(run["conversation_id"])
+    client_message_id = run["client_message_id"]
+    checkpoint = run["checkpoint"] or {}
+    extracted = checkpoint.get("extracted") or {}
+    run_text = str(extracted.get("raw_text") or "")
+    meta = run["meta"] or {}
+    source_type = str(meta.get("source_type") or "web")
+    requester_name = meta.get("requester_name")
+    history = chat_sessions.setdefault(session_id, [])
+
+    yield _sse("step", {"step": "resume", "label": "已恢复上次分析，从断点继续…"})
+    async for frame in _stream_chat_pipeline(
+        session_id=session_id,
+        actor_id=actor_id_or_default(None),
+        client_message_id=client_message_id,
+        user_content=run_text or "（恢复分析）",
+        user_meta=None,
+        run_text=run_text,
+        source_type=source_type,
+        requester_name=requester_name,
+        analysis_mode="strict",
+        history=history,
+        resume={"stage": run["stage"], "checkpoint": checkpoint},
+    ):
+        yield frame
 
 
 async def _collect_files(run_text: str, files: list[UploadFile] | None) -> tuple[str, list[dict[str, object]]]:
@@ -675,6 +747,81 @@ async def get_agent_chat_history(session_id: str) -> dict[str, object]:
     """按会话 id 获取历史消息，返回 {"session_id", "history": [...]}。"""
     history = chat_repo.get_messages(session_id)
     return {"session_id": session_id, "history": history or chat_sessions.get(session_id, [])}
+
+
+@router.get("/api/v1/agent/chat/{session_id}/resumable")
+async def get_resumable_run(session_id: str) -> dict[str, object]:
+    """该会话最近一个可续跑的 run 摘要（前端「继续上次分析」卡片用）。
+
+    有则返回 run_id + 已完成步数（1~4）+ stage + checkpoint 键；
+    没有（跑完了 / 没断点 / 正在跑）返回 {"run": None}。
+    """
+    run = chat_repo.find_resumable_run(session_id)
+    if run is None:
+        return {"run": None}
+    _STAGE_STEPS = {"extracted": 1, "retrieved": 2, "analyzed": 3, "assessed": 4, "narrating": 4}
+    return {
+        "run": {
+            "run_id": run["run_id"],
+            "status": run["status"],
+            "stage": run["stage"],
+            "steps_done": _STAGE_STEPS.get(run["stage"] or "", 0),
+            "checkpoint_keys": sorted(run["checkpoint"].keys()),
+            "updated_at": run["updated_at"],
+        }
+    }
+
+
+@router.post("/api/v1/agent/runs/{run_id}/resume")
+async def resume_agent_run(run_id: str) -> StreamingResponse:
+    """从断点继续一次未完成的运行，产出与首跑一致的 SSE。
+
+    校验：run 必须存在、未完成、且有断点；该会话不能在跑另一个运行。
+    已算出的阶段从 checkpoint 预填，只补跑缺失的部分与叙事。
+    """
+    run = chat_repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    if run["status"] == "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="run already completed"
+        )
+    if not run["checkpoint"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="run has no checkpoint to resume from"
+        )
+    # 该会话不能在跑另一个运行（resume 的 run 本身不活跃，撞车的是别人）
+    _ensure_conversation_idle(run["conversation_id"])
+    # 置回活跃：同一 run，唯一索引以 conversation 为键，只有它自己 active，不冲突
+    chat_repo.update_run(run_id=run_id, status="running", stage=run["stage"] or "queued")
+    return StreamingResponse(
+        _stream_resumed_run(run),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/api/v1/agent/runs/{run_id}/pause")
+async def pause_agent_run(run_id: str) -> dict[str, object]:
+    """暂停一次进行中的运行（置为 paused，仍占并发位）。
+
+    注意：paused 在唯一索引的活跃集合里，暂停期间该对话发新消息会被 409 拦 ——
+    这正是「一个对话一次只答一个问题」的延续；要继续就点「继续」。
+    """
+    run = chat_repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    if run["status"] != "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"run is {run['status']}, only running can be paused",
+        )
+    chat_repo.update_run(run_id=run_id, status="paused", stage=run["stage"] or "queued")
+    return {"status": "paused", "run_id": run_id}
 
 
 @router.get("/api/v1/agent/runs/{run_id}")

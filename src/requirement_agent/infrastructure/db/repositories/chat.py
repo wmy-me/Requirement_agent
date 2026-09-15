@@ -381,6 +381,29 @@ class ChatRepository:
             ).mappings().first()
         return self._normalize_run_row(row) if row else None
 
+    def find_resumable_run(self, conversation_id: str) -> dict[str, object] | None:
+        """该会话最近一个「未完成但已有断点」的 run，供续跑入口用。
+
+        只认 paused/cancelled/failed 且 checkpoint 非空 —— completed（跑完了没必要续）、
+        running（正在跑，不该再续一次）、checkpoint 为空（没算出任何东西，续了也是从头）都不算。
+        """
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
+                    FROM agent_run
+                    WHERE conversation_id = CAST(:conversation_id AS UUID)
+                      AND status IN ('paused', 'cancelled', 'failed')
+                      AND checkpoint::text <> '{}'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"conversation_id": conversation_id},
+            ).mappings().first()
+        return self._normalize_run_row(row) if row else None
+
     def get_assistant_message_for_run(self, run_id: str) -> dict[str, object] | None:
         """返回某次 run 的 assistant 消息（用于断连后重放落库结果，避免重算/重复）。"""
         with SessionLocal() as session:

@@ -660,6 +660,85 @@ async function loadSession(id) {
     toast('加载会话失败：' + e.message, 'err');
   }
   reattachActiveStream(id);
+  checkResumable(id);
+}
+
+/** 若该会话有一次「未完成但已有断点」的分析，提示用户可以继续而不是重算。 */
+async function checkResumable(sessionId) {
+  try {
+    const res = await apiJson('/api/v1/agent/chat/' + encodeURIComponent(sessionId) + '/resumable');
+    const run = res && res.run;
+    if (!run) return;
+    const card = document.createElement('article');
+    card.className = 'msg system';
+    card.innerHTML = `<div class="msg-body"><div class="bubble"></div></div>`;
+    const bubble = card.querySelector('.bubble');
+    bubble.textContent = `↻ 上次分析未完成（已算完 ${run.steps_done}/4 步），继续可以不重算这几步。`;
+    const row = document.createElement('div');
+    row.className = 'act-row';
+    const btn = document.createElement('button');
+    btn.className = 'btn primary';
+    btn.textContent = '继续上次分析';
+    btn.addEventListener('click', () => resumeRun(run.run_id));
+    row.appendChild(btn);
+    bubble.appendChild(row);
+    msgs.appendChild(card);
+    scrollBottom();
+  } catch (e) {
+    /* 静默：没有可续的分析是正常情况 */
+  }
+}
+
+/** 从断点续跑一次分析（POST /agent/runs/{id}/resume），产出的 SSE 与首跑一致。 */
+async function resumeRun(runId) {
+  if (isBusy(state.sessionId)) return;
+  const analysis = appendAnalysisMessage();
+  let final = null;
+  const stream = {
+    sessionId: state.sessionId,
+    controller: new AbortController(),
+    analysis,
+    final: null,
+    done: false,
+  };
+  const clientId = 'resume-' + runId;
+  state.streams[clientId] = stream;
+  setSendEnabled();
+  try {
+    const resp = await fetch('/api/v1/agent/runs/' + encodeURIComponent(runId) + '/resume', {
+      method: 'POST',
+      signal: stream.controller.signal,
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try {
+        const b = await resp.json();
+        detail = (b.detail && b.detail.message) || b.detail || detail;
+      } catch (e) { /* ignore */ }
+      throw new Error(detail);
+    }
+    for await (const ev of parseSSE(resp)) {
+      let data = {};
+      try { data = ev.data ? JSON.parse(ev.data) : {}; } catch (e) { /* ignore */ }
+      if (ev.event === 'session') state.sessionId = data.session_id || state.sessionId;
+      else if (ev.event === 'step') analysis.setStep(data.label || '');
+      else if (ev.event === 'artifacts') analysis.addArtifacts(data.artifacts);
+      else if (ev.event === 'narrative') {
+        if (data.t) { if (!final) { final = createFinalBubble(); stream.final = final; } final.token(data.t); }
+      } else if (ev.event === 'error') (final || analysis).error(data.message);
+      else if (ev.event === 'done') { if (final) final.finish(); else analysis.completeAnalysis(); }
+    }
+    if (final) final.finish();
+    else analysis.completeAnalysis();
+  } catch (err) {
+    (final || analysis).error(err && err.message ? err.message : '网络异常，请重试');
+  } finally {
+    stream.done = true;
+    delete state.streams[clientId];
+    setSendEnabled();
+    loadConversations();
+    scrollBottom();
+  }
 }
 
 /**
