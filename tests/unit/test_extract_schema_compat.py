@@ -116,3 +116,33 @@ def test_extract_still_falls_back_on_broken_json() -> None:
 
     assert result.requirement_title  # 启发式兜底仍然工作
     assert result.requirements
+
+
+def test_extract_parses_modules_structure() -> None:
+    """模型给出 [{module, items}] 时，modules 要被结构化解析（模块化，D 批）。"""
+    provider = FakeProvider(
+        _payload(
+            modules=[
+                {"module": "登录", "items": ["短信验证码登录", "账号锁定策略"]},
+                {"module": "报表", "items": ["按部门导出"]},
+            ]
+        )
+    )
+
+    result = ExtractSkill(provider=provider).extract(RAW, source_type="web")
+
+    assert result.requirement_title == "小习惯打卡小程序"  # 模型字段仍在
+    assert len(result.modules) == 2
+    assert result.modules[0].module == "登录"
+    assert result.modules[0].items == ["短信验证码登录", "账号锁定策略"]
+    assert result.modules[1].module == "报表"
+
+
+def test_extract_modules_empty_when_model_gives_none() -> None:
+    """没给 modules 时为空，退回扁平 requirements——不强制所有模型都分组。"""
+    provider = FakeProvider(_payload())  # 只有 requirements，没有 modules
+
+    result = ExtractSkill(provider=provider).extract(RAW, source_type="web")
+
+    assert result.modules == []
+    assert result.requirements == ["支持快速打卡", "生成统计图表"]

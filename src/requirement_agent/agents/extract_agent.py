@@ -9,11 +9,23 @@ from pydantic import BaseModel, Field
 from requirement_agent.skills.extract_skill import ExtractSkill
 
 
+class RequirementModule(BaseModel):
+    """抽取结果里的一个需求模块 —— 若干功能条目的分组（如「登录」「报表」）。
+
+    对应落库后的 `requirement_feature.module_key / module_name`。
+    `module` 为空表示不归属任何模块的杂项条目。
+    """
+
+    module: str = ""
+    items: list[str] = Field(default_factory=list)
+
+
 class ExtractedRequirement(BaseModel):
     """抽取阶段产出的标准需求载体。
 
     该对象会贯穿检索、关系分析、风险评估、审核落库与对话回放；
     `requirements` 表示按功能条目拆分后的候选行，后续版本管理直接复用它做 feature 初稿。
+    `modules` 是这些条目按模块的分组（模型给得出就用，给不出则为空、退回扁平 requirements）。
 
     `extraction_source` 标明这些字段**来自模型还是规则兜底**。这个字段是必需的：
     兜底抽取只能按行切割原文，遇到 PDF 这类版式文本会把「一、文档基础信息」这种
@@ -29,6 +41,7 @@ class ExtractedRequirement(BaseModel):
     priority: Literal["low", "medium", "high"] = "medium"
     tags: list[str] = Field(default_factory=list)
     requirements: list[str] = Field(default_factory=list)
+    modules: list[RequirementModule] = Field(default_factory=list)
     raw_text: str
     # 默认 heuristic：不做无据的声称。模型路径会显式覆盖为 llm。
     extraction_source: Literal["llm", "heuristic"] = "heuristic"

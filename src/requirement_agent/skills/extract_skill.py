@@ -48,6 +48,38 @@ def _coerce_str_list(value: object) -> list[str]:
     return [item for item in items if item]
 
 
+def _coerce_modules(value: object) -> list[dict[str, object]]:
+    """把模型给的模块结构归一成 `{module, items}` 列表。
+
+    期望形状是 `[{"module": "登录", "items": ["…", "…"]}]`；容纳经典对象数组
+    `[{"module": "...", "text": "..."}]` 与扁平字符串列表三种形态。
+    """
+    from requirement_agent.agents.extract_agent import RequirementModule
+
+    modules: dict[str, list[str]] = {}
+    if isinstance(value, dict):
+        raw = [value]
+    elif isinstance(value, list):
+        raw = value
+    else:
+        return []
+    for entry in raw:
+        if isinstance(entry, dict):
+            name = str(entry.get("module") or "").strip()
+            items = entry.get("items") or entry.get("text") or entry.get("content")
+            if isinstance(items, str):
+                item_list = [_flatten_item(items)]
+            else:
+                item_list = _coerce_str_list(items if isinstance(items, (list, tuple)) else [entry])
+            for line in item_list:
+                modules.setdefault(name, []).append(line)
+        elif isinstance(entry, str):
+            modules.setdefault("", []).append(entry.strip())
+    return [
+        RequirementModule(module=name, items=items).model_dump() for name, items in modules.items() if items
+    ]
+
+
 class ExtractSkill(BaseSkill):
     """LLM 抽取技能。
 
@@ -88,6 +120,7 @@ class ExtractSkill(BaseSkill):
                 # 直接交给校验会让**整个抽取**失败（见 _flatten_item 的说明）。
                 "tags": _coerce_str_list(payload.get("tags")) or fallback.tags,
                 "requirements": _coerce_str_list(payload.get("requirements")) or fallback.requirements,
+                "modules": _coerce_modules(payload.get("modules")),
                 "raw_text": payload.get("raw_text") or raw_text,
                 # 标明来源：前端据此判断「要点拆解」是不是模型抽取的
                 "extraction_source": "llm",

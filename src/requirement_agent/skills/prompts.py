@@ -54,6 +54,9 @@ def build_extract_user_prompt(
         "- priority：low、medium、high\n"
         "- tags：业务标签列表\n"
         "- requirements：子需求列表\n"
+        "- modules：子需求的**模块分组**，形如 [{\"module\": \"登录\", \"items\": [\"…\", \"…\"]}]。"
+        "  **能分组就必须给**（子需求天然按功能域可分时，如登录/报表/权限）；"
+        "  **分不出就不给**（此时省略 modules，仅给扁平 requirements）\n"
         "- raw_text：原始文本\n"
         f"source_type={source_type}\nrequester_name={requester_name or 'unknown'}\nraw_text:\n{raw_text}"
     )

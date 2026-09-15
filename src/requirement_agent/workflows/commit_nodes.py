@@ -147,6 +147,35 @@ def _feature_candidates(source: Any, edited_requirement: str | None) -> list[str
     return [line.strip() for line in fallback.splitlines() if line.strip()]
 
 
+def _module_lines(source: Any) -> list[dict[str, object]]:
+    """若抽取结果带 modules，把它展平成携带模块标签的 feature 行。
+
+    行结构 `{"content": "…", "module_key": "…", "module_name": "…"}`；
+    抽取没给模块时返回空列表（调用方退回到扁平的 _feature_candidates）。
+    """
+    extracted = source.metadata.get("extracted") if isinstance(source.metadata, dict) else None
+    if not isinstance(extracted, dict):
+        return []
+    modules = extracted.get("modules")
+    if not isinstance(modules, list) or not modules:
+        return []
+    lines: list[dict[str, object]] = []
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        name = str(module.get("module") or "").strip()
+        items = module.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            content = str(item).strip()
+            if content:
+                lines.append(
+                    {"content": content, "module_key": name or None, "module_name": name or None}
+                )
+    return lines
+
+
 def _primary_change_type(current_version: int, feature_changes: list[dict[str, Any]]) -> str:
     """从 feature 级变更推导版本主类型，供时间线与审计展示。"""
     if current_version == 0:
@@ -185,7 +214,12 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
 
     canonical_req_title = canonical_title(source, edited_requirement)
     canonical_req_text = canonical_requirement(source, edited_requirement)
-    feature_candidates = _feature_candidates(source, edited_requirement)
+    # 新建 REQ：抽取给了模块结构就按模块展开（feature 带上模块标签）；
+    # 否则退回扁平候选。合并进既有 REQ 时保持扁平（模块的合并管理留到 E 批）。
+    if master is None:
+        feature_candidates = _module_lines(source) or _feature_candidates(source, edited_requirement)
+    else:
+        feature_candidates = _feature_candidates(source, edited_requirement)
 
     if master is None:
         master = RequirementMaster(

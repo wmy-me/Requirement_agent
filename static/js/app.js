@@ -1131,7 +1131,8 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
     }
     featureItems.forEach((f) => {
       const li = document.createElement('li');
-      li.innerHTML = `<div class="t-head">${esc(f.feature_key || '')}</div><div class="t-sub">引入 V${esc(f.origin_version_no || '')}${f.origin_source_id ? ` · source #${esc(f.origin_source_id)}` : ''}</div><pre>${esc(f.content || '')}</pre>`;
+      const moduleTag = f.module_name ? `<span class="status-tag" style="margin-left:6px">📦 ${esc(f.module_name)}</span>` : '';
+      li.innerHTML = `<div class="t-head">${esc(f.feature_key || '')}${moduleTag}</div><div class="t-sub">引入 V${esc(f.origin_version_no || '')}${f.origin_source_id ? ` · source #${esc(f.origin_source_id)}` : ''}</div><pre>${esc(f.content || '')}</pre>`;
       featureLine.appendChild(li);
     });
     const diffHtml = [];

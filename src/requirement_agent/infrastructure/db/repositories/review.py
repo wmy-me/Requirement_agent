@@ -77,7 +77,8 @@ class RequirementFeatureRepository:
             text(
                 """
                 SELECT id, requirement_id, feature_key, content, status, ordinal,
-                       origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance
+                       origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance,
+                       module_key, module_name
                 FROM requirement_feature
                 WHERE requirement_id = :requirement_id AND status = 'active'
                 ORDER BY ordinal ASC, id ASC
@@ -92,17 +93,30 @@ class RequirementFeatureRepository:
     def create_features(
         self,
         requirement_id: int,
-        features: list[str],
+        features: list[str] | list[dict[str, object]],
         *,
         source_id: int | None,
         requirement_key: str,
         version_no: int,
         session: Session,
     ) -> list[dict[str, object]]:
-        """新建 REQ 时把来源的功能行整体落为 features（每个新 feature 记 provenance=add）。"""
+        """新建 REQ 时把来源的功能行整体落为 features（每个新 feature 记 provenance=add）。
+
+        `features` 元素可以是字符串（不归属任何模块），也可以是
+        `{"content", "module_key", "module_name"}` 的 dict（携带模块标签）。
+        """
         created: list[dict[str, object]] = []
         ordinal = 1
-        for content in [item.strip() for item in features if item and item.strip()]:
+        for item in features:
+            if isinstance(item, dict):
+                content = str(item.get("content") or "").strip()
+                module_key = item.get("module_key")
+                module_name = item.get("module_name")
+            else:
+                content = str(item).strip()
+                module_key = module_name = None
+            if not content:
+                continue
             feature_key = self._next_feature_key(requirement_id, ordinal=ordinal, version_no=version_no, session=session)
             provenance = [
                 {
@@ -117,13 +131,16 @@ class RequirementFeatureRepository:
                     """
                     INSERT INTO requirement_feature (
                         id, requirement_id, feature_key, content, status, ordinal,
-                        origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                        origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash,
+                        module_key, module_name
                     ) VALUES (
                         :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
-                        :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                        :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash,
+                        :module_key, :module_name
                     )
                     RETURNING id, requirement_id, feature_key, content, status, ordinal,
-                              origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance
+                              origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance,
+                              module_key, module_name
                     """
                 ),
                 {
@@ -137,6 +154,8 @@ class RequirementFeatureRepository:
                     "origin_version_no": version_no,
                     "provenance": json.dumps(provenance),
                     "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "module_key": module_key,
+                    "module_name": module_name,
                 },
             ).mappings().one()
             created.append(self._row_to_feature(row))
@@ -474,7 +493,8 @@ class RequirementFeatureRepository:
             text(
                 """
                 SELECT f.id, f.requirement_id, f.feature_key, f.content, f.status, f.ordinal,
-                       f.origin_source_id, f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance
+                       f.origin_source_id, f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance,
+                       f.module_key, f.module_name
                 FROM requirement_feature f
                 JOIN requirement_master m ON m.id = f.requirement_id
                 WHERE m.requirement_key = :requirement_key
@@ -602,6 +622,7 @@ class RequirementFeatureRepository:
                 """
                 SELECT f.id, f.feature_key, f.content, f.status, f.ordinal, f.origin_source_id,
                        f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance,
+                       f.module_key, f.module_name,
                        m.requirement_key, m.requirement_name, m.current_version, m.status AS requirement_status
                 FROM requirement_feature f
                 JOIN requirement_master m ON m.id = f.requirement_id
@@ -655,5 +676,7 @@ class RequirementFeatureRepository:
             "origin_version_no": int(row["origin_version_no"]),
             "removed_version_no": row["removed_version_no"],
             "provenance": list(row["provenance"] or []),
+            "module_key": row.get("module_key"),
+            "module_name": row.get("module_name"),
         }
 
