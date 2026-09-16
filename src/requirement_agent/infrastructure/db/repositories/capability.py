@@ -554,6 +554,89 @@ class FeatureCapabilityRepository:
             if owns_session:
                 session.close()
 
+    def search_streams(
+        self,
+        *,
+        capability_id: int,
+        constraint_key: str | None = None,
+        review_status: str | None = None,
+        limit: int = 100,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        """按能力（可加条件）反查需求主线 —— 方案 §6 的前两类搜索。
+
+        两个维度取自**不同的地方**，这是刻意的：
+
+        - **能力的存在性**查 `feature_capability`（活的事实，含人工裁决状态），
+          并只统计**仍生效**的 feature；
+        - **条件**查**当前版本的快照** —— 条件只存在于版本快照里，关联表上没有。
+
+        `review_status` 可传 `proposed` / `confirmed` 过滤。**默认不过滤**：
+        当前还没有人工裁决入口（批次 5），只看 confirmed 会搜不到任何东西。
+        但要知道 `confirmed` 才是可信的那一档。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        clauses = [
+            "fc.capability_id = :cid",
+            "f.status = 'active'",
+            "m.status = 'active'",
+        ]
+        params: dict[str, object] = {"cid": capability_id, "limit": int(limit)}
+        if review_status:
+            clauses.append("fc.review_status = :rs")
+            params["rs"] = review_status
+        if constraint_key:
+            # 条件命中「命中词表的正式键」或「未命中的原文」都算 ——
+            # 后者尚未结构化，但它确实写在需求里，搜不到才是漏
+            clauses.append(
+                """
+                EXISTS (
+                    SELECT 1 FROM requirement_version v
+                    WHERE v.requirement_id = m.id AND v.status = 'current'
+                      AND EXISTS (
+                          SELECT 1 FROM jsonb_array_elements(v.constraint_snapshot) cst
+                          WHERE cst->>'raw' = :ck OR cst->>'constraint_key' = :ck
+                      )
+                )
+                """
+            )
+            params["ck"] = constraint_key.strip()
+        try:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT DISTINCT m.requirement_key, m.requirement_name, m.status,
+                           m.current_version, fc.review_status,
+                           c.action, c.object, c.display_name
+                    FROM feature_capability fc
+                    JOIN requirement_feature f ON f.id = fc.feature_id
+                    JOIN requirement_master m ON m.id = f.requirement_id
+                    JOIN capability c ON c.id = fc.capability_id
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY m.requirement_key
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings().all()
+        finally:
+            if owns_session:
+                session.close()
+        return [
+            {
+                "requirement_key": row["requirement_key"],
+                "requirement_name": row["requirement_name"],
+                "status": row["status"],
+                "current_version": int(row["current_version"] or 0),
+                "review_status": row["review_status"],
+                "action": row["action"],
+                "object": row["object"],
+                "display_name": row["display_name"],
+            }
+            for row in rows
+        ]
+
     def list_for_requirement(
         self,
         requirement_id: int,

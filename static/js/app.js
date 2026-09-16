@@ -1029,6 +1029,10 @@ function buildPendingItem(item) {
       <div class="w-section"><div class="k">来源原文</div><div class="orig-text"></div></div>
       <div class="w-section"><div class="k">分析结论</div><div class="verdict-row"></div></div>
       <div class="w-section"><div class="k">风险</div><div class="risk-line"></div></div>
+      <div class="w-section cap-cand-section hidden">
+        <div class="k">能力候选（AI 提议，待确认）</div>
+        <div class="cap-cand-line"></div>
+      </div>
       <div class="w-section merge-section hidden">
         <div class="k">相似需求候选</div>
         <ul class="timeline cand-lines"></ul>
@@ -1050,6 +1054,26 @@ function buildPendingItem(item) {
     ['关联', analysis.related],
     ['冲突', analysis.conflict],
   ].map(([label, v]) => `<span class="verdict ${v ? 'yes' : ''}">${label} ${v ? '是' : '否'}</span>`).join('');
+
+  // 能力候选（批次 4）：把批次 2 匹配到的能力/条件如实展示。
+  // 必须标出「AI 提议，待确认」—— 全是 proposed，还没有任何人工裁决入口。
+  const capMatch = meta.capability_match || {};
+  const capHits = capMatch.capabilities || [];
+  const capSection = box.querySelector('.cap-cand-section');
+  if (capHits.length) {
+    const lines = capHits.map((h) => {
+      const tag = h.matched ? '<span class="cap-tag ok">命中词表</span>'
+                            : '<span class="cap-tag wait">新能力提案</span>';
+      return `<div>· ${esc(h.action || '')} ${esc(h.object || '')} ${tag}</div>`;
+    });
+    const cons = ((capMatch.constraints || {}).unmatched) || [];
+    if (cons.length) {
+      lines.push(`<div style="margin-top:4px">条件未入词表（需人工决定）：` +
+        cons.map((c) => esc(c.raw)).join('、') + `</div>`);
+    }
+    box.querySelector('.cap-cand-line').innerHTML = lines.join('');
+    capSection.classList.remove('hidden');
+  }
 
   const riskLine = box.querySelector('.risk-line');
   const risks = [['质量', risk.quality_risk], ['变更', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
@@ -1231,24 +1255,61 @@ function exportLibraryCsv() {
   a.remove();
 }
 
+// 详情页的「能力与条件」区块（批次 4）。
+// 关联默认是 proposed（AI 提议、还没人工确认），标签必须如实标出来 ——
+// 否则人会把「模型猜的」当成「已确认的」。
+const REVIEW_STATUS_LABEL = { proposed: '待确认', confirmed: '已确认', dismissed: '已驳回' };
+
+function renderCapabilityBlock(el, data) {
+  if (!el) return;
+  const capabilities = (data && data.capabilities) || [];
+  const constraints = (data && data.constraints) || [];
+  if (!capabilities.length && !constraints.length) {
+    el.innerHTML = '<div class="empty-hint">暂无能力信息（该需求可能早于能力模型上线）</div>';
+    return;
+  }
+  const caps = capabilities.map((c) => {
+    const tag = REVIEW_STATUS_LABEL[c.review_status] || c.review_status || '';
+    const cls = c.review_status === 'confirmed' ? 'ok' : (c.review_status === 'dismissed' ? 'off' : 'wait');
+    return `<li>
+      <div class="t-head">${esc(c.display_name || '')} <span class="cap-tag ${cls}">${esc(tag)}</span></div>
+      <div class="t-sub">${esc(c.feature_key || '')} · ${esc(c.feature_content || '')}</div>
+    </li>`;
+  }).join('');
+  const cons = constraints.map((c) => {
+    const matched = c.matched
+      ? `→ ${esc(c.constraint_key || '')}${c.alias_hit ? '（别名命中）' : ''}`
+      : '<span class="cap-tag wait">未结构化</span>';
+    return `<li><div class="t-sub">${esc(c.raw || '')} ${matched}</div></li>`;
+  }).join('');
+  el.innerHTML = `
+    <ul class="timeline cap-lines">${caps || '<li><div class="t-sub">无</div></li>'}</ul>
+    ${constraints.length ? `<div class="section-label" style="margin-top:8px">当前版本条件</div>
+      <ul class="timeline cap-lines">${cons}</ul>` : ''}`;
+}
+
 async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
   const detailEl = $(targetId);
   if (!detailEl) return;
   detailEl.classList.remove('hidden');
   detailEl.innerHTML = `<div class="empty-hint">加载版本与溯源…</div>`;
   try {
-    const [vers, trace, features, diff, relationRes] = await Promise.all([
+    const [vers, trace, features, diff, relationRes, capabilityRes] = await Promise.all([
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/versions'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/trace'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/features'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/diff'),
       apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/relations'),
+      // 能力/条件：失败不该拖垮整页（能力层是新增能力，老数据可能没有）
+      apiJson('/api/v1/requirements/' + encodeURIComponent(key) + '/capabilities')
+        .catch(() => ({ capabilities: [], constraints: [] })),
     ]);
     const req = (trace.requirement || {});
     const featureItems = features.items || [];
     const diffItems = diff || {};
     let html = `<div class="d-title"></div>`;
     if (req.final_requirement) html += `<p style="font-size:12px;color:var(--text-2);margin:2px 0 8px"></p>`;
+    html += `<div class="section-label">能力与条件</div><div class="capability-block"></div>`;
     html += `<div class="section-label">当前功能明细</div><ul class="timeline feature-lines"></ul>`;
     html += `<div class="section-label">版本 Diff</div><ul class="timeline diff-lines"></ul>`;
     html += `<div class="section-label">版本历史</div><ul class="timeline version-lines"></ul>`;
@@ -1256,6 +1317,7 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
     detailEl.innerHTML = html;
     detailEl.querySelector('.d-title').textContent = `${key} · ${name || ''}`;
     if (req.final_requirement) detailEl.querySelector('p').textContent = req.final_requirement;
+    renderCapabilityBlock(detailEl.querySelector('.capability-block'), capabilityRes);
     const featureLine = detailEl.querySelector('.feature-lines');
     const diffLine = detailEl.querySelector('.diff-lines');
     const versionLine = detailEl.querySelector('.version-lines');

@@ -11,7 +11,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from requirement_agent.api.dependencies import feature_repo, relation_repo, retrieval_service, version_repo
+from requirement_agent.api.dependencies import (
+    feature_capability_repo,
+    feature_repo,
+    master_repo,
+    relation_repo,
+    retrieval_service,
+    version_repo,
+)
 from requirement_agent.api.schemas import RequirementRelationUpdateRequest
 from requirement_agent.config.settings import settings
 
@@ -145,4 +152,26 @@ async def search_requirement_features(
             has_version_ge=has_version_ge,
             limit=limit,
         )
+    }
+
+
+@router.get("/api/v1/requirements/{requirement_key}/capabilities")
+async def list_requirement_capabilities(requirement_key: str) -> dict[str, object]:
+    """某条需求主线的能力与条件。
+
+    - `capabilities`：功能 ↔ 能力的关联（**默认 `proposed`** —— AI 提议、待人工裁决）
+    - `constraints`：**当前版本**的条件快照（条件只有版本快照里有，关联表上没有）
+
+    需求不存在返回 404。
+    """
+    master = master_repo.get_by_key(requirement_key)
+    if master is None or master.id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="requirement not found")
+    current = version_repo.get_current(master_id=int(master.id))
+    return {
+        "requirement_key": master.requirement_key,
+        "requirement_name": master.requirement_name,
+        "current_version": int(master.current_version or 0),
+        "capabilities": feature_capability_repo.list_for_requirement(int(master.id)),
+        "constraints": (current or {}).get("constraint_snapshot") or [],
     }

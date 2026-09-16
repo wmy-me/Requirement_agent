@@ -23,7 +23,9 @@ from requirement_agent.infrastructure.db.repositories import (
     ChatRepository,
     ConstraintVocabRepository,
     DocumentAssetRepository,
+    FeatureCapabilityRepository,
     MemoryRepository,
+    RequirementMasterRepository,
     RequirementFeatureRepository,
     RequirementRelationRepository,
     RequirementSourceRepository,
@@ -47,6 +49,7 @@ review_service = ReviewService()
 
 # —— Repository ——
 source_repo = RequirementSourceRepository()
+master_repo = RequirementMasterRepository()
 version_repo = RequirementVersionRepository()
 audit_repo = AuditRepository()
 document_repo = DocumentAssetRepository()
@@ -57,6 +60,7 @@ relation_repo = RequirementRelationRepository()
 # 能力 / 限定条件的受控词表（方案批次 1）
 capability_repo = CapabilityRepository()
 constraint_repo = ConstraintVocabRepository()
+feature_capability_repo = FeatureCapabilityRepository()
 # 运维面（/api/v1/ops）用：查看异步队列积压与处理死信
 outbox_repo = OutboxRepository()
 
@@ -127,10 +131,12 @@ __all__ = [
     "document_repo",
     "embedding_service",
     "extract_agent",
+    "feature_capability_repo",
     "feature_repo",
     "feishu_client",
     "memory_context_builder",
     "memory_extractor",
+    "master_repo",
     "memory_repo",
     "object_storage",
     "outbox_repo",

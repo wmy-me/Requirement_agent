@@ -779,6 +779,49 @@ class RequirementVersionRepository:
                 session.close()
             raise
 
+    def get_current(self, *, master_id: int, session: Session | None = None) -> dict[str, object] | None:
+        """取某主线的**当前版本**（`status='current'`），含能力/条件快照。
+
+        与 `get_latest_by_requirement`（按 version_no 最大）的区别：那条不问状态，
+        这条认状态。有了批次 3 的 `status` 之后，**「当前」应由状态定义**
+        —— 否则回滚（G 批）把某个历史版本重新置为 current 时，这里会取错版本。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, requirement_id, parent_version_id, parent_version_no, version_no,
+                           version_title, change_type, requirement_snapshot, change_summary,
+                           diff_payload, feature_changes, capability_snapshot, constraint_snapshot,
+                           status, created_by, reviewed_by, created_at
+                    FROM requirement_version
+                    WHERE requirement_id = :rid AND status = 'current'
+                    LIMIT 1
+                    """
+                ),
+                {"rid": master_id},
+            ).mappings().first()
+        finally:
+            if owns_session:
+                session.close()
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "requirement_id": int(row["requirement_id"]),
+            "version_no": int(row["version_no"]),
+            "version_title": row["version_title"],
+            "change_type": row["change_type"],
+            "requirement_snapshot": row["requirement_snapshot"],
+            "change_summary": row["change_summary"],
+            "status": row["status"],
+            "capability_snapshot": list(row["capability_snapshot"] or []),
+            "constraint_snapshot": list(row["constraint_snapshot"] or []),
+            "created_at": as_display_iso(row["created_at"]),
+        }
+
     def supersede_current(
         self,
         *,
