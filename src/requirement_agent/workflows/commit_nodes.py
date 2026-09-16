@@ -338,8 +338,16 @@ def _constraint_snapshot(match_payload: dict[str, Any]) -> list[dict[str, object
             )
     for item in constraints.get("unmatched") or []:
         if isinstance(item, dict):
+            # ⚠️ `alias_hit` 必须**两个分支都给**：同一数组里两种元素形状是埋雷 ——
+            # 现在前端只在 matched 分支读它所以没出错，但任何以后无条件读的代码
+            # 在未命中的条目上会静默拿到 undefined。
             snapshot.append(
-                {"raw": item.get("raw"), "constraint_key": None, "matched": False}
+                {
+                    "raw": item.get("raw"),
+                    "constraint_key": None,
+                    "matched": False,
+                    "alias_hit": False,
+                }
             )
     return snapshot
 

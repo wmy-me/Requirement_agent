@@ -296,7 +296,10 @@ def test_constraint_snapshot_keeps_matched_and_unmatched() -> None:
     assert snapshot[0] == {
         "raw": "按部门维度筛选", "constraint_key": "按部门筛选", "matched": True, "alias_hit": True
     }
-    assert snapshot[1] == {"raw": "按区域层级导出", "constraint_key": None, "matched": False}
+    # 未命中的条目**也要给 alias_hit** —— 同一数组里两种形状是埋雷（见实现处的注释）
+    assert snapshot[1] == {
+        "raw": "按区域层级导出", "constraint_key": None, "matched": False, "alias_hit": False
+    }
 
 
 def test_snapshot_handles_empty_payload() -> None:
