@@ -22,6 +22,9 @@ from requirement_agent.infrastructure.db.repositories.requirement import (
     RequirementVersionRepository,
 )
 from requirement_agent.infrastructure.db.repositories.relation import RequirementRelationRepository
+from requirement_agent.infrastructure.db.repositories.title_candidate import (
+    RequirementTitleCandidateRepository,
+)
 from requirement_agent.infrastructure.db.repositories.review import (
     RequirementFeatureRepository,
     RequirementReviewRepository,
@@ -40,5 +43,6 @@ __all__ = [
     "RequirementRelationRepository",
     "RequirementReviewRepository",
     "RequirementSourceRepository",
+    "RequirementTitleCandidateRepository",
     "RequirementVersionRepository",
 ]
