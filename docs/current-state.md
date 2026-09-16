@@ -24,18 +24,18 @@
 | 5. 需求关系表 + 影响分析 | 🟡 关系表已建，影响分析的传播计算未做 | `migrations/009` + 审核通过时写入 + 双向读端点 + 详情页关系块 |
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | 🟡 可观测性与死信处理已完成，其余三项未做 | `/api/v1/ops/*` + 请求日志中间件 + 前端「运维」tab |
 | 7. 完整回归 + 生产验收 | ⬜ 未开始 | — |
-| ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D/E 五批已完成**且已实测验收**（见 §五），F/G 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`、E 批（迁移 `012`–`014`，**E 批无迁移**） |
+| ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D/E/**G** 六批已完成**且已实测验收**（见 §五），F 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`、E 批（迁移 `012`–`014`）、G 批（**无迁移**） |
 | 能力 / 条件模型（**独立方案**） | ✅ **六批全部完成并验证**（见 §二 B6、方案文档 §12–§17） | `28f5f37`（1–2）、`b5ee0d7`（3）、`b311130`（4）、`1eb834e`（5）、`acfbcc9`（6） |
 
 **阶段 2 六项明细**：P1-1 Prompt 去重 ✅ ｜ P1-2 配置卫生 ✅ ｜ P1-3 `analysis_mode` 接线 ✅
 ｜ P2-1 模型参数透传 ✅ ｜ P2-2 LLM 可观测性 ✅ ｜ P2-3 向量维度决策与守卫 ✅
 
 **★ 七批明细**（方案见 `docs/方案_对话状态机与Git式版本管理.md`）：A 并发隔离 ✅ ｜ B 断点落库 ✅
-｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ✅** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ⬜**。
-F/G 是「Git 式版本管理」的收尾（§3.3–3.5），**尚未动工**；E 是 F/G 的前置，现已就位。
+｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ✅** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ✅**（2026-09-16）。
+只剩 F 未动工；**G 已把「能合并」补齐成「能合并、能回滚、并发不丢数据」**。
 
-**测试基线**：`pytest -q` → **311 passed, 2 skipped**（41 个测试文件）。
-> 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ **311**（能力模型六批）。
+**测试基线**：`pytest -q` → **393 passed, 2 skipped**。
+> 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ 311（能力模型六批）→ **393**（G 批）。
 > 每次加批次都会涨，**以最新一次实测为准**。
 
 **当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
@@ -109,7 +109,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | # | 事项 | 前置状态 | 备注 |
 |---|---|---|---|
 | B1 | ★ **F 批 · 版本链 DAG**（§3.3）`merged_from` 两列 + trace 补字段 + 前端时间轴 | ✅ **就位** | E 批已写入 `diff_payload.target_requirement_key`，F 直接读 |
-| B2 | ★ **G 批 · revert + `lock_version` 乐观锁**（§3.4/3.5） | ✅ **就位** | `plan_sync(prune=True)` 已备好，revert 直接复用。⚠️ **并发问题已因 E 开放合并入口而可达**（两人同时合并同一 REQ 是 last-write-wins） |
+| B2 | ~~★ **G 批 · revert + `lock_version` 乐观锁**~~ | ✅ **已完成**（2026-09-16） | 见 §五「G 批实测结果」。⚠️ 实施中发现方案 §3.4 漏了一步（历史内容不可复原），已一并补上 |
 | B3 | **阶段 5 · 影响分析的传播计算** | ⚠️ **有卡点** | 不是缺表：**没有 `depends` 边的生产者**。现有的边全是「相似/冲突」，无方向可传播。需先定依赖关系从哪来 |
 | B4 | **阶段 6 · 剩余三项** | 部分就位 | RBAC（等 A2）／数据保留（零实现，六张表无限增长）／**渠道输出闭环**（触发点与凭证已在位：`app_id`/`app_secret` 已注入 `FeishuClient` 却从未被读取） |
 | B5 | **阶段 7 · 完整回归 + 生产验收** | — | 建议放最后；`tests/e2e/` 仍为空 |
@@ -344,15 +344,56 @@ FROM requirement_master m WHERE m.requirement_key='REQ-000015';
 stage/checkpoint/module），现在走查已造出带模块的 `REQ-000015` 与带断点的 run。
 **上表四条仍全部是「待验」——缺的是浏览器实操，不是数据。**
 
-### 未实现的批次（F/G）—— 现状与依赖
+### G 批实测结果（2026-09-16，无迁移）
+
+**G 做了什么**：`lock_version` 乐观锁（方案 §3.5）+ 回滚端点（§3.4）+ **一项方案里漏掉的前置**。
+
+| 检查点 | 结果 |
+|---|---|
+| **乐观锁真的生效** | 陈旧 `lock_version` 写回 → 抛 `ConcurrentModificationError`，且那一行**逐字段未被写过**（`test_stale_write_after_a_real_commit_is_rejected`）✅ |
+| **热路径没被锁误杀** | 新建 REQ → v1 ✅；带目标 REQ 的合并 → v2 ✅；连续两次合并 → v3 ✅（`test_review_commit_path.py`，**此前全仓没有测试跑过真实提交路径**） |
+| **期望值取自事务开头** | 单测把 `lock_version=7` 与 `next_version=1` 分开构造，断言传的是 **7 不是 1** —— 抓错位置锁会形同虚设且不会有别的测试变红 ✅ |
+| 回滚产出新版本 | v1→v2（modify）→v3（replace 删掉两条）→ 回滚到 v1 → **v4**，`change_type=modify` ✅ |
+| **内容真的复原** | 回滚后当前功能集与 `features?at_version=1` **逐字段相等**（含被改过的文字）✅ |
+| **复活原行** | 被删的功能回滚后是**同一 id、同一 feature_key**，`feature_capability` 关联保住 ✅ |
+| **append-only** | 历史三版的 `requirement_snapshot`/`feature_changes` **逐字段未变**，只多一条 v4 ✅ |
+| 同主线一个 current | 由部分唯一索引保证，回滚后仍只有一条 ✅ |
+| 回滚闭合差异 | `/diff?from_version=1&to_version=4` → added/removed/modified **全空**、unchanged=3 ✅ |
+| 审计与向量 | 写 `requirement_version_reverted` 审计 + `embedding_sync` outbox ✅ |
+
+**方案里漏掉的一步（本次补上）**：`features?at_version=N` 只复原「当时哪些功能存在」，
+`content` 拿的是**当前值** —— `modify` 是就地覆写，旧文字不另存。所以照方案 §3.4 直接做回滚，
+会得到「回滚了成员、没回滚内容」的假回滚。补法是新增纯函数
+`domain/feature_history.py`：沿 `requirement_version.feature_changes` **反向回放**，
+把当前行推回任意历史时刻。**它顺带修好了 `/diff` 的 `modified` 恒空**（同根因，见 §六 6.5）。
+
+**两处与方案原文不同的选择**（都是实测后改的）：
+
+1. **回滚不复用 `sync_features(prune=True)`**（方案 §3.4 的原建议）。它是**内容哈希匹配**：
+   现有集合一旦混入已软删的同内容行，同内容多候选会挑错配对（一删一活、两条行都错）；
+   它的 `delete` 分支还会**无条件重写**已软删行的 `removed_version_no`，静默污染「哪一版删的」
+   这段历史。改用 key 驱动的 `reconcile_features`（新增方法，不碰 E 批的内核）。
+2. **复活走 UPDATE 原行，不新建**。新建会让 `feature_key` 断裂，更要紧的是能力关联挂在
+   `feature_capability.feature_id` 上、而它只认 `status='active'` 的行 —— 新建等于把
+   回滚回来的功能的能力标签抹掉。
+
+**新增测试 52 条**（341 → 393）：`test_feature_history.py`（16，纯函数边界）、
+`test_feature_history_restore.py`（11）、`test_master_optimistic_lock.py`（7）、
+`test_review_commit_path.py`（4）、`test_requirement_revert.py`（12）、
+`test_review_service.py` 增补（3）。
+
+**仍未做**：浏览器实操（回滚按钮前端还没接）。`/revert` 端点目前**只有后端**，
+前端要走这条路径得先有个入口。
+
+### 未实现的批次（F）—— 现状与依赖
 
 | 批 | 计划内容 | 依赖 | 现在能不能做 |
 |---|---|---|---|
 | **F** | 版本链 DAG（§3.3）：`merged_from` 两列 + trace 补字段 + 前端时间轴。**E 批已把 `diff_payload.target_requirement_key` 写好了，F 直接读** | E ✅ | ✅ 可开工 |
-| **G** | revert（§3.4）+ `lock_version` 乐观锁（§3.5，该列当前是死的）。`plan_sync(prune=True)` 已就位，revert 直接复用 | E ✅ | ✅ 可开工 |
 
-> ⚠️ **G 的并发问题现已可达**：E 批开放了合并入口，两个审核人同时合并进同一个 REQ
-> 就是 last-write-wins（后者静默覆盖前者）。这一条在 E 批的拍板里被明确**留给 G 批**。
+> G 批已完成（见上）。⚠️ 一个留给 F 的细节：回滚版本的 `change_type` 恒为 `modify`
+> （数据库 CHECK 没有 `revert`），真正的「这是回滚」记在 `diff_payload.kind="revert"` 里 ——
+> F 批画时间轴时要读它，否则回滚会和普通修改长得一样。
 
 ---
 
@@ -414,7 +455,14 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 
 - **每次版本变化都经过人工审核** —— 版本只在 `commit_requirement_node` 里产生，没有别的入口
 - **能看版本前后改了什么**：`/diff` 逐条给 added/removed/modified
+  （⚠️ 2026-09-16 之前 `modified` **结构上恒空**，见 6.5）
 - **审核时先看再提交**：合并预览按模块列出 add/modify/delete
+- **能回滚**（2026-09-16 新增）：`POST /requirements/{key}/revert` append-only 地产出新版本，
+  被删的功能**复活原行**（`feature_key` 与能力关联都不丢）
+- **能按版本读当时的内容**：`features?at_version=N` 的 `content`/`module_*` 回到 N 时刻
+  （不再只是「当时哪些行存在」）
+- **并发不会静默丢数据**（2026-09-16 新增）：`lock_version` 乐观锁 CAS，
+  两个审核人同时合并同一 REQ 时，后者拿到 409 而不是覆盖前者的工作
 - 每版**完整快照**，词表日后改名也不污染历史
 - **一条主线只有一个 current** —— 数据库部分唯一索引在守，不靠应用自觉
 
@@ -422,13 +470,16 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 
 | 缺的 | 说明 |
 |---|---|
-| **多个候选标题** | 一条需求只有一个标题；「同一需求的不同视角入口」不存在 |
-| **文档版本链** | `document_asset` 只有 checksum 去重，**没有版本概念**；同名同格式文档改一个字会变成两个互不相干的资产。**方案已写：`docs/方案_文档版本链.md`** |
+| ~~版本时刻的内容复原~~ | ✅ **已做**（2026-09-16）：`domain/feature_history.py` 沿 `feature_changes` 反向回放。**顺带修好了 `/diff` 的 `modified` 恒空** —— 它此前用同一条 SQL 取 diff 两端、两边都是当前值，所以 `before != after` 永远为假 |
+| **F 批 · 版本链 DAG** | `merged_from` 两列 + trace 补字段 + 前端时间轴。**E 批已把 `diff_payload.target_requirement_key` 写好，F 直接读** |
+| **多个候选标题** | 一条需求只有一个标题；「同一需求的不同视角入口」不存在（**后端已做、前端未接、数据 0 行**） |
+| **文档版本链** | `document_asset` 只有 checksum 去重，**没有版本概念**；同名同格式文档改一个字会变成两个互不相干的资产。**方案已写：`docs/方案_文档版本链.md`**（批 1–2 已落地，写入路径未动） |
 | ~~主线判定建议~~ | ✅ **已做**（`a85ee9f`）：分析输出 `suggestion{action,target,confidence,reason}`，**只出建议、人工确认** |
 | **行内高亮** | diff 只到「功能条目」粒度，没有内容片段级对比 |
 
-**未验证**：详情页四个区块**从未在浏览器里点过**；`/diff` 端点除被详情页调用外，
-没做过端到端验证。
+**未验证**：详情页四个区块**从未在浏览器里点过**；**回滚端点没有前端入口**
+（`/revert` 目前只有后端，前端要接才行）。`/diff` 的端到端行为已由 G 批的测试覆盖
+（`test_feature_history_restore.py` / `test_requirement_revert.py`）。
 
 ---
 
@@ -438,7 +489,7 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 |---|---|
 | `docs/current-state.md`（本文） | 真实进度 + **§二 统一的待办任务清单** —— **先看这个** |
 | `docs/方案_需求主线与能力模型.md` | **能力 / 条件 / 需求主线**的设计方案：现状分析、现有模型映射、迁移方案、8 条设计歧义（**§9 的 4 条卡住 schema，待拍板**） |
-| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（A–G 全量，含未做的 E/F/G） |
+| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（A–G 全量；A–E、G 已落地，**只剩 F**） |
 | `docs/History/需求规格.md` | 需求规格原稿 |
 | `docs/History/数据模型与实施史.md` | 数据模型的演进与实施记录 |
 | `docs/History/工程史附录.md` | 工程史附录 |

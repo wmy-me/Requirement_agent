@@ -12,6 +12,10 @@
 > ③ 对话 SSE 的事件名写错：**没有 `delta`/`message`**，实际是 `artifacts`/`narrative`（§6）
 >
 > ⚠️ 这三条都会让重写的前端「照文档实现却跑不通」。§10 是**还没做完的清单**。
+>
+> **2026-09-16 同日：G 批（乐观锁 + 回滚）落地**，本契约相应更新 ——
+> 新增 `POST /requirements/{key}/revert`（§3）、`features?at_version` 与 `/diff` 的口径更正
+> （内容也回到当时，`modified` 不再恒空）、审核 409 多了「他人已修改」一种（§4）。
 
 ---
 
@@ -124,6 +128,11 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 > `module_name` 就是详情页的 📦 标签；为 `null` 表示该功能不归属任何模块。
 > `id` / `requirement_id` / `origin_source_id` / `provenance[].source_id` 都是 **number**。
 
+⚠️ **`at_version=N` 返回的是「N 版本时刻的成员**与**内容」**（2026-09-16 更正）。
+此前它只复原成员：`content` / `module_*` 取的是**当前值**（`modify` 是就地覆写，旧文字没另存），
+所以一个在 v2 被改过措辞的功能，查 v1 会返回 v2 之后的文字。现在内容也回到当时。
+`at_version` 与 `include_deleted` 同时给时，**后者顶掉前者**（既有行为，保持）。
+
 ### `GET /api/v1/requirements/{key}/diff`
 入参 `from_version` / `to_version`（都可空，默认相邻两版）。
 出参 `{requirement_key, from_version, to_version, added[], removed[], modified[], unchanged}`
@@ -132,12 +141,19 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 - `modified[]`：`{feature_key, before, after}`
 - `unchanged`：**数字**（不是数组）
 
+> ⚠️ **`modified` 现在真的会有内容了**（2026-09-16 修复）。
+> 此前它**结构上恒空**：这个方法用同一条 SQL 取 diff 两端，而那条 SQL 返回的都是**当前**值，
+> 所以 `before != after` 永远为假。修好 `at_version` 之后它自动变正确，接口形状没变。
+> `unchanged` 的口径也从「当前内容恰好相同」变成「**当时**内容相同」—— 这才是对的。
+
 > 实测自洽：REQ-000015 的 `v1→v3` 得 `added=4`（v2 引入 1 + v3 引入 3）、`unchanged=12`，
-> 而 `features?at_version=1` 得 12 条（正是 v1 当时的功能数）。
+> 而 `features?at_version=1` 得 12 条（正是 v1 当时的功能数）。该库至今没有 `modify` 历史，
+> 所以这条数据上的 `modified` 仍为 0 是**真实结果，不是没修复**。
 
 ### `GET /api/v1/requirements/{key}/trace`
 需求主体 + 逐版本快照 + 每版来源链。顶层 `{requirement, versions}`。
-`requirement` 里有 `lock_version`（**当前是死列**，见 §10-T7）。
+`requirement` 里有 `lock_version` —— 它**不再是死列**：写端点现在做乐观锁 CAS，
+冲突会以 409 体现（见 §4）。回滚产生的版本**没有来源**，该版本的 `sources` 为 `[]`（合法形状）。
 
 ### `GET /api/v1/requirements/{key}/relations`
 `{"items":[...]}`，**双向**（我指向别人 + 别人指向我），每项：
@@ -150,6 +166,42 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 
 ### `PATCH /api/v1/requirements/relations/{relation_id}`
 Body `{"status": "confirmed" | "dismissed"}`。**不接受改回 `proposed`**（撤回需重新分析）。404 不存在。
+
+### `POST /api/v1/requirements/{key}/revert`（2026-09-16 新增）
+
+把一条主线回滚到某个历史版本。**append-only 的 revert，不是 reset** —— 历史一行不改，
+新版本排到队尾。
+
+Body：`{target_version(必填, ≥1), comment?, expected_current_version?}`
+
+```json
+{"requirement_key": "REQ-000015", "from_version": 3, "target_version": 1,
+ "version_no": 4, "change_type": "modify",
+ "change_summary": "回滚到 V1：线上事故回退",
+ "feature_changes": [{"op":"add","feature_key":"F-002","content":"…"},
+                     {"op":"modify","feature_key":"F-001","before":"…","after":"…"}],
+ "summary": {"add": 1, "modify": 1, "delete": 0, "keep": 12, "active_after": 14},
+ "lock_version": 4}
+```
+
+- `change_type` 恒为 **`modify`** —— 数据库 CHECK 只允许 `new/add/modify/delete`，没有 `revert`。
+  真正的「这是一次回滚」在 `diff_payload.kind = "revert"` 里（`/trace` 能看到）。
+- 回滚版本**复用了目标版本的能力/条件快照**，所以 `/capabilities` 的 `constraints` 与
+  「回到 V{n}」自洽。
+- **被删掉的功能是「复活原行」**：`feature_key` 与 `id` 都不变，
+  挂在 `feature_id` 上的能力关联因此保住。
+- 回滚版本的 `sources` 为 `[]`（它没有来源）。
+
+| 状态 | 触发 |
+|---|---|
+| 404 | `requirement_key` 不存在；`target_version` 越界或不存在 |
+| 409 | `target_version` == 当前版本；回滚后与当前功能集完全一致（不产垃圾版本） |
+| 409 | `expected_current_version` 与库中不一致（**前端页面陈旧**） |
+| 409 | 乐观锁冲突（别人刚提交过，见 §4） |
+| 422 | body 不合法（缺 `target_version` / ≤0 / 多余字段） |
+
+> `expected_current_version` 是**可选的前端 STS 检查**（页面加载时看到的 `current_version`）。
+> `lock_version` 只防得住同一事务窗口内的并发，防不住「人盯着五分钟前的页面点回滚」。
 
 ---
 
@@ -276,8 +328,17 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 
 - `target_requirement_key` 非空 = **合并进既有 REQ**（产生新版本）；为空 = 新建 REQ
 - 出参：`{decision, reviewer_id, status, version_no, requirement_key}`
-- 409 = 冲突（来源已被处理 / 不存在）
 - ⚠️ 这里的 `source_id` 用**字符串**传入（§1.1）
+- ⚠️ **请求体不接受 `reviewer_id`**（`extra="forbid"`，会 422）—— 审核人身份由服务端从
+  `API_ACTOR_ID` 取；前端只能传 `reviewer_name`。
+
+**409 的三种签名**（2026-09-16 新增第三种）：
+
+| detail | 含义 | 前端该怎么办 |
+|---|---|---|
+| `source_id=X not found` | 列表陈旧 | 刷新待办列表 |
+| `source_id=X is not pending review` | 重复点击 / 已被处理 | 刷新待办列表 |
+| **`该需求已被他人修改，请重新加载后再审核`** | **乐观锁冲突**：本次审核期间有人往同一个 REQ 提交过（合并或回滚）。整个事务已回滚，**没有产生任何数据** | **重新加载目标 REQ 再决定** —— 不能照着旧预览点第二下，那会基于陈旧的功能集产出新版本 |
 
 ---
 
@@ -441,6 +502,17 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 `capability_match.capabilities[].matched=false` —— 这些都是**机器说的**，不是人定的。
 展示时不标，人就会当结论用。
 
+**8.8 回滚版本与普通版本在时间线上长得一样**（2026-09-16 新增）
+`change_type` 只有 `new/add/modify/delete` 四值（数据库 CHECK 限制），回滚**落成 `modify`**。
+所以「回滚」与「一次普通修改」在版本列表里区分不出来 —— 要区分就读
+`diff_payload.kind === 'revert'`（`/trace` 的版本快照里带）。
+**别按 `change_type` 猜**，那会把回滚当成普通修改展示。
+
+**8.9 409 现在可能是「别人先改了」**（2026-09-16 新增）
+审核与回滚都带乐观锁。拿到 409 时**先看 detail**：`source_id=... not found` /
+`... is not pending review` 是列表陈旧，刷新即可；**「该需求已被他人修改」是并发冲突**，
+必须重新加载目标 REQ 再决定 —— 照旧预览点第二下会基于陈旧的版本产出错误的合并。
+
 ---
 
 ## 9. 怎么重跑这份契约验证
@@ -558,15 +630,14 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 **怎么验**：同一文件名上传两次不同内容 → `document_stream` 仍 1 条、
 `document_asset` 变 2 行且只有一条 `status='current'`、两次响应的 `version_no` 不同。
 
-### T7 · F/G 批（版本链 DAG / revert + 乐观锁）（🟡 会改契约）
+### ~~T7 · F/G 批（版本链 DAG / revert + 乐观锁）~~ ✅ G 已完成（2026-09-16）
 
-`current-state.md` §2.2 的 B1/B2。**为什么影响契约**：
-- F 批要给 `/trace` 补 `merged_from` 字段 → §3 的 trace 小节要改
-- G 批的 `lock_version` 现在**已经在 `/trace` 的 `requirement` 里返回了但是死列**（实测），
-  乐观锁接上后，写端点会多出 409 冲突语义 → §4 的 `submit` 错误表要改
+**G 已经做完**，本文档已同步（§3 新增 revert 端点、`features?at_version` 与 `/diff` 改口径、
+§4 新增第三种 409）。**F（版本链 DAG）仍未做** —— 它会给 `/trace` 补 `merged_from` 字段，
+届时 §3 的 trace 小节要再改一次。
 
-**怎么做**：见 `docs/方案_对话状态机与Git式版本管理.md` §3.3–3.5。
-**做完后回来改本文档**，别让契约再次落后于实现。
+> 实施中发现方案 §3.4 漏了一步（「历史功能内容可复原」），已一并补上：
+> 见 `docs/方案_对话状态机与Git式版本管理.md` §3.4 的落地说明。
 
 ---
 

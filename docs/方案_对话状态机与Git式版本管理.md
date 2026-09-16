@@ -299,7 +299,7 @@ ALTER TABLE requirement_version
 - **`master.status` 的 `archived`/`deleted` 从未被写入**（`001:51-52`）→ 要么接上归档功能，
   要么从枚举里去掉（避免又一处「预留了但没人用」）
 
-### 3.4 回滚（Git 有的，这里没有）
+### 3.4 回滚（Git 有的，这里没有）—— ✅ **已落地（2026-09-16）**
 
 需求侧没有「撤销」入口。建议做成 **revert 而不是 reset**（保持 append-only，不改历史）：
 
@@ -308,7 +308,33 @@ ALTER TABLE requirement_version
   `change_type='modify'`，`change_summary` 写明「回滚到 V{n}」
 - 好处：历史仍是线性的、可审计；坏处：版本号会增长（与 Git revert 一致）
 
-### 3.5 并发（`lock_version` 是死的）
+> ### ⚠️ 落地时发现本节漏了一步：**历史的功能内容不可复原**
+>
+> 「把目标版本的 features 作为新的目标集合」这句话**不成立** ——
+> `features?at_version=N` 只复原「当时哪些功能**存在**」，`content` / `module_*` 拿的是
+> **当前值**：`modify` 是就地覆写（`SET content = :content WHERE id = :id`），旧文字不另存。
+> 照本节直接实现，会得到一个**「回滚了成员、没回滚内容」的假回滚** —— 措辞改过的地方回不去。
+>
+> **补法**：新增纯函数 `domain/feature_history.py`，沿 `requirement_version.feature_changes`
+> **反向回放**（`add` → 置为不存在；`modify` → 内容回到 `before`；`delete` → 复活并取记录里的
+> `content`），把当前行推回任意历史时刻。它**顺带修好了 `/diff` 的 `modified` 恒空**
+> （同根因：`diff_by_requirement_key` 用同一条 SQL 取两端，两边都是当前值）。
+>
+> **另有两处与本节原文不同的选择**（都是实测后改的）：
+>
+> 1. **不复用 `sync_features(prune=True)`**，改用 key 驱动的 `reconcile_features`。
+>    原方案要的是「以来源为准整体替换」的语义，但 `sync_features` 是**内容哈希匹配**：
+>    现有集合一旦混入已软删的同内容行，同内容多候选就会挑错配对（一删一活、两条行都错）；
+>    它的 `delete` 分支还会**无条件重写**已软删行的 `removed_version_no`，
+>    静默污染「这一行当初是哪一版删的」。回滚手里有精确的 `feature_key`，不该交给猜身份的匹配器。
+> 2. **复活走 UPDATE 原行，不新建行**。新建会让 `feature_key` 断裂，更要紧的是
+>    `feature_capability` 挂在 `feature_id` 上、而它只认 `status='active'` ——
+>    新建等于把回滚回来的功能的能力标签抹掉。
+>
+> **另加**：请求体可带可选的 `expected_current_version`（前端页面加载时看到的版本号）——
+> `lock_version` 只防得住同一事务窗口内的并发，防不住「人盯着五分钟前的页面点回滚」。
+
+### 3.5 并发（`lock_version` 是死的）—— ✅ **已落地（2026-09-16）**
 
 `lock_version` 被写入但**从未被比较**（`commit_nodes.py:279-284` 写，
 `master_repo.save` 的注释说「调用方应基于 lock_version 校验」但没人做）→
@@ -317,6 +343,17 @@ ALTER TABLE requirement_version
 合并闭环上线后这个问题会立刻暴露（两个审核人同时合并进同一个 REQ）。
 修法：`commit_requirement_node` 的 master 更新加 `WHERE id = :id AND lock_version = :expected`，
 不匹配则抛「该需求已被他人修改，请重新审核」。
+
+> **实际做法**：CAS 落在 `RequirementMasterRepository.save(expected_lock_version=...)`（opt-in，
+> 不传时行为与从前逐字节一致），SQL 用 Postgres 的
+> `ON CONFLICT ... DO UPDATE ... WHERE rm.lock_version = :expected` —— **条件为假时不更新且
+> `RETURNING` 不返回该行**，于是「`RETURNING` 空」就是冲突判据，判定与写入是同一条语句、天然原子。
+> 冲突抛 `ConcurrentModificationError(RuntimeError)`（照 `ConversationBusyError` 的先例），
+> 路由翻 409 并留痕；整个事务回滚，败者的工作不会留下半截数据。
+>
+> ⚠️ **实施中最容易写错的一行**：`commit_requirement_node` 抓 `expected_lock_version` 必须在
+> `master.lock_version = next_version` **之前**。抓晚了传的就是自己刚写的新值、CAS 永远成立，
+> 而且**不会有任何测试变红**。已用一个「`lock_version=7` vs `next_version=1`」的单测钉死。
 
 ---
 
@@ -332,7 +369,11 @@ ALTER TABLE requirement_version
 | **D** | ✅ **已完成**（迁移 `014`）：模块化（§3.1）：抽取两级结构 + feature 加模块列 + 落库 | 无 | 中。动抽取 schema |
 | **E** | **合并闭环**（§3.2）：预合并预览 + 审核页入口 + 关系状态联动 | D | 中高。先修 `sync_features` 的匹配键再开入口 |
 | **F** | **版本链 DAG**（§3.3）：merged_from 两列 + trace 补字段 + 前端时间轴 | E | 中。纯展示，但依赖 E 的数据 |
-| **G** | **revert + lock_version 乐观锁**（§3.4/3.5） | E | 中 |
+| **G** | ✅ **已完成**（2026-09-16，无迁移）：revert（§3.4）+ `lock_version` 乐观锁（§3.5），另补了 §3.4 漏掉的「历史内容复原」 | E | 中 |
+
+> **F 批的一个前置**：G 批的回滚版本 `change_type` 恒为 `modify`（DB CHECK 没有 `revert`），
+> 真正的「这是回滚」记在 `diff_payload.kind = "revert"` 里 —— F 画时间轴时要读它，
+> 否则回滚与普通修改在时间线上长得一模一样。
 
 **A 和 B 建议先做**：两者都只增不改、互不依赖 E/F 的数据，而且 B 直接止血——
 「花掉 token 算完的四步因为断开而全丢」是当前最实际的浪费。
