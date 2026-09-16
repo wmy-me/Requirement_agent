@@ -52,6 +52,31 @@ class RequirementSubmitResponse(BaseModel):
     source_id: int | None = None
 
 
+class RequirementRevertRequest(BaseModel):
+    """把一条需求主线回滚到某个历史版本的请求体。
+
+    - `target_version`：要回到的版本号（≥1，且必须存在于该主线、且不等于当前版本）。
+    - `expected_current_version`：**可选的前端 STS 检查** —— 前端页面加载时看到的
+      `current_version`。`lock_version` 只防得住同一事务窗口内的并发，防不住
+      「人盯着五分钟前的页面点回滚」；传了就在这里拦。不传则不校验。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_version: int = Field(gt=0)
+    comment: str | None = Field(default=None, max_length=5_000)
+    expected_current_version: int | None = Field(default=None, gt=0)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        """可选文本字段：trim 空白，空串归一为 None。"""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class RequirementRelationUpdateRequest(BaseModel):
     """需求关系的裁决请求体。
 

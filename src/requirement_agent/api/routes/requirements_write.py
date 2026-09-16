@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 
+from requirement_agent.config.settings import settings
 from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 from requirement_agent.api.dependencies import (
     document_chunk_task,
@@ -18,8 +20,16 @@ from requirement_agent.api.dependencies import (
     document_repo,
     object_storage,
     requirement_service,
+    revert_service,
 )
-from requirement_agent.api.schemas import RequirementSubmitRequest, RequirementSubmitResponse
+from requirement_agent.api.schemas import (
+    RequirementRevertRequest,
+    RequirementSubmitRequest,
+    RequirementSubmitResponse,
+)
+from requirement_agent.infrastructure.db.repositories import ConcurrentModificationError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -119,6 +129,50 @@ async def submit_requirement(payload: RequirementSubmitRequest) -> RequirementSu
         status=str(response["status"]),
         source_id=response.get("source_id"),
     )
+
+
+@router.post("/api/v1/requirements/{requirement_key}/revert")
+async def revert_requirement(
+    requirement_key: str,
+    payload: RequirementRevertRequest,
+) -> dict[str, object]:
+    """把一条需求主线回滚到某个历史版本（**append-only**：产出新版本，不改历史）。
+
+    回滚是「退回某个历史版本的功能集与内容」—— 新版本排在队尾，`change_type` 记
+    `modify`，`diff_payload.kind="revert"` 标明这是一次回滚。
+
+    状态码：404 = 需求或目标版本不存在；409 = 目标就是当前版本 / 回滚后无变化 /
+    前端页面陈旧 / 并发冲突；422 = 请求体不合法。
+    """
+    try:
+        return revert_service.revert_to_version(
+            requirement_key=requirement_key,
+            target_version=payload.target_version,
+            actor_id=settings.api_actor_id,
+            comment=payload.comment,
+            expected_current_version=payload.expected_current_version,
+        )
+    except ConcurrentModificationError as exc:
+        logger.warning(
+            "event=revert_lock_conflict requirement_key=%s target_version=%s reason=%s",
+            requirement_key,
+            payload.target_version,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该需求已被他人修改，请重新加载后再回滚",
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "event=revert_conflict requirement_key=%s target_version=%s reason=%s",
+            requirement_key,
+            payload.target_version,
+            exc,
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/api/v1/requirements/ingest", response_model=RequirementSubmitResponse)

@@ -16,6 +16,7 @@ from requirement_agent.application.channel_service import ChannelIngestService
 from requirement_agent.application.memory_service import MemoryContextBuilder, MemoryExtractor
 from requirement_agent.application.requirement_service import RequirementService
 from requirement_agent.application.retrieval_service import RetrievalService
+from requirement_agent.application.revert_service import RevertService
 from requirement_agent.application.review_service import ReviewService
 from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 requirement_service = RequirementService()
 retrieval_service = RetrievalService()
 review_service = ReviewService()
+revert_service = RevertService()
 
 # —— Repository ——
 source_repo = RequirementSourceRepository()
@@ -146,6 +148,7 @@ __all__ = [
     "requirement_analysis_task",
     "requirement_service",
     "retrieval_service",
+    "revert_service",
     "review_service",
     "risk_agent",
     "source_repo",
