@@ -443,3 +443,37 @@ input, textarea { font-family: inherit; }
 @media (max-width: 820px) {
   .rail-sessions, .rail-workbench { display: none; }
 }
+
+/* ── 预合并（E 批）：相似候选、合并预览、模式开关 ─────────────────────── */
+.merge-section .cand-lines li { border-left: 2px solid var(--border-strong); }
+.merge-section .cand-lines .btn.active {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.merge-mode-row {
+  display: flex; align-items: center; gap: 6px;
+  margin: 8px 0; font-size: 12px; color: var(--text-2); cursor: pointer;
+}
+.merge-mode-row input { accent-color: var(--accent); }
+.merge-preview {
+  margin-top: 8px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12px;
+}
+.merge-group + .merge-group { margin-top: 10px; }
+.merge-group .k { font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
+.merge-group ul { list-style: none; margin: 0; padding: 0; }
+.merge-group li {
+  padding: 3px 0; line-height: 1.5; word-break: break-word;
+  border-bottom: 1px dashed var(--border);
+}
+.merge-group li:last-child { border-bottom: 0; }
+.op-add { color: var(--success); }
+.op-mod { color: var(--warning); }
+.op-del { color: var(--danger); }
+.op-keep { color: var(--text-3); }
+.merge-warn {
+  margin-bottom: 8px; padding: 6px 9px;
+  background: var(--danger-soft); color: var(--danger);
+  border-radius: var(--radius-sm); font-size: 12px;
+}
+.merge-summary { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text-2); }

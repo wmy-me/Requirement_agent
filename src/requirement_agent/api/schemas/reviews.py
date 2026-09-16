@@ -12,6 +12,8 @@ class ReviewSubmitRequest(BaseModel):
 
     - `decision`：approved（通过并生成 REQ/版本）/ rejected（退回）/ returned（打回修改）。
     - `target_requirement_key`：通过时希望合并进的目标 REQ（为空则新建独立 REQ）。
+    - `merge_mode`：仅在合并时生效。`union`（默认）是并集——来源没提到的现有功能保留；
+      `replace` 以来源为准，未命中的现有功能会被软删（预览会先把删除清单列出来）。
     - `edited_requirement`：审核人修订后的最终需求文本（覆盖抽取结果）。
     - `feature_overrides`：按 feature_key 的逐条增删改裁决，交给 commit 节点合并。
     """
@@ -21,6 +23,7 @@ class ReviewSubmitRequest(BaseModel):
     source_id: int = Field(gt=0)
     decision: Literal["approved", "rejected", "returned"]
     target_requirement_key: str | None = Field(default=None, max_length=80)
+    merge_mode: Literal["union", "replace"] = "union"
     reviewer_name: str | None = Field(default=None, max_length=120)
     comment: str | None = Field(default=None, max_length=5_000)
     edited_requirement: str | None = Field(default=None, max_length=20_000)

@@ -126,7 +126,9 @@ class FakeFeatureRepo:
     def list_active(self, requirement_id, session=None):
         return [item for item in self.features if item["requirement_id"] == requirement_id and item["status"] == "active"]
 
-    def sync_features(self, requirement_id, features, *, source_id, requirement_key, version_no, session):
+    def sync_features(
+        self, requirement_id, features, *, source_id, requirement_key, version_no, prune=False, session
+    ):
         self.create_features(
             requirement_id,
             features,
@@ -215,10 +217,16 @@ class FakeRelationRepo:
 
     def __init__(self):
         self.calls: list[dict] = []
+        self.confirm_calls: list[dict] = []
 
     def upsert_many(self, **kwargs) -> int:
         self.calls.append(kwargs)
         return len(list(kwargs.get("relations") or []))
+
+    def confirm_many(self, **kwargs) -> list:
+        """合并时把重复关系升级为 confirmed（E 批）。"""
+        self.confirm_calls.append(kwargs)
+        return list(kwargs.get("relations") or [])
 
 
 def test_review_service_approves_and_commits_version() -> None:
@@ -363,6 +371,104 @@ def test_review_service_merges_into_existing_requirement_with_feature_overrides(
         },
         {"op": "add", "feature_key": "F-002", "content": "记录验证码校验结果"},
     ]
+
+
+def test_review_service_merge_without_overrides_keeps_target_name() -> None:
+    """合并 + 无 overrides：走 sync_features 分支，且**不得改掉目标 REQ 的名字**。
+
+    改名是有害的：把一条小来源并进大 REQ，目标 REQ 不该被改叫来源的标题。
+    """
+    session = FakeSession()
+    source_repo = FakeSourceRepo()
+    master_repo = FakeMasterRepo()
+    master_repo.master.current_version = 1
+    feature_repo = FakeFeatureRepo()
+    feature_repo.features = [
+        {
+            "id": 1,
+            "requirement_id": 1,
+            "feature_key": "F-001",
+            "content": "支持短信验证码登录",
+            "status": "active",
+            "ordinal": 1,
+            "origin_source_id": 1,
+            "origin_requirement_key": "REQ-000001",
+            "origin_version_no": 1,
+            "removed_version_no": None,
+            "provenance": [{"version_no": 1, "source_id": 1, "kind": "add"}],
+        }
+    ]
+    version_repo = FakeVersionRepo()
+    review_service = ReviewService(
+        review_repo=FakeReviewRepo(),
+        source_repo=source_repo,
+        master_repo=master_repo,
+        feature_repo=feature_repo,
+        version_repo=version_repo,
+        audit_repo=FakeAuditRepo(),
+        outbox_repo=FakeOutboxRepo(),
+        session_factory=lambda: session,
+    )
+
+    result = review_service.submit_decision(
+        source_id=1,
+        decision="approved",
+        reviewer_id="manager",
+        target_requirement_key="REQ-000001",
+    )
+
+    assert result["requirement_key"] == "REQ-000001"
+    assert result["version_no"] == 2
+    assert master_repo.master.requirement_name == "用户登录"  # 保留原名，没被来源标题覆盖
+
+
+def _merge_and_capture_prune(merge_mode: str | None) -> bool:
+    """跑一次「合并进既有 REQ」并返回传给 sync_features 的 prune 值。
+
+    每次都新建全套 fake —— 来源被审核一次后就不再是 `pending_review`，
+    复用同一份 fixture 跑第二次会被 record_review_node 拒掉。
+    """
+    session = FakeSession()
+    master_repo = FakeMasterRepo()
+    master_repo.master.current_version = 1
+    feature_repo = FakeFeatureRepo()
+    seen: dict[str, object] = {}
+    original_sync = feature_repo.sync_features
+
+    def spy(requirement_id, features, *, source_id, requirement_key, version_no, prune=False, session):
+        seen["prune"] = prune
+        return original_sync(
+            requirement_id, features, source_id=source_id,
+            requirement_key=requirement_key, version_no=version_no, prune=prune, session=session,
+        )
+
+    feature_repo.sync_features = spy  # type: ignore[method-assign]
+    review_service = ReviewService(
+        review_repo=FakeReviewRepo(),
+        source_repo=FakeSourceRepo(),
+        master_repo=master_repo,
+        feature_repo=feature_repo,
+        version_repo=FakeVersionRepo(),
+        audit_repo=FakeAuditRepo(),
+        outbox_repo=FakeOutboxRepo(),
+        session_factory=lambda: session,
+    )
+    extra = {"merge_mode": merge_mode} if merge_mode else {}
+    review_service.submit_decision(
+        source_id=1, decision="approved", reviewer_id="manager",
+        target_requirement_key="REQ-000001", **extra,
+    )
+    return bool(seen["prune"])
+
+
+def test_review_service_merge_defaults_to_union() -> None:
+    """不传 merge_mode 时合并是并集：prune=False，来源没提到的功能保留。"""
+    assert _merge_and_capture_prune(None) is False
+
+
+def test_review_service_merge_replace_mode_enables_prune() -> None:
+    """merge_mode=replace 必须一路传到 sync_features 的 prune 开关。"""
+    assert _merge_and_capture_prune("replace") is True
 
 
 def test_review_service_rolls_back_when_audit_write_fails() -> None:

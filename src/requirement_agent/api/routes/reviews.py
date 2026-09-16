@@ -43,6 +43,31 @@ async def get_review_detail(source_id: int) -> dict[str, object]:
     return detail
 
 
+@router.get("/api/v1/reviews/{source_id}/merge-preview")
+async def preview_merge_into_requirement(
+    source_id: int,
+    target_requirement_key: str = Query(min_length=1, max_length=80),
+    merge_mode: str = Query(default="union", pattern="^(union|replace)$"),
+) -> dict[str, object]:
+    """预合并预览：把这条来源并进目标 REQ 会新增/修改/删除哪些功能。
+
+    用 GET 是因为它**纯读、无副作用**（与同组的 `/detail` 一致）。返回的 add/modify/delete
+    与真正提交后发生的完全一致 —— 预览与落库共用同一个 diff 内核。
+
+    错误映射：来源不存在 / 目标 REQ 不存在 → 404；来源不在待审 → 409。
+    """
+    try:
+        return review_service.preview_merge(
+            source_id=source_id,
+            target_requirement_key=target_requirement_key,
+            merge_mode=merge_mode,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @submit_router.post("/api/v1/reviews/submit")
 async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, object]:
     """提交评审结论：记录决策并生成/更新需求与特性；冲突时返回 409。"""
@@ -56,6 +81,7 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
             comment=payload.comment,
             edited_requirement=payload.edited_requirement,
             feature_overrides=payload.feature_overrides,
+            merge_mode=payload.merge_mode,
         )
     except ValueError as exc:
         # 409 的两个常见签名：「source_id=X not found」多为前端拿着已失效的 id（列表陈旧）；

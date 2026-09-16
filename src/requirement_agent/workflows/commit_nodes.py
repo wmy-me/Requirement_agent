@@ -176,6 +176,79 @@ def _module_lines(source: Any) -> list[dict[str, object]]:
     return lines
 
 
+def _merge_confirmations(
+    analysis: dict[str, Any],
+    *,
+    master_repo: Any,
+    session: Any,
+    merge_key: str,
+) -> list[dict[str, object]]:
+    """合并发生时，把「目标 REQ 与其它的重复候选」的 `duplicates_of` 边确认下来。
+
+    **只有「合并目标本身就是分析认定的那个重复对象」时才确认任何东西。** 人工合并
+    不一定是因为重复（也可能只是想并入），那种情况下替人确认重复关系是不对的。
+
+    为什么不去确认「来源 ⤳ 目标 REQ」那条边：`requirement_relation` 的两端都是
+    `NOT NULL REFERENCES requirement_master(id)`（`migrations/009`），而来源此时还不是
+    正式 REQ，**表结构根本装不下这条边**。所以这里的语义是「目标 REQ 吸收来源后，
+    它与其它重复候选的关系获得了人的背书」。
+    """
+    if not analysis.get("duplicate"):
+        return []
+    threshold = thresholds_for(None)["duplicate"]
+
+    def duplicates() -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+        for candidate in analysis.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                similarity = float(candidate.get("similarity") or 0.0)
+            except (TypeError, ValueError):
+                similarity = 0.0
+            if similarity >= threshold:
+                found.append({**candidate, "similarity": similarity})
+        return found
+
+    duplicate_candidates = duplicates()
+    if not any(
+        str(item.get("requirement_key") or "").strip() == merge_key
+        for item in duplicate_candidates
+    ):
+        return []  # 合并目标不是重复候选 → 不替人确认任何关系
+
+    confirmations: list[dict[str, object]] = []
+    for candidate in duplicate_candidates:
+        target_key = str(candidate.get("requirement_key") or "").strip()
+        if not target_key or target_key == merge_key:
+            continue
+        target = master_repo.get_by_key(target_key, session=session)
+        if target is None or target.id is None:
+            continue
+        confirmations.append(
+            {
+                "target_requirement_id": target.id,
+                "target_requirement_key": target_key,
+                "relation_type": "duplicates_of",
+                "reason": candidate.get("reason"),
+                "similarity": candidate["similarity"],
+            }
+        )
+    return confirmations
+
+
+def feature_rows_for_source(source: Any, edited_requirement: str | None) -> list[Any]:
+    """来源 → 参与版本治理的功能行。**唯一入口，新建支与合并支都必须用它。**
+
+    抽取给了模块结构就按模块展开（行带 `module_key` / `module_name`），否则退回扁平候选。
+
+    合并路径曾经被强制降级成扁平候选（注释写「模块的合并管理留到 E 批」），后果是
+    「合进来的功能全都没有模块标签」。E 批的预合并预览又必须按带模块的行来分组 ——
+    两处不用同一个入口，预览与落库就会对不上。
+    """
+    return _module_lines(source) or _feature_candidates(source, edited_requirement)
+
+
 def _primary_change_type(current_version: int, feature_changes: list[dict[str, Any]]) -> str:
     """从 feature 级变更推导版本主类型，供时间线与审计展示。"""
     if current_version == 0:
@@ -214,12 +287,9 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
 
     canonical_req_title = canonical_title(source, edited_requirement)
     canonical_req_text = canonical_requirement(source, edited_requirement)
-    # 新建 REQ：抽取给了模块结构就按模块展开（feature 带上模块标签）；
-    # 否则退回扁平候选。合并进既有 REQ 时保持扁平（模块的合并管理留到 E 批）。
-    if master is None:
-        feature_candidates = _module_lines(source) or _feature_candidates(source, edited_requirement)
-    else:
-        feature_candidates = _feature_candidates(source, edited_requirement)
+    # 来源功能行：新建与合并**共用同一个入口**，否则合并路径会丢掉模块标签，
+    # 而预览是带模块算的 —— 两边对不上。
+    feature_candidates = feature_rows_for_source(source, edited_requirement)
 
     if master is None:
         master = RequirementMaster(
@@ -262,13 +332,16 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
                 session=session,
             )
         else:
-            # 无 overrides 时按当前来源与现有 active features 做保守同步。
+            # 无 overrides 时按当前来源与现有 active features 同步。
+            # `prune` 只由人工在「合并并选择以来源为准」时开启：默认是并集，
+            # 来源没提到的现有功能一律保留。回滚（G 批）会显式传 True。
             feature_changes = feature_repo.sync_features(
                 int(master.id),
                 feature_candidates,
                 source_id=source.id,
                 requirement_key=master.requirement_key,
                 version_no=next_version,
+                prune=str(ctx.get("merge_mode") or "union") == "replace",
                 session=session,
             )
         joined = feature_repo.join_active_features(int(master.id), session=session)
@@ -291,6 +364,9 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
             "reviewer_id": reviewer_id,
             "reviewer_name": ctx.get("reviewer_name"),
             "edited_requirement": edited_requirement,
+            # 本条来源并入了哪个既有 REQ（None = 新建）。F 批画版本链要读它。
+            "target_requirement_key": target_key,
+            "merge_mode": str(ctx.get("merge_mode") or "union"),
             "source_id": source_id,
             "source_type": source.source_type,
             "source_event_id": source.source_event_id,
@@ -310,7 +386,10 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
     if saved_version.id is not None and source.id is not None:
         ctx["version_repo"].link_source(saved_version.id, source.id, session=session)
 
-    master.requirement_name = canonical_req_title[:80]
+    # 合并进既有 REQ 时**保留原标题**：把一条小来源并进大 REQ，不该把大 REQ 改名成
+    # 小来源的名字。只有人工显式改写（edited_requirement）时才跟随新标题。
+    if target_key is None or (edited_requirement or "").strip():
+        master.requirement_name = canonical_req_title[:80]
     master.final_requirement = canonical_req_text
     master.current_version = next_version
     master.status = "active"
@@ -333,6 +412,27 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
         source_id=source_id,
         session=session,
     )
+
+    # —— 合并即确认：人工把来源并进某个 REQ，本身就为「它与该 REQ 重复」背了书 ——
+    # 但 `requirement_relation` 装不下「来源 ⤳ 目标 REQ」（两端都是已存在的 REQ），
+    # 所以这里确认的是「目标 REQ 与它**其它**重复候选」的边。目标 REQ 不是重复候选时
+    # 一条都不确认 —— 人工合并不一定是因为重复。
+    if target_key:
+        confirmations = _merge_confirmations(
+            source.metadata.get("analysis") or ctx.get("analysis_snapshot") or {},
+            master_repo=ctx["master_repo"],
+            session=session,
+            merge_key=str(master.requirement_key),
+        )
+        if confirmations:
+            ctx["relation_repo"].confirm_many(
+                subject_requirement_id=int(master.id or 0),
+                subject_requirement_key=str(master.requirement_key),
+                relations=confirmations,
+                source_id=source_id,
+                decided_by=reviewer_id,
+                session=session,
+            )
 
     trace_metadata = {
         **source.metadata,

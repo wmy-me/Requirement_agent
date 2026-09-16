@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from requirement_agent.common.snowflake import new_id
+from requirement_agent.domain.feature_diff import PlannedRow, normalize_feature_rows, plan_sync
 from requirement_agent.domain.requirement import RequirementReview
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -106,17 +107,10 @@ class RequirementFeatureRepository:
         `{"content", "module_key", "module_name"}` 的 dict（携带模块标签）。
         """
         created: list[dict[str, object]] = []
-        ordinal = 1
-        for item in features:
-            if isinstance(item, dict):
-                content = str(item.get("content") or "").strip()
-                module_key = item.get("module_key")
-                module_name = item.get("module_name")
-            else:
-                content = str(item).strip()
-                module_key = module_name = None
-            if not content:
-                continue
+        for ordinal, row in enumerate(normalize_feature_rows(features), start=1):
+            content = row.content
+            module_key = row.module_key
+            module_name = row.module_name
             feature_key = self._next_feature_key(requirement_id, ordinal=ordinal, version_no=version_no, session=session)
             provenance = [
                 {
@@ -165,29 +159,34 @@ class RequirementFeatureRepository:
     def sync_features(
         self,
         requirement_id: int,
-        features: list[str],
+        features: list[str] | list[dict[str, object]],
         *,
         source_id: int | None,
         requirement_key: str,
         version_no: int,
+        prune: bool = False,
         session: Session,
     ) -> list[dict[str, object]]:
-        """无人工 overrides 时，按“当前来源功能行 vs 现有 active features”做保守同步。
+        """无人工 overrides 时，把来源功能行同步进既有 REQ，返回本版本的变更清单。
 
-        同 ordinal 内容不变→keep；变化→modify；新行→add；现有行在新来源中被移除→delete。
-        返回本版本的 feature 变更清单，供 diff 与审计使用。
+        匹配规则全部在 `requirement_agent.domain.feature_diff.plan_sync`（纯函数、可单测），
+        这里只负责把结论落库。**不要在这里重新引入「按 ordinal 配对」的匹配** ——
+        那样的实现在中间插入/删除一行时，会把其后每一行都判成 modify 并真实覆写
+        `content` 与 `content_hash`，污染会逐轮累积。
+
+        默认 `prune=False`：来源没提到的现有功能**保留**（合并语义是并集）；`prune=True`
+        时未命中的现有行软删（回滚语义是以来源为准整体替换）。
         """
-        normalized = [item.strip() for item in features if item and item.strip()]
         existing = self.list_active(requirement_id, session=session)
-        by_ordinal = {int(item["ordinal"]): item for item in existing}
+        by_id = {int(item["id"]): item for item in existing}
+        plan = plan_sync(existing, normalize_feature_rows(features), prune=prune)
         changes: list[dict[str, object]] = []
 
-        for ordinal, content in enumerate(normalized, start=1):
-            current = by_ordinal.get(ordinal)
-            if current is None:
+        for item in plan:
+            if item.op == "add":
                 feature_key = self._next_feature_key(
                     requirement_id,
-                    ordinal=ordinal,
+                    ordinal=item.ordinal,
                     version_no=version_no,
                     session=session,
                 )
@@ -204,10 +203,12 @@ class RequirementFeatureRepository:
                         """
                         INSERT INTO requirement_feature (
                             id, requirement_id, feature_key, content, status, ordinal,
-                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash,
+                            module_key, module_name
                         ) VALUES (
                             :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
-                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash,
+                            :module_key, :module_name
                         )
                         """
                     ),
@@ -215,20 +216,63 @@ class RequirementFeatureRepository:
                         "id": new_id(),
                         "requirement_id": requirement_id,
                         "feature_key": feature_key,
-                        "content": content,
-                        "ordinal": ordinal,
+                        "content": item.content,
+                        "ordinal": item.ordinal,
                         "origin_source_id": source_id,
                         "origin_requirement_key": requirement_key,
                         "origin_version_no": version_no,
                         "provenance": json.dumps(provenance),
-                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                        "content_hash": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                        "module_key": item.module_key,
+                        "module_name": item.module_name,
                     },
                 )
-                changes.append({"op": "add", "feature_key": feature_key, "content": content})
+                changes.append({"op": "add", "feature_key": feature_key, "content": item.content})
+                continue
+
+            current = by_id.get(int(item.feature_id or 0))
+            if current is None:
+                # plan 由 existing 算出，正常不会缺；真缺了说明该行被并发改动，
+                # 跳过比照着一个不存在的 id 写更强。
                 continue
 
             provenance = list(current.get("provenance") or [])
-            if str(current.get("content") or "").strip() != content:
+            if item.op == "delete":
+                provenance.append(
+                    {
+                        "version_no": version_no,
+                        "source_id": source_id,
+                        "requirement_key": requirement_key,
+                        "kind": "delete",
+                    }
+                )
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET status = 'deleted',
+                            removed_version_no = :removed_version_no,
+                            provenance = CAST(:provenance AS JSONB),
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": current["id"],
+                        "removed_version_no": version_no,
+                        "provenance": json.dumps(provenance),
+                    },
+                )
+                changes.append(
+                    {
+                        "op": "delete",
+                        "feature_key": current["feature_key"],
+                        "content": current["content"],
+                    }
+                )
+                continue
+
+            if item.op == "modify":
                 provenance.append(
                     {
                         "version_no": version_no,
@@ -242,80 +286,84 @@ class RequirementFeatureRepository:
                         """
                         UPDATE requirement_feature
                         SET content = :content,
+                            content_hash = :content_hash,
+                            module_key = :module_key,
+                            module_name = :module_name,
                             status = 'active',
                             removed_version_no = NULL,
                             provenance = CAST(:provenance AS JSONB),
-                            content_hash = :content_hash,
                             updated_at = NOW()
                         WHERE id = :id
                         """
                     ),
                     {
                         "id": current["id"],
-                        "content": content,
+                        "content": item.content,
+                        "content_hash": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                        "module_key": item.module_key,
+                        "module_name": item.module_name,
                         "provenance": json.dumps(provenance),
-                        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     },
                 )
-                changes.append(
-                    {
-                        "op": "modify",
-                        "feature_key": current["feature_key"],
-                        "before": current["content"],
-                        "after": content,
-                    }
-                )
-            else:
-                session.execute(
-                    text(
-                        """
-                        UPDATE requirement_feature
-                        SET ordinal = :ordinal,
-                            status = 'active',
-                            removed_version_no = NULL,
-                            updated_at = NOW()
-                        WHERE id = :id
-                        """
-                    ),
-                    {"id": current["id"], "ordinal": ordinal},
-                )
-
-        for leftover in existing:
-            if int(leftover["ordinal"]) <= len(normalized):
-                continue
-            provenance = list(leftover.get("provenance") or [])
-            provenance.append(
-                {
-                    "version_no": version_no,
-                    "source_id": source_id,
-                    "requirement_key": requirement_key,
-                    "kind": "delete",
+                change: dict[str, object] = {
+                    "op": "modify",
+                    "feature_key": current["feature_key"],
+                    "before": item.before,
+                    "after": item.content,
                 }
-            )
+                if item.module_before is not None:
+                    # 模块标签跟着变了：附在 modify 记录上，**不新增 op 值**，
+                    # 免得 `_primary_change_type` 与前端 diff 渲染要认得新枚举。
+                    change["module_before"] = item.module_before[0]
+                    change["module_after"] = item.module_key
+                changes.append(change)
+                continue
+
+            # keep：内容没变。仍要写回模块标签（可能是从「无模块」补上的）与序号。
             session.execute(
                 text(
                     """
                     UPDATE requirement_feature
-                    SET status = 'deleted',
-                        removed_version_no = :removed_version_no,
-                        provenance = CAST(:provenance AS JSONB),
+                    SET ordinal = :ordinal,
+                        module_key = :module_key,
+                        module_name = :module_name,
+                        status = 'active',
+                        removed_version_no = NULL,
                         updated_at = NOW()
                     WHERE id = :id
                     """
                 ),
                 {
-                    "id": leftover["id"],
-                    "removed_version_no": version_no,
-                    "provenance": json.dumps(provenance),
+                    "id": current["id"],
+                    "ordinal": item.ordinal,
+                    "module_key": item.module_key,
+                    "module_name": item.module_name,
                 },
             )
-            changes.append(
-                {
-                    "op": "delete",
-                    "feature_key": leftover["feature_key"],
-                    "content": leftover["content"],
-                }
-            )
+
+        return changes
+
+    def preview_sync(
+        self,
+        requirement_id: int,
+        features: list[str] | list[dict[str, object]],
+        *,
+        prune: bool = False,
+        session: Session | None = None,
+    ) -> list[PlannedRow]:
+        """只读预演：与 `sync_features` 同一内核、同一份现有行，**不写库**。
+
+        这是「预览不撒谎」的实现基础 —— 预览与落库走的是同一个 `plan_sync`，
+        区别只在于一个把结论写下去、一个只返回。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            existing = self.list_active(requirement_id, session=session)
+        finally:
+            if owns_session:
+                session.close()
+        return plan_sync(existing, normalize_feature_rows(features), prune=prune)
 
         return changes
 
@@ -374,10 +422,12 @@ class RequirementFeatureRepository:
                         """
                         INSERT INTO requirement_feature (
                             id, requirement_id, feature_key, content, status, ordinal,
-                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash
+                            origin_source_id, origin_requirement_key, origin_version_no, provenance, content_hash,
+                            module_key, module_name
                         ) VALUES (
                             :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
-                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash
+                            :origin_source_id, :origin_requirement_key, :origin_version_no, CAST(:provenance AS JSONB), :content_hash,
+                            :module_key, :module_name
                         )
                         """
                     ),
@@ -392,6 +442,9 @@ class RequirementFeatureRepository:
                         "origin_version_no": version_no,
                         "provenance": json.dumps(provenance),
                         "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                        # 人工新增的行也可以指定模块（与 create_features 同口径）
+                        "module_key": str(raw.get("module_key") or "").strip() or None,
+                        "module_name": str(raw.get("module_name") or "").strip() or None,
                     },
                 )
                 changes.append({"op": "add", "feature_key": next_key, "content": content})

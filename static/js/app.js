@@ -892,6 +892,120 @@ async function loadPendingReviews() {
 }
 function refreshPending() { loadPendingReviews(); }
 
+// 严格模式下的重复阈值（百分比），仅用于给相似度**标注口径**，不参与任何判定。
+// 判定在后端（src/requirement_agent/agents/analyze_agent.py 的 ANALYSIS_MODE_THRESHOLDS）。
+// 前端拿不到后端阈值，所以这里写死；改动后端阈值时要同步这里，否则标注会撒谎。
+const STRICT_DUPLICATE_THRESHOLD_PCT = 80;
+
+function currentMergeMode(box) {
+  const el = box.querySelector('.merge-mode');
+  return el && el.checked ? 'replace' : 'union';
+}
+
+function renderMergePreview(data) {
+  const s = data.summary || {};
+  const groups = (data.groups || []).map((g) => {
+    const items = [];
+    (g.added || []).forEach((x) => items.push(`<li class="op-add">＋ 新增：${esc(x.content)}</li>`));
+    (g.modified || []).forEach((x) => items.push(
+      `<li class="op-mod">～ 修改：${esc(x.before || '')} → ${esc(x.after || '')}</li>`
+    ));
+    (g.deleted || []).forEach((x) => items.push(`<li class="op-del">－ 删除：${esc(x.content)}</li>`));
+    if (g.kept) items.push(`<li class="op-keep">＝ 保留 ${g.kept} 条</li>`);
+    if (!items.length) return '';
+    return `<div class="merge-group"><div class="k">📦 ${esc(g.module_name || '未分组')}</div><ul>${items.join('')}</ul></div>`;
+  }).join('');
+  const warns = (data.warnings || []).map((w) => `<div class="merge-warn">⚠️ ${esc(w)}</div>`).join('');
+  return `${warns}${groups || '<div class="empty-hint">没有功能级变更</div>'}
+    <div class="merge-summary">合并后目标需求共 ${s.active_after ?? 0} 条功能
+      （新增 ${s.add ?? 0} · 修改 ${s.modify ?? 0} · 删除 ${s.delete ?? 0} · 保留 ${s.keep ?? 0}）</div>`;
+}
+
+async function loadMergePreview(box, targetKey, mode) {
+  const previewEl = box.querySelector('.merge-preview');
+  previewEl.classList.remove('hidden');
+  previewEl.innerHTML = '<div class="empty-hint">正在计算预合并结果…</div>';
+  const query = `target_requirement_key=${encodeURIComponent(targetKey)}&merge_mode=${mode}`;
+  try {
+    const data = await apiJson(`/api/v1/reviews/${box.dataset.sourceId}/merge-preview?${query}`);
+    previewEl.innerHTML = renderMergePreview(data);
+  } catch (e) {
+    previewEl.innerHTML = `<div class="empty-hint">预览失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderMergeCandidates(box, item, analysis) {
+  const candidates = (Array.isArray(analysis.candidates) ? analysis.candidates : [])
+    .filter((c) => String(c.requirement_key || '').trim());
+  if (!candidates.length) return;  // 没候选就整段不显示，避免出现一个空标题
+
+  const section = box.querySelector('.merge-section');
+  const list = box.querySelector('.cand-lines');
+  const previewEl = box.querySelector('.merge-preview');
+  const approveBtn = box.querySelector('[data-d="approved"]');
+
+  candidates.forEach((c) => {
+    const key = String(c.requirement_key).trim();
+    const li = document.createElement('li');
+    const head = document.createElement('div');
+    head.className = 't-head';
+    head.textContent = key;
+    const sub = document.createElement('div');
+    sub.className = 't-sub';
+    sub.textContent = typeof c.similarity === 'number'
+      ? `相似度 ${Math.round(c.similarity * 100)}%（严格模式重复阈值 ${STRICT_DUPLICATE_THRESHOLD_PCT}%）`
+      : '相似度未知';
+    li.appendChild(head);
+    li.appendChild(sub);
+    if (c.reason) {
+      const pre = document.createElement('pre');
+      pre.textContent = c.reason;
+      li.appendChild(pre);
+    }
+    const row = document.createElement('div');
+    row.className = 'doc-actions';
+    const btn = document.createElement('button');
+    btn.className = 'btn ghost';
+    btn.type = 'button';
+    btn.dataset.merge = key;
+    btn.textContent = '合并进这个 REQ';
+    row.appendChild(btn);
+    li.appendChild(row);
+    list.appendChild(li);
+  });
+
+  const modeRow = document.createElement('label');
+  modeRow.className = 'merge-mode-row';
+  modeRow.innerHTML = '<input type="checkbox" class="merge-mode"> 以来源为准（删除目标需求中来源没提到的功能）';
+  section.insertBefore(modeRow, previewEl);
+  section.classList.remove('hidden');
+
+  list.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-merge]');
+    if (!btn) return;
+    const key = btn.dataset.merge;
+    if (box.dataset.mergeTarget === key) {
+      // 再点一次 = 取消合并，回到「新建需求」
+      delete box.dataset.mergeTarget;
+      box.querySelectorAll('[data-merge]').forEach((b) => b.classList.remove('active'));
+      previewEl.classList.add('hidden');
+      approveBtn.textContent = '✓ 通过并生成需求';
+      return;
+    }
+    box.dataset.mergeTarget = key;
+    box.querySelectorAll('[data-merge]').forEach((b) => b.classList.toggle('active', b === btn));
+    approveBtn.textContent = `✓ 通过并合并进 ${key}`;
+    loadMergePreview(box, key, currentMergeMode(box));
+  });
+
+  const modeBox = box.querySelector('.merge-mode');
+  modeBox.addEventListener('change', () => {
+    if (box.dataset.mergeTarget) {
+      loadMergePreview(box, box.dataset.mergeTarget, currentMergeMode(box));
+    }
+  });
+}
+
 function buildPendingItem(item) {
   const meta = item.metadata || {};
   const extracted = meta.extracted || {};
@@ -902,6 +1016,7 @@ function buildPendingItem(item) {
 
   const box = document.createElement('div');
   box.className = 'wb-item';
+  box.dataset.sourceId = item.source_id;
   box.innerHTML = `
     <div class="w-title"></div>
     <div class="w-meta">
@@ -914,6 +1029,11 @@ function buildPendingItem(item) {
       <div class="w-section"><div class="k">来源原文</div><div class="orig-text"></div></div>
       <div class="w-section"><div class="k">分析结论</div><div class="verdict-row"></div></div>
       <div class="w-section"><div class="k">风险</div><div class="risk-line"></div></div>
+      <div class="w-section merge-section hidden">
+        <div class="k">相似需求候选</div>
+        <ul class="timeline cand-lines"></ul>
+        <div class="merge-preview hidden"></div>
+      </div>
       <div class="w-actions">
         <textarea class="review-note" placeholder="审核意见（可选）"></textarea>
         <button class="btn primary" data-d="approved" type="button">✓ 通过并生成需求</button>
@@ -935,8 +1055,12 @@ function buildPendingItem(item) {
   const risks = [['质量', risk.quality_risk], ['变更', risk.change_risk], ['技术影响', risk.technical_impact_risk]];
   riskLine.innerHTML = risks.map(([label, lvl]) => `<span class="lvl ${levelClass(lvl)}"><span class="bar"></span>${esc(label)}·${levelText(lvl)}</span>`).join('');
 
+  // 相似需求候选与合并入口（E 批）。必须放在折叠监听之前注册，且下面那条
+  // closest 守卫要带上 .merge-section —— 否则点预览区会顺手把整张卡折叠起来。
+  renderMergeCandidates(box, item, analysis);
+
   box.addEventListener('click', (e) => {
-    if (e.target.closest('.w-actions, .review-note, .orig-text')) return;
+    if (e.target.closest('.w-actions, .review-note, .orig-text, .merge-section')) return;
     box.classList.toggle('open');
   });
 
@@ -950,16 +1074,26 @@ function buildPendingItem(item) {
 async function decideReview(sourceId, decision, boxEl) {
   const noteEl = boxEl.querySelector('.review-note');
   const comment = (noteEl && noteEl.value.trim()) || undefined;
+  // 只有「通过」才谈得上合并；退回永远不带目标 REQ。
+  const mergeTarget = decision === 'approved' ? (boxEl.dataset.mergeTarget || null) : null;
+  const body = { source_id: sourceId, decision, reviewer_name: '需求负责人', comment };
+  if (mergeTarget) {
+    body.target_requirement_key = mergeTarget;
+    body.merge_mode = currentMergeMode(boxEl);
+  }
   const buttons = boxEl.querySelectorAll('.btn');
   buttons.forEach((b) => { b.disabled = true; });
   try {
     const res = await apiJson('/api/v1/reviews/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_id: sourceId, decision, reviewer_name: '需求负责人', comment }),
+      body: JSON.stringify(body),
     });
     let line;
-    if (decision === 'approved') {
+    if (decision === 'approved' && mergeTarget) {
+      line = `✅ 来源 #${sourceId} 已并入 ${mergeTarget}（v${res.version_no || 1}），已入库。`;
+      toast(`已并入 ${mergeTarget}`, 'ok');
+    } else if (decision === 'approved') {
       line = `✅ 来源 #${sourceId} 已通过审核 → 生成正式需求 ${res.requirement_key || ''}（v${res.version_no || 1}），已入库。`;
       toast('已通过并生成正式需求', 'ok');
     } else {

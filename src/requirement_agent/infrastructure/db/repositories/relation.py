@@ -99,6 +99,83 @@ class RequirementRelationRepository:
             if owns_session:
                 session.close()
 
+    def confirm_many(
+        self,
+        *,
+        subject_requirement_id: int,
+        subject_requirement_key: str,
+        relations: Iterable[Mapping[str, object]],
+        source_id: int | None = None,
+        decided_by: str | None = None,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        """把关系边写成 `confirmed`（人工合并时用），返回被确认的边。
+
+        与 `upsert_many` 的两处差异都是刻意的：
+
+        - **冲突时升级而不是跳过**：合并这个动作本身就是人对这条重复关系的背书，
+          已存在的 `proposed` 边要升格为 `confirmed`；
+        - **不回头改 `upsert_many`**：它的返回值语义是「实际新增条数」，调用方与假实现
+          都依赖它；而且它的 `DO NOTHING` 保证了「人已 dismissed 的边不会被后续分析
+          翻回 proposed」这条性质 —— 不能被破坏。
+
+        事务：传 session 时不 commit（审核链路里与落库同事务）；未传时自建并提交。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        confirmed: list[dict[str, object]] = []
+        try:
+            for item in relations:
+                row = session.execute(
+                    text(
+                        f"""
+                        INSERT INTO requirement_relation (
+                            id, subject_requirement_id, subject_requirement_key,
+                            target_requirement_id, target_requirement_key,
+                            relation_type, reason, similarity, source_id, status, created_by, decided_by
+                        ) VALUES (
+                            :id, :subject_id, :subject_key,
+                            :target_id, :target_key,
+                            :relation_type, :reason, :similarity, :source_id,
+                            'confirmed', 'review', :decided_by
+                        )
+                        ON CONFLICT (subject_requirement_id, target_requirement_id, relation_type)
+                        DO UPDATE SET status = 'confirmed',
+                                      decided_by = EXCLUDED.decided_by,
+                                      reason = COALESCE(EXCLUDED.reason, requirement_relation.reason),
+                                      similarity = COALESCE(
+                                          EXCLUDED.similarity, requirement_relation.similarity
+                                      ),
+                                      updated_at = NOW()
+                        RETURNING {_RELATION_COLUMNS}
+                        """
+                    ),
+                    {
+                        "id": new_id(),
+                        "subject_id": subject_requirement_id,
+                        "subject_key": subject_requirement_key,
+                        "target_id": int(item["target_requirement_id"]),
+                        "target_key": str(item["target_requirement_key"]),
+                        "relation_type": str(item["relation_type"]),
+                        "reason": item.get("reason"),
+                        "similarity": item.get("similarity"),
+                        "source_id": source_id,
+                        "decided_by": decided_by,
+                    },
+                ).mappings().first()
+                if row is not None:
+                    confirmed.append(self._normalize_row(row))
+            if owns_session:
+                session.commit()
+            return confirmed
+        except Exception:
+            if owns_session:
+                session.rollback()
+            raise
+        finally:
+            if owns_session:
+                session.close()
+
     def list_for_requirement(self, requirement_key: str) -> list[dict[str, object]]:
         """**双向**返回某条需求的关系：它指向别人的 + 别人指向它的。
 
