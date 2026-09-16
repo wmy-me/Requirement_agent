@@ -323,3 +323,59 @@ def test_unknown_title_patch_returns_404() -> None:
     assert client.patch(
         "/api/v1/requirement-titles/999999999", json={"status": "confirmed"}
     ).status_code == 404
+
+
+# ── 主线判定建议（分析侧）──────────────────────────────────────────────
+#
+# 「该新建主线还是追加到既有主线」由模型判、人工确认（方案 §11）。
+# 这里只测**解析层**：模型输出不可信，必须防呆且不编默认值。
+
+
+def test_suggestion_parses_valid_append() -> None:
+    from requirement_agent.skills.analyze_skill import _coerce_suggestion
+
+    result = _coerce_suggestion(
+        {"action": "append_to", "target_requirement_key": "REQ-000015",
+         "confidence": 0.91, "reason": "业务对象与能力都一致"}
+    )
+
+    assert result["action"] == "append_to"
+    assert result["target_requirement_key"] == "REQ-000015"
+    assert result["confidence"] == 0.91
+
+
+def test_append_without_target_degrades_to_create_new() -> None:
+    """**防呆**：`append_to` 却不给目标是无意义的（追加到哪条？）。
+
+    降级为 `create_new` 并清掉目标，而不是带着一个空的追加目标往下传。
+    """
+    from requirement_agent.skills.analyze_skill import _coerce_suggestion
+
+    result = _coerce_suggestion({"action": "append_to", "confidence": 0.9})
+
+    assert result["action"] == "create_new"
+    assert result["target_requirement_key"] is None
+
+
+def test_dirty_confidence_is_clamped_not_crashed() -> None:
+    from requirement_agent.skills.analyze_skill import _coerce_suggestion
+
+    assert _coerce_suggestion({"action": "create_new", "confidence": "高"})["confidence"] == 0.0
+    assert _coerce_suggestion({"action": "create_new", "confidence": 9})["confidence"] == 1.0
+    assert _coerce_suggestion({"action": "create_new", "confidence": -3})["confidence"] == 0.0
+
+
+def test_invalid_suggestion_returns_none_not_a_guess() -> None:
+    """**不编默认值**：报告里写一条没依据的「建议追加」比不写更糟 ——
+    审核人会当成模型判断过。给不出有效建议就返回 None。"""
+    from requirement_agent.skills.analyze_skill import _coerce_suggestion
+
+    for bad in (None, "字符串", {"action": "whatever"}, {"action": ""}, 123, []):
+        assert _coerce_suggestion(bad) is None
+
+
+def test_analysis_result_suggestion_defaults_to_none() -> None:
+    """启发式回退路径不给建议 —— 规则算不出「该不该并线」这件事。"""
+    from requirement_agent.agents.analyze_agent import AnalysisResult
+
+    assert AnalysisResult().suggestion is None

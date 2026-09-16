@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from requirement_agent.agents.extract_agent import ExtractedRequirement
@@ -58,6 +60,23 @@ class CandidateMatch(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class StreamSuggestion(BaseModel):
+    """「该新建需求主线，还是追加到既有主线」的建议。
+
+    **它只是建议。** 按职责边界（方案 §11），主线归属必须人工确认 ——
+    错误合并会污染整条版本链，错误拆分会造成重复需求。这里只给模型判断 +
+    置信度，供审核页显示，**没有任何自动通道会照着它建版本**。
+
+    ⚠️ 判定**不能只看能力是否相同**：能力相同但业务对象不同，仍是两条主线
+    （「员工数据导出」与「订单数据导出」都是「导出 Excel」，但不是同一条）。
+    """
+
+    action: Literal["create_new", "append_to"] = "create_new"
+    target_requirement_key: str | None = None
+    confidence: float = 0.0
+    reason: str = ""
+
+
 class AnalysisResult(BaseModel):
     """重复/关联/冲突分析的标准输出。
 
@@ -71,6 +90,8 @@ class AnalysisResult(BaseModel):
     independent: bool = True
     reasoning: str = ""
     candidates: list[CandidateMatch] = Field(default_factory=list)
+    # 主线归属建议；模型没给或判不准时为 None（**不编一个默认值出来**）
+    suggestion: StreamSuggestion | None = None
 
 
 class AnalyzeAgent:

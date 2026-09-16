@@ -115,6 +115,12 @@ def build_analyze_user_prompt(*, extracted_json: Any, history: Any) -> str:
         "请分析当前需求与历史需求的关系，并判断是否存在重复、关联、冲突或独立情况。\n"
         "返回 JSON，字段包括：duplicate、related、conflict、independent、reasoning、candidates。\n"
         "candidates 中每项必须有 requirement_key、title、similarity、reason。\n"
+        "- suggestion：**该新建需求主线，还是追加到已有主线**，形如\n"
+        '  {"action": "create_new" 或 "append_to", "target_requirement_key": "REQ-xxxxx" 或 null,\n'
+        '   "confidence": 0.0~1.0, "reason": "…"}\n'
+        "  ⚠️ **不能仅凭「能力相同」就判 append_to**：能力相同但业务对象不同，仍是两条主线"
+        "（「员工数据导出」与「订单数据导出」都是「导出 Excel」，但不是同一条）。\n"
+        "  判不准就把 confidence 压低，人工会看。**拿不准时宁可给 create_new + 低置信度。**\n"
         f"当前需求：{extracted_json}\n"
         f"历史需求：{history}"
     )

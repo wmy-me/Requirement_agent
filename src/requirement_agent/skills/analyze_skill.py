@@ -102,9 +102,40 @@ class AnalyzeSkill(BaseSkill):
                 independent=independent,
                 reasoning=str(payload.get("reasoning") or fallback.reasoning),
                 candidates=normalized_candidates,
+                suggestion=_coerce_suggestion(payload.get("suggestion")),
             )
             return result
         except Exception as exc:
             # 不做“半模型半规则”混用，失败时整体回退，保证结果语义稳定。
             logger.warning("event=skill_fallback skill=analyze error=%s", exc)
             return fallback
+
+
+def _coerce_suggestion(value: object) -> dict[str, object] | None:
+    """把模型给的主线判定建议归一；给不出有效建议时返回 None。
+
+    **不编默认值**：报告里写一条没依据的「建议追加」比不写更糟 —— 审核人会当成
+    模型判断过。判不准就让模型压低 confidence，或者干脆不给。
+
+    防呆：`append_to` 却不给 `target_requirement_key` 是无意义的（追加到哪条？），
+    这种情况降级为 `create_new` 并清掉目标 —— 而不是带着一个空的追加目标往下传。
+    """
+    if not isinstance(value, dict):
+        return None
+    action = str(value.get("action") or "").strip()
+    if action not in {"create_new", "append_to"}:
+        return None
+    target = str(value.get("target_requirement_key") or "").strip() or None
+    if action == "append_to" and not target:
+        action, target = "create_new", None
+    try:
+        confidence = max(0.0, min(1.0, float(value.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {
+        "action": action,
+        "target_requirement_key": target,
+        "confidence": confidence,
+        "reason": str(value.get("reason") or "").strip()[:500],
+    }
+
