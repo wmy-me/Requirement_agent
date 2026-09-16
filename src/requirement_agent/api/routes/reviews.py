@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from requirement_agent.config.settings import settings
 from requirement_agent.api.dependencies import review_service, source_repo
 from requirement_agent.api.schemas import ReviewSubmitRequest
+from requirement_agent.infrastructure.db.repositories import ConcurrentModificationError
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,20 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
             feature_overrides=payload.feature_overrides,
             merge_mode=payload.merge_mode,
         )
+    except ConcurrentModificationError as exc:
+        # 乐观锁冲突：本次审核期间有人往同一个 REQ 提交过（合并或回滚）。
+        # 整个事务已回滚，审核人看到的东西已不是最新版本 —— 必须重新加载再决定，
+        # 不能照着旧预览点第二下（那会基于陈旧的功能集产生新版本）。
+        logger.warning(
+            "event=review_lock_conflict source_id=%s target=%s reason=%s",
+            payload.source_id,
+            payload.target_requirement_key,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该需求已被他人修改，请重新加载后再审核",
+        ) from exc
     except ValueError as exc:
         # 409 的两个常见签名：「source_id=X not found」多为前端拿着已失效的 id（列表陈旧）；
         # 「source_id=X is not pending review」多为重复点击或该条已处理。

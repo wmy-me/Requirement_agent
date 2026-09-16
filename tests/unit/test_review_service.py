@@ -2,6 +2,7 @@ import pytest
 
 from requirement_agent.application.review_service import ReviewService
 from requirement_agent.domain.requirement import RequirementMaster, RequirementSource
+from requirement_agent.infrastructure.db.repositories import ConcurrentModificationError
 
 
 class FakeSession:
@@ -70,6 +71,8 @@ class FakeMasterRepo:
             status="active",
             lock_version=0,
         )
+        # 每次 save 收到的乐观锁期望值（按调用顺序），供测试断言。
+        self.expected_seen: list[int | None] = []
 
     def allocate_key(self, session=None):
         return "REQ-000002"
@@ -77,7 +80,10 @@ class FakeMasterRepo:
     def get_by_key(self, requirement_key, session=None):
         return self.master if self.master.requirement_key == requirement_key else None
 
-    def save(self, requirement, session=None):
+    def save(self, requirement, session=None, *, expected_lock_version=None):
+        # 乐观锁是 opt-in 的（见 `RequirementMasterRepository.save`）：这个假仓储不做校验，
+        # 但**必须接受该关键字参数**，否则 commit 节点传参时直接 TypeError。
+        self.expected_seen.append(expected_lock_version)
         if requirement.id is None:
             requirement.id = 1
         self.master = requirement
@@ -538,6 +544,92 @@ def test_review_service_rolls_back_when_audit_write_fails() -> None:
             source_id=1,
             decision="approved",
             reviewer_id="manager",
+        )
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    assert session.closed is True
+
+
+# ── 乐观锁：期望值的来源（G 批 · G1） ────────────────────────────────────
+
+
+def _service_with(master_repo, session, **overrides):
+    parts = {
+        "review_repo": FakeReviewRepo(),
+        "source_repo": FakeSourceRepo(),
+        "master_repo": master_repo,
+        "feature_repo": FakeFeatureRepo(),
+        "version_repo": FakeVersionRepo(),
+        "audit_repo": FakeAuditRepo(),
+        "outbox_repo": FakeOutboxRepo(),
+        "relation_repo": FakeRelationRepo(),
+        "feature_capability_repo": FakeFeatureCapabilityRepo(),
+        "title_repo": FakeTitleRepo(),
+        "session_factory": lambda: session,
+    }
+    parts.update(overrides)
+    return ReviewService(**parts)
+
+
+def test_commit_passes_the_lock_version_read_at_the_start() -> None:
+    """**钉死本批最容易写错的一行**：CAS 的期望值必须是事务开头读到的旧值。
+
+    若它在 `master.lock_version = next_version` **之后**才取，期望值就等于自己刚写的新值，
+    `WHERE lock_version = ...` 恒真、锁形同虚设 —— 而且**不会有任何别的测试变红**。
+    这里把 master 的 lock_version 设成 7、next_version 是 1，两者不同才分得清。
+    """
+    master_repo = FakeMasterRepo()
+    master_repo.master.lock_version = 7
+    session = FakeSession()
+
+    _service_with(master_repo, session).submit_decision(
+        source_id=1,
+        decision="approved",
+        reviewer_id="manager",
+        requirement_key="REQ-000001",
+    )
+
+    assert master_repo.expected_seen == [7], "期望值取成了写回后的新值，乐观锁会失效"
+
+
+def test_commit_does_not_apply_cas_when_creating_a_new_master() -> None:
+    """新建主需求不传期望值。
+
+    新建路径 `save` 会被调两次（先 INSERT 建行、再 UPDATE 写 current_version），两次都
+    不该带 CAS —— key 是本次刚分配的，不存在并发对手，硬做 CAS 只会凭空造出 409。
+    """
+    master_repo = FakeMasterRepo()
+    master_repo.master = None
+    session = FakeSession()
+
+    _service_with(master_repo, session).submit_decision(
+        source_id=1,
+        decision="approved",
+        reviewer_id="manager",
+    )
+
+    assert master_repo.expected_seen == [None, None]
+
+
+def test_review_service_rolls_back_on_lock_conflict() -> None:
+    """乐观锁冲突 → 整个事务回滚（含 feature/版本/来源状态），异常原样上抛给路由翻 409。"""
+
+    class ConflictingMasterRepo(FakeMasterRepo):
+        def save(self, requirement, session=None, *, expected_lock_version=None):
+            if expected_lock_version is not None:
+                raise ConcurrentModificationError(requirement.requirement_key, expected_lock_version)
+            return super().save(requirement, session=session)
+
+    session = FakeSession()
+    service = _service_with(ConflictingMasterRepo(), session)
+
+    with pytest.raises(ConcurrentModificationError):
+        service.submit_decision(
+            source_id=1,
+            decision="approved",
+            reviewer_id="manager",
+            requirement_key="REQ-000001",
         )
 
     assert session.commits == 0

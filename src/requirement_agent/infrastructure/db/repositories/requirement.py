@@ -436,42 +436,84 @@ class RequirementSourceRepository:
 
 
 
+class ConcurrentModificationError(RuntimeError):
+    """乐观锁冲突：该需求在本次读取之后被别人改过。
+
+    照 `ConversationBusyError`（`repositories/chat.py`）的先例 —— **约束/竞态落在数据库上时，
+    由仓储层抛具名异常，路由层翻译成 409 并留痕**，service 与仓储都不感知 HTTP。
+
+    刻意继承 `RuntimeError` 而不是 `ValueError`：`reviews` 路由已有
+    「`except ValueError` → 409（来源状态冲突）」的分支，若用 `ValueError` 会被它一并吞掉、
+    丢掉「是并发冲突而非状态冲突」这个区别。
+    """
+
+    def __init__(self, requirement_key: str, expected_lock_version: int) -> None:
+        super().__init__(
+            f"requirement {requirement_key} was modified concurrently "
+            f"(expected lock_version={expected_lock_version})"
+        )
+        self.requirement_key = requirement_key
+        self.expected_lock_version = expected_lock_version
+
+
 class RequirementMasterRepository:
     """规范化主需求的持久化边界。"""
 
-    def save(self, requirement: RequirementMaster, session: Session | None = None) -> RequirementMaster:
+    def save(
+        self,
+        requirement: RequirementMaster,
+        session: Session | None = None,
+        *,
+        expected_lock_version: int | None = None,
+    ) -> RequirementMaster:
         """写入/更新主需求（REQ 主体、当前版本、乐观锁版本）。
 
-        乐观锁：调用方在并发合并时应基于 lock_version 校验，冲突需人工重审。
+        **乐观锁是 opt-in 的**：传了 `expected_lock_version` 才做 CAS —— 调用方在本次事务
+        开头读到的 `lock_version`，写回时要求它没变过，否则抛 `ConcurrentModificationError`。
+
+        实现靠 Postgres 的 `ON CONFLICT ... DO UPDATE ... WHERE`：条件为假时**该行不更新且
+        `RETURNING` 不返回它**（官方文档明确保证），于是「`RETURNING` 空」就是冲突的判据，
+        判定与写入是同一条语句、天然原子。并发下第二个写者会被行锁阻塞，锁释放后重估
+        `WHERE`、看到的是已提交的新值 —— 仍然是冲突。
+
+        不传时行为与从前**逐字节一致**（新建主需求走 INSERT 无冲突，本就不需要 CAS）。
         """
         owns_session = session is None
         session = session or SessionLocal()
         try:
-            row = session.execute(
-                text(
-                    """
-                    INSERT INTO requirement_master (id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version)
-                    VALUES (:id, :requirement_key, :requirement_name, :final_requirement, :current_version, :status, :lock_version)
-                    ON CONFLICT (requirement_key) DO UPDATE SET
-                        requirement_name = EXCLUDED.requirement_name,
-                        final_requirement = EXCLUDED.final_requirement,
-                        current_version = EXCLUDED.current_version,
-                        status = EXCLUDED.status,
-                        lock_version = EXCLUDED.lock_version,
-                        updated_at = NOW()
-                    RETURNING id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version
-                    """
-                ),
-                {
-                    "id": new_id(),
-                    "requirement_key": requirement.requirement_key,
-                    "requirement_name": requirement.requirement_name,
-                    "final_requirement": requirement.final_requirement,
-                    "current_version": requirement.current_version,
-                    "status": requirement.status,
-                    "lock_version": requirement.lock_version,
-                },
-            ).mappings().one()
+            expected = None if expected_lock_version is None else int(expected_lock_version)
+            sql = """
+                INSERT INTO requirement_master AS rm (id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version)
+                VALUES (:id, :requirement_key, :requirement_name, :final_requirement, :current_version, :status, :lock_version)
+                ON CONFLICT (requirement_key) DO UPDATE SET
+                    requirement_name = EXCLUDED.requirement_name,
+                    final_requirement = EXCLUDED.final_requirement,
+                    current_version = EXCLUDED.current_version,
+                    status = EXCLUDED.status,
+                    lock_version = EXCLUDED.lock_version,
+                    updated_at = NOW()
+            """
+            params: dict[str, object] = {
+                "id": new_id(),
+                "requirement_key": requirement.requirement_key,
+                "requirement_name": requirement.requirement_name,
+                "final_requirement": requirement.final_requirement,
+                "current_version": requirement.current_version,
+                "status": requirement.status,
+                "lock_version": requirement.lock_version,
+            }
+            if expected is not None:
+                sql += " WHERE rm.lock_version = :expected_lock_version"
+                params["expected_lock_version"] = expected
+            sql += (
+                " RETURNING rm.id, rm.requirement_key, rm.requirement_name, rm.final_requirement,"
+                " rm.current_version, rm.status, rm.lock_version"
+            )
+            # 必须是 first() 不是 one()：CAS 失败时语句合法地返回空集，
+            # one() 会抛 NoResultFound（500），而我们要的是可翻译成 409 的具名异常。
+            row = session.execute(text(sql), params).mappings().first()
+            if row is None:
+                raise ConcurrentModificationError(requirement.requirement_key, int(expected or 0))
             if owns_session:
                 session.commit()
             requirement_id = int(row["id"])
@@ -820,6 +862,52 @@ class RequirementVersionRepository:
             "capability_snapshot": list(row["capability_snapshot"] or []),
             "constraint_snapshot": list(row["constraint_snapshot"] or []),
             "created_at": as_display_iso(row["created_at"]),
+        }
+
+    def get_by_version_no(
+        self,
+        *,
+        requirement_id: int,
+        version_no: int,
+        session: Session | None = None,
+    ) -> dict[str, object] | None:
+        """按版本号取**某一个**版本快照；不存在返回 None。
+
+        回滚要用：目标是「回到 V3 这个版本」，所以必须能按号取，而不只是取 current 或
+        最大号（`get_current` 认状态、`get_latest_by_requirement` 认最大号，都不够用）。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            row = session.execute(
+                text(
+                    """
+                    SELECT id, requirement_id, parent_version_no, version_no, version_title,
+                           change_type, requirement_snapshot, change_summary,
+                           capability_snapshot, constraint_snapshot, status
+                    FROM requirement_version
+                    WHERE requirement_id = :rid AND version_no = :vno
+                    LIMIT 1
+                    """
+                ),
+                {"rid": requirement_id, "vno": version_no},
+            ).mappings().first()
+        finally:
+            if owns_session:
+                session.close()
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "requirement_id": int(row["requirement_id"]),
+            "version_no": int(row["version_no"]),
+            "version_title": row["version_title"],
+            "change_type": row["change_type"],
+            "requirement_snapshot": row["requirement_snapshot"],
+            "change_summary": row["change_summary"],
+            "status": row["status"],
+            "capability_snapshot": list(row["capability_snapshot"] or []),
+            "constraint_snapshot": list(row["constraint_snapshot"] or []),
         }
 
     def supersede_current(

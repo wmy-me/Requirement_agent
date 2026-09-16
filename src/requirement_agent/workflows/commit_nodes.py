@@ -396,9 +396,15 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
     feature_overrides = ctx.get("feature_overrides") or []
 
     master: RequirementMaster | None = None
+    # 乐观锁的期望值：**必须是这里读到的**（本次事务开头），而不是下面写回时的值。
+    # 下面的 `master.lock_version = next_version` 会就地覆写它 —— 若在覆写之后才取，
+    # 传回去的就是自己刚写的新值，CAS 永远成立、锁形同虚设，而且**不会有任何测试变红**。
+    expected_lock_version: int | None = None
     target_key = ctx.get("requirement_key")
     if target_key:
         master = ctx["master_repo"].get_by_key(str(target_key), session=session)
+        if master is not None:
+            expected_lock_version = int(master.lock_version or 0)
 
     canonical_req_title = canonical_title(source, edited_requirement)
     canonical_req_text = canonical_requirement(source, edited_requirement)
@@ -563,7 +569,9 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
     master.current_version = next_version
     master.status = "active"
     master.lock_version = next_version
-    ctx["master_repo"].save(master, session=session)
+    # 带 CAS 写回：若本次事务开头读到的 lock_version 已被人改过（另一人刚合并进同一个 REQ），
+    # 抛 ConcurrentModificationError → 整个事务回滚（含上面所有 feature/版本写入）→ 路由 409。
+    ctx["master_repo"].save(master, session=session, expected_lock_version=expected_lock_version)
 
     # —— 需求关系边：把分析阶段算出来的 related/conflict/duplicate 候选落表 ——
     # 放在 master 落库之后：关系的两端都必须已经是存在的 REQ。

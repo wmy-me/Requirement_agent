@@ -17,6 +17,7 @@ from requirement_agent.infrastructure.db.repositories.chat import ChatRepository
 from requirement_agent.infrastructure.db.repositories.document import DocumentAssetRepository
 from requirement_agent.infrastructure.db.repositories.memory import MemoryRepository
 from requirement_agent.infrastructure.db.repositories.requirement import (
+    ConcurrentModificationError,
     RequirementMasterRepository,
     RequirementSourceRepository,
     RequirementVersionRepository,
@@ -34,6 +35,7 @@ __all__ = [
     "AuditRepository",
     "CapabilityRepository",
     "ChatRepository",
+    "ConcurrentModificationError",
     "ConstraintVocabRepository",
     "DocumentAssetRepository",
     "FeatureCapabilityRepository",
