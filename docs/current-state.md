@@ -435,6 +435,7 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 | `docs/History/需求规格.md` | 需求规格原稿 |
 | `docs/History/数据模型与实施史.md` | 数据模型的演进与实施记录 |
 | `docs/History/工程史附录.md` | 工程史附录 |
+| `docs/api-contract.md` | **前端接口契约** —— 每个端点的字段名与形状（实测核对过）。**重写前端前先看这个** |
 | `README.md` | 环境搭建、常用接口、目录结构 |
 | `docs/refactoring/archive/*` | 阶段 0/1 施工快照与决策依据（**进度信息已过时**） |
 | `migrations/README.md` | 迁移清单 + 向量维度与索引的决策 |
