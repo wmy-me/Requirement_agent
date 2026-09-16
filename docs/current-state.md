@@ -1,7 +1,8 @@
 # 项目现状（Current State）
 
-> 最后更新：2026-09-15（下午补记：端到端验收走查结果见 §五「真实数据验收」；
-> 上午修正了测试基线 73→194、补记对话状态机批次行、补文档导航、修编号重复）
+> 最后更新：2026-09-15（**§二 重写为统一的「待办任务」清单** —— 按「能不能现在动手」分四类；
+> 新增能力模型方案 `docs/方案_需求主线与能力模型.md`，其 4 个结构问题在 §二 A1 等你拍板。
+> 同日此前：E 批·合并闭环实现并实测（§五），测试基线 194 → 251）
 > 用途：接手本项目时的**第一份文档**。记录真实进度与当前未决事项。
 >
 > ⚠️ **`docs/refactoring/archive/` 下的进度表写于各阶段施工期间，已过时，勿据此排期。**
@@ -23,18 +24,22 @@
 | 5. 需求关系表 + 影响分析 | 🟡 关系表已建，影响分析的传播计算未做 | `migrations/009` + 审核通过时写入 + 双向读端点 + 详情页关系块 |
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | 🟡 可观测性与死信处理已完成，其余三项未做 | `/api/v1/ops/*` + 请求日志中间件 + 前端「运维」tab |
 | 7. 完整回归 + 生产验收 | ⬜ 未开始 | — |
-| ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D 四批已完成**且已实测验收**（见 §五），E/F/G 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`（迁移 `012`–`014`） |
+| ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D/E 五批已完成**且已实测验收**（见 §五），F/G 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`、E 批（迁移 `012`–`014`，**E 批无迁移**） |
+| 能力 / 条件模型（**独立方案**） | ⬜ 未动工，**卡在 4 个结构决策**上（见 §二 A1） | 方案见 `docs/方案_需求主线与能力模型.md` |
 
 **阶段 2 六项明细**：P1-1 Prompt 去重 ✅ ｜ P1-2 配置卫生 ✅ ｜ P1-3 `analysis_mode` 接线 ✅
 ｜ P2-1 模型参数透传 ✅ ｜ P2-2 LLM 可观测性 ✅ ｜ P2-3 向量维度决策与守卫 ✅
 
 **★ 七批明细**（方案见 `docs/方案_对话状态机与Git式版本管理.md`）：A 并发隔离 ✅ ｜ B 断点落库 ✅
-｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ⬜** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ⬜**。
-E/F/G 是「Git 式版本管理」的后半段（§3.2–3.5），**尚未动工**；E 是 F/G 的前置。
+｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ✅** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ⬜**。
+F/G 是「Git 式版本管理」的收尾（§3.3–3.5），**尚未动工**；E 是 F/G 的前置，现已就位。
 
-**测试基线**：`pytest -q` → **194 passed, 2 skipped**（32 个测试文件）。
-> 此前本文写的是「73 passed, 2 skipped」，那是阶段 2 结束时的数（阶段 2 六项 + 阶段 4/5/6
-> 与 ★ 四批的单测/集成测试陆续加入后涨到 194）。以 194 为准。
+> ⚠️ **E 批的改动尚未提交**（截至本文更新时仍在工作区）。涉及 6 个源文件、3 个 CSS/JS、
+> 5 个新增测试文件与 1 个新增领域模块 `domain/feature_diff.py`。接手前先确认这些改动还在。
+
+**测试基线**：`pytest -q` → **251 passed, 2 skipped**（36 个测试文件）。
+> 本文先后写过「73 passed」（阶段 2 结束时）与「194 passed」（★ 四批完成时）。
+> E 批新增 19 个单测 + 集成测试后升到 251。**以 251 为准。**
 
 **当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
 入口 `main.py`（薄壳 → `requirement_agent.api.app`），`src/` 顶层只剩该包。
@@ -42,31 +47,100 @@ E/F/G 是「Git 式版本管理」的后半段（§3.2–3.5），**尚未动工
 
 ---
 
-## 二、待拍板（仍未决）
+## 二、待办任务
 
-> **注意时态**：这几项原本记作「阶段 3 动工前要先定」。实际结果是**阶段 3 照常施工、这些都没定**
-> —— 飞书 Webhook 端点已经上线（见 §四）。所以它们不再是「门口的路障」，而是
-> **已经带着债务上线的、仍未处理的决定**。其中第 1 项因为端点已真实对外暴露，紧迫性反而变高了。
+> **本节是唯一的工作清单。** 分四类，按「能不能现在动手」排。详细证据在后面各节，这里只给
+> 「要做什么 + 卡在哪」。⚠️ 之前的 §二「待拍板」已并入本节 A 类。
 
-1. **鉴权是否提前到阶段 3**（现应读作：**鉴权到底什么时候做**）
-   `require_api_auth()`（`src/requirement_agent/config/settings.py:170`）**全仓零调用方**（已复核）：
-   `API_AUTH_TOKEN` 在 `.env` 与 `.env.example` 里都配了，但没有任何代码校验它。
-   HTTP 层也没有鉴权中间件（`api/app.py` 的 middleware 只加安全响应头）。
-   而那个对外暴露的 Webhook 端点**已经上线了**（§四）—— 它现在完全靠飞书自身的验签兜底。
+| 类别 | 含义 | 条数 |
+|---|---|---|
+| **A** | 🛑 **等你拍板** —— 不定就动不了 | 4 |
+| **B** | ✅ **已定计划、待实施** —— 前置已就位，可直接开工 | 6 |
+| **C** | ⏸️ **挂起** —— 你已明确说先不做 | 1 |
+| **D** | 🔧 **技术债 / 已知缺陷** —— 不阻塞，但会积累 | 11（见 §三） |
 
-2. **`/health` 重复注册 + OpenAPI tags 双层重复**
-   两个 `/health`：`api/app.py:131` 与 `api/routes/system.py:20`；
-   tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级都带 `tags=["requirements"]`，结果叠加成
-   `['requirements','requirements']`。修正会**变更 OpenAPI**，需明确授权后再动。
+---
 
-3. **根目录 `需求管理Agent.yml`（87KB，仍被 git 跟踪）去留**
-   它是一份 Dify 应用 DSL 导出（`mode: advanced-chat`，含两个模型节点）。保留 / 删除 / 移入 `docs/`？
+### 2.1 🛑 A 类：等你拍板
 
-4. ~~Docker 部署是否保留~~ —— **已决（2026-09-14）：`deploy/docker-compose.yml` 已删除，Docker 不作为部署目标。**
-   该文件的构建链本来就是断的：它引用的 `Dockerfile`（构建上下文 `..`）与 `deploy/migrate.py`
-   （`migrate` 服务的 command）**在仓库中都不存在**，README 也没有任何 docker 段落，实际无法 build。
-   若将来要容器化，需从零补 Dockerfile、迁移执行脚本与 compose 编排（含 postgres/minio 启动顺序与健康检查）。
-   原文件可从 git 历史恢复。
+**A1（最高优先）· 能力模型的 4 个结构问题**
+
+方案见 `docs/方案_需求主线与能力模型.md`。**这四条不定，能力/条件模块的 schema 写不出来**：
+
+| # | 问题 | 为什么卡住 |
+|---|---|---|
+| §9-1 | 你的设计图里没有「模块」，但对话里一直有；且现有 `feature.module_key` 是**需求内部**分组 | 决定要不要新建 module 表 |
+| §9-2 | `requirement_streams.capability_id` 是单列，但 REQ-000015 有 13 条功能、4 个模块 | 决定要不要中间表 |
+| §9-3 | `version_constraints(version_id, constraint_id)` 缺「修饰哪个能力」的维度 | 表结构错，必须改三元组 |
+| §9-4 | 主线判定靠的「业务对象」字段**不存在**（现有只有粗粒度的 `business_domain`） | 判定规则没有输入 |
+
+> 方案文档另有 4 条非阻塞歧义（§9-5 能力是否也受控 / §9-6 审核记录要不要直连版本 /
+> §9-7 feature 要不要加向量 / §9-8 `version_label` 与 `version_title` 分工），可一并定。
+
+**A2 · 鉴权到底什么时候做**
+
+`require_api_auth()`（`config/settings.py:170`）**全仓零调用方**：`API_AUTH_TOKEN` 在 `.env` 与
+`.env.example` 里都配了，但没有任何代码校验它；HTTP 层也没有鉴权中间件（`api/app.py` 的
+middleware 只加安全响应头）。而那个对外暴露的 Webhook 端点**已经上线了**（§四）——
+它现在完全靠飞书自身的验签兜底。
+
+> **注意时态**：这几项原本记作「阶段 3 动工前要先定」，实际是**阶段 3 照常施工、这些都没定**。
+> 它们不是「门口的路障」，而是**已经带着债务上线的、仍未处理的决定**。A2 因为端点已真实对外
+> 暴露，紧迫性反而变高了。
+
+**A3 · `/health` 重复注册 + OpenAPI tags 双层重复**
+
+两个 `/health`：`api/app.py:131` 与 `api/routes/system.py:20`（前者是**死路由**：`include_router`
+先注册了后者，Starlette 首个匹配胜出，所以它永不执行，却又覆盖了 OpenAPI schema）；
+tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级都带
+`tags=["requirements"]`，实测叠加成 `['requirements','requirements']`（影响 40 条路由）。
+**修正会变更 OpenAPI，需明确授权后再动。**
+
+**A4 · 根目录 `需求管理Agent.yml`（87KB，仍被 git 跟踪）去留**
+
+它是一份 Dify 应用 DSL 导出（`mode: advanced-chat`，含两个模型节点），与代码库零引用。
+保留 / 删除 / 移入 `docs/`？（删除可从 git 恢复，零风险。）
+
+> ~~Docker 部署是否保留~~ —— **已决（2026-09-14）：`deploy/docker-compose.yml` 已删除，Docker
+> 不作为部署目标。** 该文件的构建链本来就是断的（引用的 `Dockerfile` 与 `deploy/migrate.py`
+> 在仓库中都不存在，无法 build）。若将来要容器化需从零补。原文件可从 git 历史恢复。
+
+---
+
+### 2.2 ✅ B 类：已定计划、待实施
+
+| # | 事项 | 前置状态 | 备注 |
+|---|---|---|---|
+| B1 | ★ **F 批 · 版本链 DAG**（§3.3）`merged_from` 两列 + trace 补字段 + 前端时间轴 | ✅ **就位** | E 批已写入 `diff_payload.target_requirement_key`，F 直接读 |
+| B2 | ★ **G 批 · revert + `lock_version` 乐观锁**（§3.4/3.5） | ✅ **就位** | `plan_sync(prune=True)` 已备好，revert 直接复用。⚠️ **并发问题已因 E 开放合并入口而可达**（两人同时合并同一 REQ 是 last-write-wins） |
+| B3 | **阶段 5 · 影响分析的传播计算** | ⚠️ **有卡点** | 不是缺表：**没有 `depends` 边的生产者**。现有的边全是「相似/冲突」，无方向可传播。需先定依赖关系从哪来 |
+| B4 | **阶段 6 · 剩余三项** | 部分就位 | RBAC（等 A2）／数据保留（零实现，六张表无限增长）／**渠道输出闭环**（触发点与凭证已在位：`app_id`/`app_secret` 已注入 `FeishuClient` 却从未被读取） |
+| B5 | **阶段 7 · 完整回归 + 生产验收** | — | 建议放最后；`tests/e2e/` 仍为空 |
+| B6 | **能力模型批次 1–7** | ⚠️ **等 A1** | 见 `docs/方案_需求主线与能力模型.md` §7。**前 4 批全程不碰现有写入路径，可随时停** |
+
+---
+
+### 2.3 ⏸️ C 类：挂起
+
+**C1 · 飞书渠道接入** —— 你 2026-09-15 明确「**先保留方案，等其他功能流程完善了再做**」。
+
+代码侧钩子已就位（见 §四），用户侧需提供的东西（飞书自建应用 App ID/Secret、
+`im:message:send_as_bot` 权限、测试用 `open_id`；完整闭环还需公网 HTTPS 地址与事件订阅）
+已调研清楚。**关键区分**：出站（系统→飞书 API）不需要公网可达，入站（飞书→webhook）必须要。
+
+---
+
+### 2.4 🔧 D 类：技术债 / 已知缺陷
+
+全部 11 条已核实，见 **§三** 的表格。其中几条会在后续批次里被顺带解决：
+
+| 遗留 | 会被谁顺带解决 |
+|---|---|
+| #1 飞书未联调 / #1b `source_type` 枚举未放宽 | C1（挂起中） |
+| #8 `/api/v1/ops/*` 无鉴权 | A2 定了之后 |
+| #9 相似度阈值粗校准 | 与 B3（影响分析）、B6（能力抽取）都有耦合 |
+| #2 E2E 测试为空 | B5 |
+| #6 雪花 ID 精度风险 | 未安排，属对外契约变更，需授权 |
 
 ---
 
@@ -116,12 +190,13 @@ E/F/G 是「Git 式版本管理」的后半段（§3.2–3.5），**尚未动工
 
 ## 五、对话状态机 / 并发隔离 / 版本管理 —— 能力与验证
 
-> 实施方案见 `docs/方案_对话状态机与Git式版本管理.md`。四批（A/B/C/D）已实现，
-> 对应迁移 `012`/`013`/`014`。下个接手的人想知道「这些能力还能不能用」，照这个清单验。
+> 实施方案见 `docs/方案_对话状态机与Git式版本管理.md`。五批（A–E）已实现，
+> 对应迁移 `012`/`013`/`014`（**E 批无迁移**）。下个接手的人想知道「这些能力还能不能用」，
+> 照这个清单验。
 >
-> **⚠️ 该方案只做了前半段。** §3「Git 式版本管理」共五节，只落地了 §3.1（模块化 = D 批）；
-> **§3.2 合并闭环（E）、§3.3 版本链 DAG（F）、§3.4 revert / §3.5 `lock_version` 乐观锁（G）
-> 均未动工**。所以现在「版本」只有单向的 feature 模块标签，**没有合并、没有版本链可视化、不能回滚**。
+> **⚠️ 该方案还差收尾三节。** §3「Git 式版本管理」共五节，已落地 §3.1（模块化 = D 批）
+> 与 §3.2（合并闭环 = E 批）；**§3.3 版本链 DAG（F）、§3.4 revert / §3.5 `lock_version`
+> 乐观锁（G）未动工**。所以现在**能合并、能按模块管功能，但版本链还画不出来、也不能回滚**。
 > 详见下方「未实现的批次」。
 
 ### 真实数据验收（2026-09-15 走查）—— A/B/C/D 全部通过
@@ -173,11 +248,12 @@ source `225548081754537984`、2 个会话与若干 run。**这是本库唯一一
 | **B** | 每个 LLM 阶段完成即把产物落进 `agent_run.checkpoint`，断开不白算 | 迁移 `013` 的 `stage`/`checkpoint` 列 |
 | **C** | 「继续上次分析」从断点续跑，不重算已完成步骤 | `POST /runs/{id}/resume`、`pause`、`GET /chat/{sid}/resumable` |
 | **D** | 抽取按模块分组，feature 带 `module_key`/`module_name` | 迁移 `014` + 抽取提示词 + `_module_lines` |
+| **E** | 审核时可把来源**并入既有 REQ**：先看预合并预览，再决定；重复关系随之确认 | `domain/feature_diff.py` + `GET /reviews/{id}/merge-preview` + `sync_features` 重写 |
 
 ### 自动验证（已写进测试，一条命令）
 
 ```
-pytest -q   → 194 passed
+pytest -q   → 251 passed
 ```
 
 | 测试文件 | 验证的能力 | 关键断言 |
@@ -186,6 +262,11 @@ pytest -q   → 194 passed
 | `test_run_checkpoint.py` | B | 断点逐阶段累积、部分更新不清旧断点、done |
 | `test_run_resume.py` | C | **哨兵断言四步 agent 一个不被调用**（续跑不重算）、端点校验 404/409 |
 | `test_feature_module.py` | D | `create_features` 落 module 列后直接查库确认 |
+| `test_feature_diff.py` | E | **中间插入一行只产出 1 条 add、其余全 keep**（旧缺陷的直接回归）；模块改名不退化；有模块 + 新行无模块 → 保留模块 |
+| `test_feature_sync.py` | E | 打在**真实实现**上：插入后其它行的 `content`/`content_hash`/`provenance` 逐字未变；模块列真的落库；**预览与落库逐条一致**且预览不写库 |
+| `test_merge_preview.py` | E | 端点的分组/summary；**预览前后功能行一行不变**；404/409/422 |
+| `test_requirement_relation.py`（增补） | E | 合并目标不在重复候选 → **一条都不确认**；related/conflict 不被误确认；自环永不产生 |
+| `test_merge_relation.py` | E | `confirm_many` 幂等、把 proposed/dismissed 升级为 confirmed；`upsert_many` 的 DO NOTHING 语义未被破坏 |
 
 ### 接口验证（curl）
 
@@ -208,6 +289,44 @@ curl -i -X POST :8888/api/v1/agent/runs/<run_id>/resume  # → SSE，且很快�
 SELECT content, module_key, module_name FROM requirement_feature;
 ```
 
+**E · 合并闭环**（2026-09-15 已实测，见下方「E 批实测结果」）
+```bash
+# 1) 预合并预览（纯读，不写任何东西）
+curl "localhost:8888/api/v1/reviews/<source_id>/merge-preview?target_requirement_key=REQ-000015&merge_mode=union"
+#    merge_mode=replace 会列出删除清单并给出 warnings
+# 2) 带目标合并提交
+curl -X POST localhost:8888/api/v1/reviews/submit -H 'Content-Type: application/json' \
+  -d '{"source_id":<source_id>,"decision":"approved","target_requirement_key":"REQ-000015","merge_mode":"union"}'
+# 3) 验库：目标 REQ 版本 +1、功能只增不减、目标**没有被改名**
+SELECT m.current_version, m.requirement_name,
+       (SELECT count(*) FROM requirement_feature f WHERE f.requirement_id=m.id AND f.status='active')
+FROM requirement_master m WHERE m.requirement_key='REQ-000015';
+```
+
+### E 批实测结果（2026-09-15，真实数据）
+
+提交一条与 `REQ-000015` 高度相似的需求（分析给出 `duplicate: true`、相似度 **1.0000**），
+走了一遍「预览 → 合并 → 验库」：
+
+| 检查点 | 结果 |
+|---|---|
+| 预览**不写库** | 调用前后目标仍是 v1 / 12 条功能 / 1 个版本 ✅ |
+| 预览结论 | `add 1 · keep 12 · delete 0`，按 4 个模块分组，`active_after 13` ✅ |
+| 合并后 | v1 → **v2**，功能 12 → **13**，`change_type=add`，`parent_version_no=1` ✅ |
+| **没有级联改写** | v2 的 `feature_changes` **只有 1 条 add、0 条 modify**；`provenance` 里带 v2 的只有新增那条 —— 旧实现在这里会产生一批 modify 并覆写内容 ✅ |
+| 模块标签穿过合并 | 新增的 `F-013` 带 `module_key=巡检任务模块` ✅ |
+| 目标**没被改名** | 仍是「门店巡检管理系统 V1.0 需求」，没被来源标题覆盖 ✅ |
+| 溯源 | `diff_payload.target_requirement_key=REQ-000015`、`merge_mode=union` ✅ |
+
+⚠️ **关系确认这条路径本次没有触发，属预期行为**：选项 A 的规则是「只有**其它**重复候选
+过了 `duplicate` 阈值（0.80）才确认」。本次候选里只有 `REQ-000015` 自己过了线（1.0），
+其余是 0.74 / 0.71 / 0.65 —— 所以一条都没确认。该路径由
+`test_requirement_relation.py` / `test_merge_relation.py` 覆盖。
+
+**浏览器待验（前端无自动化测试）**：待办卡片出现「相似需求候选」→ 点「合并进这个 REQ」→
+预览按模块列出增删改 → 勾「以来源为准」看到红色删除行与告警 → 通过 → toast 显示
+「已并入 REQ-000015」→ 需求库打开 REQ-000015 看到 v2 与新增功能行。
+
 ### 浏览器手动验证（前端无自动化测试）
 
 | 场景 | 步骤 | 预期 |
@@ -221,13 +340,15 @@ SELECT content, module_key, module_name FROM requirement_feature;
 stage/checkpoint/module），现在走查已造出带模块的 `REQ-000015` 与带断点的 run。
 **上表四条仍全部是「待验」——缺的是浏览器实操，不是数据。**
 
-### 未实现的批次（E/F/G）—— 现状与依赖
+### 未实现的批次（F/G）—— 现状与依赖
 
 | 批 | 计划内容 | 依赖 | 现在能不能做 |
 |---|---|---|---|
-| **E** | 合并闭环（§3.2）：预合并预览 + 审核页入口 + 关系状态联动。**前置**：先修 `sync_features` 的匹配键（否则级联误判） | D ✅ | ✅ 可开工，是 F/G 的前置 |
-| **F** | 版本链 DAG（§3.3）：`merged_from` 两列 + trace 补字段 + 前端时间轴 | **E** | ⬜ 等 E |
-| **G** | revert（§3.4）+ `lock_version` 乐观锁（§3.5，该列当前是死的） | **E** | ⬜ 等 E |
+| **F** | 版本链 DAG（§3.3）：`merged_from` 两列 + trace 补字段 + 前端时间轴。**E 批已把 `diff_payload.target_requirement_key` 写好了，F 直接读** | E ✅ | ✅ 可开工 |
+| **G** | revert（§3.4）+ `lock_version` 乐观锁（§3.5，该列当前是死的）。`plan_sync(prune=True)` 已就位，revert 直接复用 | E ✅ | ✅ 可开工 |
+
+> ⚠️ **G 的并发问题现已可达**：E 批开放了合并入口，两个审核人同时合并进同一个 REQ
+> 就是 last-write-wins（后者静默覆盖前者）。这一条在 E 批的拍板里被明确**留给 G 批**。
 
 ---
 
@@ -235,7 +356,8 @@ stage/checkpoint/module），现在走查已造出带模块的 `REQ-000015` 与�
 
 | 文档 | 用途 |
 |---|---|
-| `docs/current-state.md`（本文） | 真实进度与未决事项 —— **先看这个** |
+| `docs/current-state.md`（本文） | 真实进度 + **§二 统一的待办任务清单** —— **先看这个** |
+| `docs/方案_需求主线与能力模型.md` | **能力 / 条件 / 需求主线**的设计方案：现状分析、现有模型映射、迁移方案、8 条设计歧义（**§9 的 4 条卡住 schema，待拍板**） |
 | `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（A–G 全量，含未做的 E/F/G） |
 | `docs/History/需求规格.md` | 需求规格原稿 |
 | `docs/History/数据模型与实施史.md` | 数据模型的演进与实施记录 |
