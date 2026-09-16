@@ -26,8 +26,8 @@ class Settings(BaseSettings):
 
     api_auth_token: SecretStr = Field(default=SecretStr(""), alias="API_AUTH_TOKEN")
     api_actor_id: str = Field(default="api-user", alias="API_ACTOR_ID")
-    # 内部 Tool 方法（src/requirement_agent/tools）审核时使用的 reviewer_id。
-    tool_actor_id: str = Field(default="tool-client", alias="TOOL_ACTOR_ID")
+    # 注：`TOOL_ACTOR_ID`（tool_actor_id）随 `src/requirement_agent/tools/` 一并删除（2026-09-16）——
+    # 它是那批内部方法的唯一消费者。若将来重新对外暴露工具面，再按需恢复。
 
     llm_provider: str = Field(default="deepseek", alias="LLM_PROVIDER")
     openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")

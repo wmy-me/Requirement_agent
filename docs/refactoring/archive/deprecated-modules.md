@@ -7,6 +7,7 @@
 | 项 | 位置 | 状态 | 说明 |
 |---|---|---|---|
 | MCP 工具层 | ~~`apps/mcp/`、`src/interfaces/mcp/`~~ | ✅ **已删除** | 按用户指示转为内部方法 `src/requirement_agent/tools/`（7 方法，逐字保留）；MCP 代码 + docker-compose `mcp` 服务 + 协议配置 + pyproject `mcp` 依赖均已移除；可从 git 历史恢复 |
+| 内部 Tool 方法集 | ~~`src/requirement_agent/tools/`~~ | ✅ **已删除**（2026-09-16） | 上一条的产物，`df44749` 逐字保留下来后**从未接线**：实测包外零引用、启动不加载、无测试覆盖。删除经用户确认（本轮即「单独确认」）。恢复见文末 §已删除 |
 | 顶层兼容包 | `requirement_agent/`（根，转发到 `src.requirement_agent`） | 兼容保留 | 提供 `requirement_agent.*` 目标导入路径；迁移完成后可评估回收 |
 | `apps/api/` | 冗余入口壳（`from main import app`） | 兼容保留 | 与根 `main.py` 等价；是否合并待人工确认 |
 
@@ -44,3 +45,32 @@
 |---|---|
 | `src/interfaces/api/`（routes/schemas）、`src/interfaces/http/auth.py` | 早前「死代码清理」已删除并提交（`5c5386f`）；当前无残留引用 |
 | **`src/interfaces/` 整个包** | 阶段1 收尾（commit `180578b`）已删除：全部路由/依赖/Schema/聚合器迁至 `src/requirement_agent/api/`；可由 git 历史恢复 |
+| **`src/requirement_agent/tools/` 整个包**（2026-09-16） | 见下方盘点。恢复命令：`git checkout <删除前的 commit> -- src/requirement_agent/tools/`；最早的 MCP 形态见 `git show df44749^:src/interfaces/mcp/tools.py` |
+
+### 已删除：`src/requirement_agent/tools/` 盘点（2026-09-16）
+
+**为什么删**：它不是「有几个文件没用」，而是**整个包都是孤儿**。
+
+| 检查 | 结果 |
+|---|---|
+| 包外引用它的代码（`src/` `tests/` `scripts/` `main.py`） | **0** |
+| 启动 API 后加载的 tools 模块（`sys.modules`） | **0**（只有无关的 `pydantic.v1.tools`） |
+| 测试覆盖 | 0 |
+
+**为什么它「不像工具」**：定义机制随 MCP 一起删了。原形态（`src/interfaces/mcp/tools.py`）里
+`@mcp.tool()` 负责注册名字 + 由类型注解生成 JSON schema，`mcp = FastMCP(...)` 是注册表，
+`StaticTokenVerifier` 管鉴权。`df44749` 删 MCP 时这三样全删、函数体逐字留下 ——
+于是只剩「一个叫 tools 的包里装着几个普通函数」。`compatibility-plan.md` 当时已写明
+**「无核心模块依赖 MCP（主 app 从未引用）」**，即它从诞生起就没有调用方。
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `__init__.py` | 36 | 聚合导出，无消费者 |
+| `_deps.py` | 33 | 单例装配（与 `api/dependencies.py` **重复的一套**），包外 0 引用 |
+| `health.py` | 11 | `health_check()` 返回硬编码 `{"status":"ok"}`；真实健康检查在 `api/routes/health.py` |
+| `requirements.py` | 123 | 6 个转发函数；其中 `ingest_channel_event` 未进任何 `__all__`，包命名空间导不出来 |
+| `reviews.py` | 30 | `submit_review_decision` 与 `api/routes/reviews.py` 的同名 handler 是不同对象 |
+
+**连带清理**：`settings.tool_actor_id`（`TOOL_ACTOR_ID`）唯一消费者是 `tools/reviews.py`，
+一并删除；`.env.example` 对应行同步移除。<u>若将来重新对外暴露 MCP 工具面，不要照搬
+`_deps.py` 的第二套单例，应复用 `api/dependencies.py`。</u>

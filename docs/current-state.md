@@ -158,7 +158,14 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | 10 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
 
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
-> `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`。
+> `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`、
+> **`src/requirement_agent/tools/` 整个包（2026-09-16 删除）**。
+>
+> 最后一条值得记一句：它是 MCP 移除时「逐字保留」下来的 7 个工具方法，此后**从未接线**——
+> 包外零引用、启动不加载、零测试。`TOOL_ACTOR_ID` 也随之作废并已删除。
+> **§四 原写的「内部入口 `tools.ingest_channel_event()`」是错的**：那个名字不在任何 `__all__` 里，
+> 根本 import 不到；已在 §四 指向真实的 `ChannelIngestService.ingest()`。盘点见
+> `docs/refactoring/archive/deprecated-modules.md`。
 
 ---
 
@@ -175,7 +182,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | 接入服务 | `application/channel_service.py`（幂等预查 → 落库 → 入队） |
 | 异步消费 | `infrastructure/worker/tasks.py::RequirementAnalysisTask` |
 | 端点 | `api/routes/channels.py` → `POST /api/v1/channels/feishu/webhook` |
-| 内部入口 | `tools.ingest_channel_event()`（不必等 Webhook 即可调用） |
+| 内部入口 | `application/channel_service.py::ChannelIngestService.ingest()`（不必等 Webhook 即可调用）；单例装配点在 `api/dependencies.py` |
 
 **⚠️ 该端点是全项目唯一对外暴露且不经 HTTP 鉴权的路径**，安全性完全依赖飞书自身的
 签名校验与 Verification Token（`FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`，
