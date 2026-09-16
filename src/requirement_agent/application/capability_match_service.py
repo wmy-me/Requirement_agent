@@ -51,6 +51,7 @@ class CapabilityMatchService:
         extracted: Any,
         *,
         source_id: int | None = None,
+        persist: bool = True,
         session: Any = None,
     ) -> dict[str, object]:
         """比对一条抽取结果，返回匹配与提案清单。**不抛异常**。
@@ -61,6 +62,11 @@ class CapabilityMatchService:
         `source_id` 会记在新提案的 `origin_source_id` 上：既让审核页能显示
         「这条能力是哪个需求提的」，也让来源删除时提案跟着级联清掉。
         **务必传**，否则测试清理会漏掉提案（实测踩过一次）。
+
+        `persist=False` 时**一行都不写**（连提案也不建），只回报「会提议什么」。
+        回填工具（`scripts/backfill_capabilities.py`）的预演靠它 ——
+        预演必须真的只读，否则「--dry-run」就是骗人的：实测第一次跑就悄悄建了
+        11 条提案，而得等到落库时才会有人发现。
 
         返回结构（可直接塞进 `requirement_source.metadata`）：
 
@@ -103,7 +109,8 @@ class CapabilityMatchService:
             try:
                 capability_hits.append(
                     self._match_capability(
-                        candidate, action, object_, source_id=source_id, session=session
+                        candidate, action, object_, source_id=source_id,
+                        persist=persist, session=session,
                     )
                 )
             except Exception:
@@ -149,6 +156,7 @@ class CapabilityMatchService:
         object_: str,
         *,
         source_id: int | None,
+        persist: bool,
         session: Any,
     ) -> dict[str, object]:
         """命中 active 词表就直接引用；否则**只写 pending_confirmation 提案**。"""
@@ -163,6 +171,17 @@ class CapabilityMatchService:
                 "display_name": existing["display_name"],
             }
 
+        if not persist:
+            # 预演：如实回报「会提议这条」，但不建行
+            return {
+                "raw_text": _text(candidate.get("raw_text")),
+                "action": action,
+                "object": object_,
+                "matched": False,
+                "proposed": True,
+                "capability_id": None,
+                "status": PENDING_CONFIRMATION,
+            }
         proposal = self.capability_repo.create(
             action=action,
             object_=object_,

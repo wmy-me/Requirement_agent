@@ -76,6 +76,35 @@ def build_extract_user_prompt(
     )
 
 
+def build_capability_backfill_prompt(*, feature_texts: list[str]) -> str:
+    """构造「只抽能力」的 prompt（存量回填用）。
+
+    与 `build_extract_user_prompt` 的区别：那条要产出标题/摘要/模块等全套字段，
+    而存量回填只缺能力这一样 —— 重跑全套既贵，又可能覆盖既有的人工编辑结果。
+
+    传给模型的编号是**功能在列表中的序号**（1-based），回填时靠它把能力对回 feature，
+    比靠文本匹配可靠：功能正文里可能有重复行。
+    """
+    numbered = "\n".join(f"{index}. {text}" for index, text in enumerate(feature_texts, start=1))
+    return (
+        "下面是一个需求的若干功能条目。请为**每一条**抽取它对应的能力。\n"
+        "请输出 JSON，形如：\n"
+        '{"capabilities": [{"index": 1, "action": "导出", "object": "Excel",\n'
+        '                   "constraints": ["按部门筛选"]}]}\n'
+        "字段说明：\n"
+        "- index：对应下面列表里的序号（必须原样带上，不能缺）\n"
+        "- action：动词（导出/统计/创建/删除/推送/审批…）\n"
+        "- object：宾语\n"
+        "- constraints：对**范围/维度/批量**的限定，即「按什么筛」或「批量」，"
+        "例如「按部门筛选」「按门店」「按时间维度」「按周期」。\n"
+        "  ⚠️ 下列**都不是** constraints：状态或等级的枚举值（待执行/一般/严重）、"
+        "角色（巡检员/管理员）、动作本身（拍照上传/填写描述）、字段名或展示位置。\n"
+        "  没有限定就给 []，**宁可空着也不要凑数**。\n"
+        "**一条功能一个元素**，不要漏。\n"
+        f"功能条目：\n{numbered}"
+    )
+
+
 def build_analyze_user_prompt(*, extracted_json: Any, history: Any) -> str:
     """构造冲突/重复分析任务的 user prompt。
 
@@ -106,6 +135,7 @@ __all__ = [
     "ANALYZE_SYSTEM_PROMPT",
     "RISK_SYSTEM_PROMPT",
     "build_extract_user_prompt",
+    "build_capability_backfill_prompt",
     "build_analyze_user_prompt",
     "build_risk_user_prompt",
 ]
