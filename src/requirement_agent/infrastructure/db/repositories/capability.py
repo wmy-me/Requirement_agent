@@ -18,7 +18,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -224,13 +224,14 @@ class CapabilityRepository:
     @staticmethod
     def _normalize(row) -> dict[str, object]:
         return {
-            "id": int(row["id"]),
+            # 雪花 ID 字符串化：`id` 会进 `/capabilities/{id}/streams` 与 PATCH 的 URL。
+            "id": to_sid(row["id"]),
             "action": row["action"],
             "object": row["object"],
             "display_name": row["display_name"],
             "status": row["status"],
             "created_by": row["created_by"],
-            "origin_source_id": row.get("origin_source_id"),
+            "origin_source_id": to_sid(row.get("origin_source_id")),
             "created_at": as_display_iso(row["created_at"]),
             "updated_at": as_display_iso(row["updated_at"]),
         }
@@ -464,9 +465,11 @@ class ConstraintVocabRepository:
             if owns_session:
                 session.commit()
             return {
-                "id": int(row["id"]),
+                # 雪花 ID 字符串化，与同仓储的 `create` / `find_exact` 保持一致 ——
+                # 同一仓储的两个方法返回同一个字段的不同类型，调用方一定会踩。
+                "id": to_sid(row["id"]),
                 "alias": row["alias"],
-                "constraint_id": int(row["constraint_id"]),
+                "constraint_id": to_sid(row["constraint_id"]),
                 "created_by": row["created_by"],
                 "created_at": as_display_iso(row["created_at"]),
             }
@@ -482,7 +485,7 @@ class ConstraintVocabRepository:
     def _normalize(row) -> dict[str, object]:
         aliases = row.get("aliases") if hasattr(row, "get") else None
         return {
-            "id": int(row["id"]),
+            "id": to_sid(row["id"]),
             "constraint_key": row["constraint_key"],
             "display_name": row["display_name"],
             "status": row["status"],
@@ -740,16 +743,18 @@ class FeatureCapabilityRepository:
         if not row:
             return None
         return {
-            "feature_id": int(row["feature_id"]),
-            "capability_id": int(row["capability_id"]),
+            # 这两个会作为 PATCH /feature-capabilities 的请求体参数回传，必须能安全回传。
+            "feature_id": to_sid(row["feature_id"]),
+            "capability_id": to_sid(row["capability_id"]),
             "review_status": row["review_status"],
         }
 
     @staticmethod
     def _normalize(row) -> dict[str, object]:
         return {
-            "feature_id": int(row["feature_id"]),
-            "capability_id": int(row["capability_id"]),
+            # 这两个会作为 PATCH /feature-capabilities 的请求体参数回传，必须能安全回传。
+            "feature_id": to_sid(row["feature_id"]),
+            "capability_id": to_sid(row["capability_id"]),
             "feature_key": row.get("feature_key"),
             "feature_content": row.get("feature_content"),
             "action": row["action"],

@@ -1308,9 +1308,13 @@ function renderCapabilityBlock(el, data) {
       await apiJson('/api/v1/feature-capabilities', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        // ⚠️ **不要把这两个 id `Number()` 回去。** 它们是雪花 ID（远超 JS 的
+        // `Number.MAX_SAFE_INTEGER`），后端特意序列化成字符串；转成 number 会让它
+        // 悄悄变成另一个值，PATCH 就会打到**错误的行**上。后端的 pydantic 字段是
+        // `int`，会把数字字符串转回去，原样发送即可。
         body: JSON.stringify({
-          feature_id: Number(btn.dataset.f),
-          capability_id: Number(btn.dataset.c),
+          feature_id: btn.dataset.f,
+          capability_id: btn.dataset.c,
           status: btn.dataset.capAct,
         }),
       });

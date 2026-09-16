@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -230,13 +230,16 @@ class RequirementRelationRepository:
     @staticmethod
     def _normalize_row(row: Mapping[str, Any]) -> dict[str, object]:
         normalized: dict[str, object] = {
-            "id": int(row["id"]),
+            # 雪花 ID 字符串化：`id` 会被前端拼进 PATCH 的 URL；`source_id` 与审核端点的
+            # 同名字段保持一致 —— **同一个字段名必须是同一个类型**，此前一边 string
+            # 一边 number 正是 §1.1 那类混淆的源头。
+            "id": to_sid(row["id"]),
             "subject_requirement_key": row["subject_requirement_key"],
             "target_requirement_key": row["target_requirement_key"],
             "relation_type": row["relation_type"],
             "reason": row["reason"],
             "similarity": float(row["similarity"]) if row["similarity"] is not None else None,
-            "source_id": row["source_id"],
+            "source_id": to_sid(row["source_id"]),
             "status": row["status"],
             "created_by": row["created_by"],
             "decided_by": row["decided_by"],

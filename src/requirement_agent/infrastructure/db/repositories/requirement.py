@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.domain.requirement import RequirementMaster, RequirementSource, RequirementVersion
 from requirement_agent.infrastructure.db.session import SessionLocal
@@ -329,10 +329,18 @@ class RequirementSourceRepository:
         return [
             {
                 # **必须序列化成字符串**：雪花 id 超过 JS 的 Number.MAX_SAFE_INTEGER（2^53），
-                # 前端 JSON.parse 会把它悄悄改写（实测 224103804432285696 → ...700、
-                # 225111676653928448 → ...450），回传时就成了「source_id not found」→ 审核 409。
+                # 前端 JSON.parse 会把它悄悄改写，回传时就成了「source_id not found」→ 审核 409。
                 # 字符串在 JS 里原样透传；后端 pydantic 会把数字字符串再转回 int。
-                "source_id": str(row["id"]),
+                #
+                # ⚠️ 这里原先举的例子（`224103804432285696 → ...700`）**不成立** ——
+                # 那个数末尾有 27 个 0，本来就能被 double 精确表示。真正会丢精度的是低位
+                # 不为 0 的 id（取决于同毫秒内有没有产生过第二个），实测库里就有一个：
+                # `outbox_event.id = 225548242094391297` → `int(float())` 得 `...296`。
+                # 例子举错会让人低估风险（"这些数看着都很大但没事"），所以换掉。
+                #
+                # 2026-09-16 起，这条规则从「审核端点专用」推广到**所有**雪花 ID 字段
+                # （见 `common.snowflake.to_sid` 与 `docs/api-contract.md` §1.1）。
+                "source_id": to_sid(row["id"]),
                 "source_type": row["source_type"],
                 "source_event_id": row["source_event_id"],
                 "requester_id": row["requester_id"],
@@ -340,7 +348,7 @@ class RequirementSourceRepository:
                 "original_text": row["original_text"],
                 "extracted_text": row["extracted_text"],
                 "original_payload": dict(row["original_payload"] or {}),
-                "metadata": dict(row["metadata"] or {}),
+                "metadata": _stringify_source_metadata(row["metadata"]),
                 "processing_status": row["processing_status"],
                 "submitted_at": as_display_iso(row["submitted_at"]),
                 "updated_at": as_display_iso(row["updated_at"]),
@@ -366,7 +374,9 @@ class RequirementSourceRepository:
         if row is None:
             return None
         return {
-            "source_id": int(row["id"]),
+            # 与 `list_by_status` 的 `source_id` 同类型（那里早已是 str）——
+            # 同一个字段名在两个端点必须一致，否则前端要按端点分支处理。
+            "source_id": to_sid(row["id"]),
             "source_type": row["source_type"],
             "source_event_id": row["source_event_id"],
             "requester_id": row["requester_id"],
@@ -374,7 +384,7 @@ class RequirementSourceRepository:
             "original_text": row["original_text"],
             "extracted_text": row["extracted_text"],
             "original_payload": dict(row["original_payload"] or {}),
-            "metadata": dict(row["metadata"] or {}),
+            "metadata": _stringify_source_metadata(row["metadata"]),
             "processing_status": row["processing_status"],
             "submitted_at": as_display_iso(row["submitted_at"]),
             "updated_at": as_display_iso(row["updated_at"]),
@@ -417,12 +427,12 @@ class RequirementSourceRepository:
             },
             "mappings": [
                 {
-                    "requirement_id": int(row["requirement_id"]),
+                    "requirement_id": to_sid(row["requirement_id"]),
                     "requirement_key": row["requirement_key"],
                     "requirement_name": row["requirement_name"],
                     "current_version": int(row["current_version"]),
                     "requirement_status": row["requirement_status"],
-                    "version_id": int(row["version_id"]),
+                    "version_id": to_sid(row["version_id"]),
                     "version_no": int(row["version_no"]),
                     "version_title": row["version_title"],
                     "change_type": row["change_type"],
@@ -454,6 +464,59 @@ class ConcurrentModificationError(RuntimeError):
         )
         self.requirement_key = requirement_key
         self.expected_lock_version = expected_lock_version
+
+
+def _stringify_diff_payload(payload: object) -> dict[str, object]:
+    """把 `requirement_version.diff_payload` 里的 ID 字符串化。
+
+    **为什么在读时做而不是写入时**：这是**存储型 JSON**，改写入只能影响新行，
+    老行会保持 number —— 同一个字段在新旧数据上两种类型，正是
+    `docs/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
+    什么时候写的，类型都一样」。
+    """
+    data = dict(payload) if isinstance(payload, Mapping) else {}
+    if "source_id" in data:
+        data["source_id"] = to_sid(data.get("source_id"))
+    return data
+
+
+def _stringify_source_metadata(payload: object) -> dict[str, object]:
+    """把 `requirement_source.metadata` 里分析阶段写下的 ID 字符串化。
+
+    落在 `metadata.capability_match` 里的 `capability_id` / `constraint_id` 是
+    **分析时算出来的快照**，同样是存储型 JSON —— 理由同上，读时统一。
+    形状对不上时原样返回，不猜。
+    """
+    meta = dict(payload) if isinstance(payload, Mapping) else {}
+    match = meta.get("capability_match")
+    if not isinstance(match, Mapping):
+        return meta
+    match = dict(match)
+
+    capabilities = match.get("capabilities")
+    if isinstance(capabilities, list):
+        match["capabilities"] = [
+            {**dict(item), "capability_id": to_sid(dict(item).get("capability_id"))}
+            if isinstance(item, Mapping)
+            else item
+            for item in capabilities
+        ]
+
+    constraints = match.get("constraints")
+    if isinstance(constraints, Mapping):
+        constraints = dict(constraints)
+        matched = constraints.get("matched")
+        if isinstance(matched, list):
+            constraints["matched"] = [
+                {**dict(item), "constraint_id": to_sid(dict(item).get("constraint_id"))}
+                if isinstance(item, Mapping)
+                else item
+                for item in matched
+            ]
+        match["constraints"] = constraints
+
+    meta["capability_match"] = match
+    return meta
 
 
 class RequirementMasterRepository:
@@ -998,7 +1061,7 @@ class RequirementVersionRepository:
                 change_type=str(item["change_type"]),
                 requirement_snapshot=str(item["requirement_snapshot"]),
                 change_summary=str(item["change_summary"]),
-                diff_payload=dict(item["diff_payload"] or {}),
+                diff_payload=_stringify_diff_payload(item["diff_payload"]),
                 created_by=str(item["created_by"]),
                 reviewed_by=str(item["reviewed_by"]),
             )
@@ -1051,16 +1114,17 @@ class RequirementVersionRepository:
             ).mappings().all()
         return [
             {
-                "id": int(row["id"]),
-                "requirement_id": int(row["requirement_id"]),
-                "parent_version_id": row["parent_version_id"],
+                # /trace 直接返回这些行 —— 雪花 ID 一律字符串化
+                "id": to_sid(row["id"]),
+                "requirement_id": to_sid(row["requirement_id"]),
+                "parent_version_id": to_sid(row["parent_version_id"]),
                 "parent_version_no": row["parent_version_no"],
                 "version_no": int(row["version_no"]),
                 "version_title": row["version_title"],
                 "change_type": row["change_type"],
                 "requirement_snapshot": row["requirement_snapshot"],
                 "change_summary": row["change_summary"],
-                "diff_payload": dict(row["diff_payload"] or {}),
+                "diff_payload": _stringify_diff_payload(row["diff_payload"]),
                 "feature_changes": list(row["feature_changes"] or []),
                 "created_by": row["created_by"],
                 "reviewed_by": row["reviewed_by"],
@@ -1119,7 +1183,7 @@ class RequirementVersionRepository:
                     "change_type": row["change_type"],
                     "requirement_snapshot": row["requirement_snapshot"],
                     "change_summary": row["change_summary"],
-                    "diff_payload": dict(row["diff_payload"] or {}),
+                    "diff_payload": _stringify_diff_payload(row["diff_payload"]),
                     "feature_changes": list(row["feature_changes"] or []),
                     "created_by": row["created_by"],
                     "reviewed_by": row["reviewed_by"],
@@ -1132,7 +1196,7 @@ class RequirementVersionRepository:
             metadata = dict(row["metadata"] or {})
             version["sources"].append(
                 {
-                    "source_id": int(row["source_id"]),
+                    "source_id": to_sid(row["source_id"]),
                     "source_type": row["source_type"],
                     "source_event_id": row["source_event_id"],
                     "requester_id": row["requester_id"],
@@ -1149,7 +1213,7 @@ class RequirementVersionRepository:
 
         return {
             "requirement": {
-                "id": int(master["id"]),
+                "id": to_sid(master["id"]),
                 "requirement_key": master["requirement_key"],
                 "requirement_name": master["requirement_name"],
                 "final_requirement": master["final_requirement"],

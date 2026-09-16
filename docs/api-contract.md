@@ -7,11 +7,15 @@
 > 实测中抓到过 `constraints[].alias_hit` 两个分支形状不一致（§8.1）。
 >
 > **2026-09-16 复跑抓到三处「文档写错了」**（不是代码坏了，是契约本身不准）：
-> ① §1 说「雪花 ID 一律字符串」——**只有审核端点是这样**，其余全是 JSON number（§1.1）
+> ① §1 说「雪花 ID 一律字符串」——**当时只有审核端点是这样**，其余全是 JSON number
+> （§1.1；**已于同日统一为字符串**，见 §10-T1）
 > ② 需求库列表实际 **14 个字段**，不是 10 个（§2）
 > ③ 对话 SSE 的事件名写错：**没有 `delta`/`message`**，实际是 `artifacts`/`narrative`（§6）
 >
 > ⚠️ 这三条都会让重写的前端「照文档实现却跑不通」。§10 是**还没做完的清单**。
+>
+> **2026-09-16 同日：T1 完成** —— 雪花 ID 在**所有端点**上一律字符串化（§1.1），
+> 前端任何 `Number(id)` 的写法都要去掉。
 >
 > **2026-09-16 同日：G 批（乐观锁 + 回滚）落地**，本契约相应更新 ——
 > 新增 `POST /requirements/{key}/revert`（§3）、`features?at_version` 与 `/diff` 的口径更正
@@ -28,35 +32,46 @@
 | 错误 | 404 = 不存在；409 = 状态冲突（detail 是中文说明）；422 = 参数不合法 |
 | 日期筛选的 `to` | 前端要补 `T23:59:59`，否则当天数据会被排除 |
 
-### 1.1 ⚠️ ID 类型**不是**全局统一的字符串（2026-09-16 更正）
+### 1.1 雪花 ID 一律是字符串（2026-09-16 统一）
 
-旧版这里写「雪花 ID 一律用字符串」。**这是错的** —— 字符串化只做在**审核端点**一处，
-其余端点把雪花 ID 当 **JSON number** 发出来。
+**规则就一条**：`id` / `*_id` 这类雪花生成的字段，**在任何端点上都是 JSON 字符串**。
+没有例外，不看值大不大。所以**前端永远不要对它做 `Number()`**，原样透传。
 
-| 端点 / 字段 | JSON 类型 | 能安全 `Number()`？ |
+这条规则换过三个版本，值得记下演变——因为过程本身就是教训：
+
+| 时期 | 做法 | 问题 |
 |---|---|---|
-| `/reviews/pending`、`/reviews/{id}/detail` 的 `source_id` | **string** | 本来就是字符串 |
-| `/requirements` 列表 | 无雪花 ID | — |
-| `/requirements/{key}/versions` 的 `id`/`requirement_id`/`diff_payload.source_id` | **number** | ⚠️ 见下 |
-| `/requirements/{key}/features` 的 `id`/`origin_source_id`/`provenance[].source_id` | **number** | ⚠️ |
-| `/requirements/{key}/diff` 的 `before_data.source_id` | **number** | ⚠️ |
-| `/requirements/{key}/relations` 的 `id`/`source_id` | **number** | ⚠️ |
-| `/requirements/{key}/capabilities` 的 `feature_id`/`capability_id` | **number** | ⚠️ |
-| `/capabilities` 的 `id`、`metadata.capability_match.capabilities[].capability_id` | **number** | ⚠️ |
-| `/requirements/submit` 的 `source_id` | **number** | ⚠️ |
+| 最初 | 全是 number | 前端 `JSON.parse` 悄悄改值 → 审核回传报 `not found`（409） |
+| 2026-09-15 | **只在审核端点**把 `source_id` 字符串化 | 同一个字段名在不同端点是两种类型；`relations.id` 同样进 URL 却仍是 number |
+| **2026-09-16（现在）** | **一律字符串** | —— |
 
-**为什么现在没炸**：库里的雪花 ID 目前 `worker=0 且 seq=0`，末尾 22 位以上全是 0，
-58 位的值只需要 36 位有效位，双精度（53 位尾数）装得下。**这不是设计保证，是运气。**
+**为什么必须一律。** 雪花 ID 普遍超过 JS 的 `Number.MAX_SAFE_INTEGER`（2^53）。
+能不能被 double 精确表示，取决于它末尾有没有连续 5 个以上的 0 —— 也就是
+「同毫秒内有没有产生过第二个 id」（`seq≠0`）。**那不是可以依赖的性质**：
+实测库里就已经有一个 `outbox_event.id = 225548242094391297`，`int(float())` 变成
+`...296`，**差 1**。前端拿它拼 `dead-letters/{id}/retry` 就会打到错误的一行。
 
-**什么时候会炸**：同一毫秒内产生第二个 ID（`seq≠0`）或换了 worker 号，低位就不再是 0。
-**这件事已经真实发生过一次**，记录在 `infrastructure/db/repositories/requirement.py:331`：
+> ⚠️ **`infrastructure/db/repositories/requirement.py` 的注释里那个事故例子不准**：
+> 它写的 `224103804432285696` 末尾有 27 个 0、**本来就能被 double 精确表示**，
+> 不构成证据。真正会失败的是上面那个。（注释已一并更正。）
 
-> 实测 `224103804432285696 → ...700`、`225111676653928448 → ...450`，
-> 回传时就成了「source_id not found」→ 审核 409。
+**覆盖范围**（`scripts/verify_api_contract.py` 会逐端点核对）：
 
-**所以**：`/reviews/pending` 的 `source_id` 是**故意**字符串化的（那是审核回传的路径参数）。
-其余端点**只是今天恰好安全**。`relations` 的 `id` 同样被拼进 URL 做路径参数
-（`app.js:1428`），与当年那次的失败模式**完全同源**。详见 §10-T1。
+- URL 路径参数：`relations.id`、`capabilities.id`、`documents.id`、`dead_letters[].id`、
+  `requirement-titles/{id}`、`reviews/{source_id}`
+- **请求体里的行标识**：`feature_id`、`capability_id`、`constraint_id`
+- 嵌套在存储型 JSON 里的：`diff_payload.source_id`、`provenance[].source_id`、
+  `metadata.capability_match.capabilities[].capability_id`、`constraints.matched[].constraint_id`
+
+**不转的**：`ordinal`、`version_no`、`current_version`、`lock_version`、`feature_count`、
+`similarity` —— 这些是**序号或度量，不是 ID**，值域远小于 2^53。
+
+> 存储型 JSON（`diff_payload` / `metadata`）是在**读时**转换的，不是写入时 ——
+> 改写入只能影响新行，老行会保持 number，于是同一个字段在新旧数据上两种类型。
+> 读时统一才能保证「无论哪一行、什么时候写的，类型都一样」。
+
+**代价（如实写出）**：前端若哪天想对 id 排序或算术，得自己 `BigInt`/比较字符串。
+本项目的 id 只用于「原样回传定位一行」，不参与计算，所以这个代价是零。
 
 **状态枚举**（各上下文含义不同，别混用）：
 
@@ -119,14 +134,14 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 ### `GET /api/v1/requirements/{key}/versions`
 `{"items":[{id, requirement_id, parent_version_id, parent_version_no, version_no, version_title, change_type, requirement_snapshot, change_summary, diff_payload, feature_changes, created_by, reviewed_by, created_at}]}`
 
-> `id` / `requirement_id` 是 **number**（雪花）。`diff_payload` 里也带 `source_id`（number）。
+> `id` / `requirement_id` / `diff_payload.source_id` 都是**字符串**（雪花 ID，见 §1.1）。
 
 ### `GET /api/v1/requirements/{key}/features`
 入参 `at_version`（可选）、`include_deleted`。
 `{"items":[{id, requirement_id, feature_key, content, status, ordinal, origin_source_id, origin_requirement_key, origin_version_no, removed_version_no, provenance, module_key, module_name}]}`
 
 > `module_name` 就是详情页的 📦 标签；为 `null` 表示该功能不归属任何模块。
-> `id` / `requirement_id` / `origin_source_id` / `provenance[].source_id` 都是 **number**。
+> `id` / `requirement_id` / `origin_source_id` / `provenance[].source_id` 都是**字符串**（§1.1）。
 
 ⚠️ **`at_version=N` 返回的是「N 版本时刻的成员**与**内容」**（2026-09-16 更正）。
 此前它只复原成员：`content` / `module_*` 取的是**当前值**（`modify` 是就地覆写，旧文字没另存），
@@ -161,8 +176,7 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 
 - `direction`：`outgoing`（本需求 → 对方）/ `incoming`
 - `relation_type`：`duplicates_of` / `related` / `conflict` / `depends`
-- ⚠️ **`id` 与 `source_id` 都是 number**（与审核端点的 `source_id` 是 string 不一致）。
-  `id` 会被拼进 PATCH 的 URL —— 与 §1.1 记录的精度事故同源。
+- `id` 与 `source_id` 都是**字符串**（§1.1）。`id` 会被拼进 PATCH 的 URL —— **原样传，别 `Number()`**。
 
 ### `PATCH /api/v1/requirements/relations/{relation_id}`
 Body `{"status": "confirmed" | "dismissed"}`。**不接受改回 `proposed`**（撤回需重新分析）。404 不存在。
@@ -263,7 +277,7 @@ processing_status  submitted_at  updated_at
 - `matched: true` → 命中已确认的词表
 - `matched: false` → 新提案（`status: pending_confirmation`，**不参与后续匹配**）
 - `constraints.unmatched` 里是**没入词表的条件原文**，要单独展示让人工决定
-- ⚠️ **`capability_id` 是雪花 number，不是小整数** —— 旧版文档的示例写成 `1` / `9` 是误导。
+- ⚠️ **`capability_id` 是雪花 ID，以字符串发出**（旧版文档的示例写成 `1` / `9` 是误导，见 §1.1）。
 - ⚠️ `constraints.matched` **至今没有真实数据**（`constraint_vocab` 表是空的），
   这一支的形状**只有读代码的证据**（`application/capability_match_service.py:220`）。见 §10-T4。
 
@@ -362,7 +376,7 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 - `capabilities` 来自 `feature_capability`，**只含仍生效的功能**
 - `constraints` 来自**当前版本的快照** —— 条件只存在于快照里
 - `review_status` 展示时必须标（`proposed` = 待确认）
-- ⚠️ **`feature_id` / `capability_id` 是雪花 number**（旧版示例写的 `1`/`2` 是误导）
+- ⚠️ **`feature_id` / `capability_id` 是雪花 ID 字符串**（旧版示例写的 `1`/`2` 是误导，见 §1.1）
 - ⚠️ **实测的 `constraints` 条目里没有 `alias_hit` 键**（只有 `raw`/`matched`/`constraint_key`）——
   因为快照是**修复前**产生的，`alias_hit` 是「向前生效、不回填历史」。见 §8.1。
 
@@ -373,7 +387,7 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 `{id, action, object, display_name, status, created_by, origin_source_id, created_at, updated_at}`
 
 > `origin_source_id` = 这条能力提案是哪个来源提的（批次 2 加的溯源；已确认的能力可能为 `null`）。
-> ⚠️ `id` 是**雪花 number**（实测 `225865344202309632`），不是小整数。
+> `id` 是**雪花 ID 字符串**（实测 `"225865344202309632"`），不是小整数 —— 见 §1.1。
 
 **constraints 项**：⚠️ **形状仍未实测** —— `constraint_vocab` 是**空表**（2026-09-16 复跑仍为 0 行），
 接口实返回 `{"items": []}`。按仓储代码，它比 capabilities 多一个 `aliases[]`，但**只是读代码得出的**。
@@ -463,7 +477,8 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 > 前端已按 null 处理（`app.js:1473`），重写时别漏。
 
 其余：`POST /api/v1/ops/outbox/dead-letters/{event_id}/retry` 与 `/discard`。
-⚠️ 这两个**没有鉴权**（见 `docs/current-state.md` §三 遗留 8），且 `event_id` 也是雪花 number。
+⚠️ 这两个**没有鉴权**（见 `docs/current-state.md` §三 遗留 8）。`event_id` 取自
+`dead_letters[].id`，是**字符串**（§1.1）—— 前端拼 URL 时原样用，别 `Number()`。
 
 ---
 
@@ -495,7 +510,7 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 **要用 `status === 'current'`**（回滚后二者会不一致）。
 
 **8.6 ID 类型按端点而异，别全局当字符串**（2026-09-16 新增）
-见 §1.1。只有审核端点的 `source_id` 是字符串；其余是 number 且**今天只是恰好安全**。
+**已解决**（2026-09-16）：所有雪花 ID 一律字符串，见 §1.1。
 
 **8.7 AI 提议的字段必须标出来**
 `review_status=proposed`、`status=pending_confirmation`、`analysis.suggestion`、
@@ -529,9 +544,25 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 实测下来这一步能抓到「字段名对不上」「同一数组两种形状」「文档写错了事件名」这类问题，
 而它们**在浏览器里才表现为空白或 undefined**，定位成本高得多。
 
-> ⚠️ **这段目前还只是「思路」，脚本没有进仓库。** 2026-09-16 这次复跑用的是两个一次性脚本，
-> 写在 `/tmp/api_contract_verify_20260916.py` 与 `/tmp/id_type_inventory.py` ——
-> **`/tmp` 会被清掉，等于没留下。** 把它固化成 `scripts/verify_api_contract.py` 是 §10-T2。
+> ✅ **已经固化：`scripts/verify_api_contract.py`**（2026-09-16）。用法：
+>
+> ```bash
+> python scripts/verify_api_contract.py            # 全量核对
+> python scripts/verify_api_contract.py --only ids # 只看 ID 类型表与精度扫描
+> ```
+>
+> 它做三件事：① 逐端点核对 `SPEC`（契约的机器可读副本）里的字段在真实响应里存在；
+> ② 清点大整数的 JSON 类型与可精确表示性；③ **直接查库**找不可被 double 精确表示的 ID。
+>
+> ⚠️ **第 ③ 步不能省**：端点采样只扫得到「当前有数据」的地方。库里那个真实的精度事故 ID
+> （`outbox_event.id = 225548242094391297`）属于一条 `completed` 事件、不进任何响应 ——
+> 只看接口**永远扫不到**。查数据与「现在有没有接口暴露它」无关。
+>
+> 它有**两个**判失败的条件，缺一不可地同时成立才会红：**库里真有不可精确表示的 ID**
+> 且 **仍有 id 类字段以 number 暴露**。只看前者的话，修好序列化之后脚本会永远红
+> （数据里的 ID 不会因为改了序列化就消失）；只看后者则扫不到「还没被暴露、但迟早会」的。
+>
+> 改动契约后**同步改脚本里的 `SPEC`**，否则 CI 会红 —— 这正是它的用途。
 
 ---
 
@@ -540,37 +571,45 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 > 按「做完之后谁受益」分两组：**T1–T5 是契约/前端侧**，T6–T7 是**会让契约再次变化**的实现侧。
 > 每条都写了「怎么验」，与本文档其余部分同一套标准：**能实测的才算做完**。
 
-### T1 · ID 序列化统一（🔴 优先级最高，会真实炸）
+### ~~T1 · ID 序列化统一~~ ✅ 已完成（2026-09-16）
 
-**现状**：只有 `/reviews/pending` 与 `/reviews/{id}/detail` 把 `source_id` 字符串化
-（`repositories/requirement.py:335`），其余端点全是 JSON number。当前**恰好**因为
-`worker=0 & seq=0` 而安全，但这件事已经真实发生过一次（同文件注释里有记录）。
+**做了什么**：所有雪花 ID 一律序列化成字符串。出口收敛在 `common/snowflake.py::to_sid()`，
+在**仓储层的行规范化函数**里按字段语义调用（`_row_to_feature`、`_normalize_row`、
+`_normalize_asset_row`、`_present_requirement` 等），**不在路由里手工 `str()`** ——
+此前正是「手工 str 了一处」造成的分裂。
 
-**怎么做**：
-1. 先定口径 —— 建议二选一，别混：
-   (a) **全部雪花 ID 一律字符串**（与 §1 原意一致，但改动面大、是契约变更）；
-   (b) **只把「会被前端拼进 URL 的 ID」字符串化**（`relations.id`、`capabilities.id`、
-   `feature_id`、`capability_id`），改动面小、够用。
-2. 出口在同一处收敛：给仓储层的行规范化函数加统一的 `_sid()`，**不要在每个路由里手工 `str()`**
-   —— 现在正是「手工 str 了一处」造成的分裂。
-3. `RequirementSubmitResponse.source_id` 目前是 `int | None`（`api/schemas/requirements.py:52`），
-   一并改。
-4. **怎么验**：把 `common/snowflake.py` 的 worker/seq 调成非 0 造一个 ID，
-   跑一遍「提交 → 待办列表 → 审核提交」与「关系 PATCH」，确认没有 404/409。
+三条当时没预见到、实施中才浮出来的：
 
-> ⚠️ 这是**对外契约变更**，与 `current-state.md` §三 遗留 6 是同一条，动之前要说一声。
+1. **口径从「只改会回传的」放宽到「全部」**。原因：只改窄的话，
+   `scripts/verify_api_contract.py` 会**一直红**（仍有 13 个 id 类字段是 number），
+   而且 `source_id` 这个**同一个字段名在不同端点上两种类型**的分裂不会消失。
+2. **存储型 JSON 必须在读时转，不能在写入时转**。`diff_payload.source_id` 与
+   `metadata.capability_match.*.capability_id` 是落在库里的 JSON —— 改写入只影响新行，
+   老行仍是 number，于是同一个字段在新旧数据上两种类型。改为读时统一。
+3. **不能挂全局 JSON 编码器**。编码器只能按「值大不大」判断，于是同一个字段在小 id 时是
+   number、大 id 时是 string —— 那正是 §8.1 警告过的「同一数组里两种元素形状」。
+   类型必须由**字段语义**决定。
 
-### T2 · 把验证脚本固化进仓库（🟢 半天）
+**前端也改了一处**（这是最容易漏的）：`app.js` 的关联裁决里原本是
+`feature_id: Number(btn.dataset.f)` —— 把后端特意字符串化的 id **又转回 number**，
+正好抵消 T1，而且这条路径（PATCH 定位一行）恰恰是 T1 要保护的。已改为原样透传
+（后端 schema 是 `int`，pydantic 会把数字字符串转回去）。
 
-**现状**：§9 只有思路，脚本没进仓库（这次的两个也是 `/tmp` 里的一次性脚本）。
+**怎么验的**：`tests/integration/test_id_serialization.py`（12 条）——
+逐端点断言 id 字段是字符串（含嵌套的 `provenance[].source_id` 与 `diff_payload.source_id`），
+外加一条**端到端往返**：取出 id → 原样回传 → 命中同一行；以及一条**反证**，
+把「为什么不能 `Number()` 回去」写成可执行断言。
+`scripts/verify_api_contract.py` 的类型表现在全是 `string`、退出码 0。
 
-**怎么做**：新建 `scripts/verify_api_contract.py`：
-1. 从 `static/js/app.js` 正则提取渲染函数里读的字段名
-2. `TestClient` 打真实库，逐端点核对「该字段在不在」
-3. 顺带输出 §1.1 那张 **ID 类型表**（大整数是 string 还是 number）
-4. 退出码非 0 = 契约与实现不一致 → 可以挂进 CI
+**连带更正**：`repositories/requirement.py` 注释里那个事故例子（`224103804432285696`）
+末尾有 27 个 0、本来就能被 double 精确表示，**不构成证据**。真正的反例是库里的
+`outbox_event.id = 225548242094391297`。
 
-**怎么验**：故意把 app.js 里一个字段名改错，脚本应该报出来。
+### ~~T2 · 把验证脚本固化进仓库~~ ✅ 已完成（2026-09-16）
+
+`scripts/verify_api_contract.py` 已进仓库，见 §9 的说明。**改动契约时同步改它的 `SPEC`**，
+否则它会红 —— 这正是它的用途。挂进 CI 只需跑 `python scripts/verify_api_contract.py`
+（退出码非 0 即失败）。**尚未挂 CI**（仓库当前没有 CI 配置）。
 
 ### T3 · 补齐契约没覆盖的端点（🟢 一天）
 
@@ -646,7 +685,7 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 | 结论 | 证据 |
 |---|---|
 | 列表 14 字段 | `GET /api/v1/requirements` 实测返回 14 个键 |
-| ID 类型分裂 | 清点 13 个端点：`source_id` 在审核端点是 string、在 relations/diff/features 是 number |
+| ID 类型分裂 | 清点 13 个端点：`source_id` 在审核端点是 string、在 relations/diff/features 是 number（**已统一，见 §1.1**） |
 | `suggestion` 是新增键 | 4 条待办中仅最新 1 条有；另 3 条该键**完全不存在** |
 | `constraints` 无 `alias_hit` | REQ-000015 v3 快照实测 3 条均无该键（快照生成于修复前 4 小时） |
 | `/constraints`、`/titles` 为空 | 直查库：`constraint_vocab` 0 行、`requirement_title_candidate` 0 行 |

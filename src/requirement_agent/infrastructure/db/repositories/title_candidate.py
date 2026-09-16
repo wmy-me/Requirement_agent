@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -189,11 +189,12 @@ class RequirementTitleCandidateRepository:
     @staticmethod
     def _normalize(row) -> dict[str, object]:
         return {
-            "id": int(row["id"]),
-            "requirement_id": int(row["requirement_id"]),
+            # 雪花 ID 字符串化：`id` 会被前端拼进 PATCH `/requirement-titles/{id}`。
+            "id": to_sid(row["id"]),
+            "requirement_id": to_sid(row["requirement_id"]),
             "title": row["title"],
             "angle": row["angle"],
-            "capability_id": int(row["capability_id"]) if row["capability_id"] else None,
+            "capability_id": to_sid(row["capability_id"]),
             "constraint_key": row["constraint_key"],
             "source": row["source"],
             "review_status": row["review_status"],

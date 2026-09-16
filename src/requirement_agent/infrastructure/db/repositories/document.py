@@ -12,7 +12,7 @@ import re
 
 from sqlalchemy import text
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -225,14 +225,15 @@ class DocumentAssetRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
+            # 雪花 ID 字符串化：`id` 会进 `/documents/{id}` 系列 URL。
+            "id": to_sid(row["id"]),
             "file_name": row["file_name"],
             "content_type": row["content_type"],
             "storage_uri": row["storage_uri"],
             "checksum": row["checksum"],
             "size_bytes": int(row["size_bytes"]),
             "source_type": row["source_type"],
-            "source_id": row["source_id"],
+            "source_id": to_sid(row["source_id"]),
             "original_text": row["original_text"],
             "extracted_text": row["extracted_text"],
             "metadata": dict(row["metadata"] or {}),
@@ -243,8 +244,8 @@ class DocumentAssetRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
-            "document_id": int(row["document_id"]),
+            "id": to_sid(row["id"]),
+            "document_id": to_sid(row["document_id"]),
             "chunk_index": int(row["chunk_index"]),
             "chunk_text": row["chunk_text"],
             "metadata": dict(row["metadata"] or {}),
@@ -255,8 +256,8 @@ class DocumentAssetRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
-            "document_id": int(row["document_id"]),
+            "id": to_sid(row["id"]),
+            "document_id": to_sid(row["document_id"]),
             "chunk_index": int(row["chunk_index"]),
             "chunk_text": row["chunk_text"],
             "file_name": row["file_name"],

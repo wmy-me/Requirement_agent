@@ -99,4 +99,30 @@ def new_id() -> int:
     return snowflake.next_id()
 
 
-__all__ = ["Snowflake", "new_id", "snowflake"]
+def to_sid(value: object) -> str | None:
+    """把雪花 id 序列化成**字符串**供 API 响应使用；None 原样透传。
+
+    **为什么要字符串化。** 雪花 id 是 63 位正整数，普遍超过 JS 的
+    `Number.MAX_SAFE_INTEGER`（2^53）。以 JSON number 发出去，前端 `JSON.parse`
+    会悄悄改掉它 —— 实测库里就有 `outbox_event.id = 225548242094391297`，
+    `int(float())` 变成 `...296`，**差 1**；前端拿它拼 `dead-letters/{id}/retry`
+    就会打到错误的一行（更早的一次事故正是这个形状：审核回传 `source_id` 后
+    报 `not found` → 409）。
+
+    能在 double 里精确表示的 id，要求末尾连续 0 位 ≥ 5 —— 而那取决于同毫秒内
+    有没有产生过第二个 id（seq≠0），**不是可以依赖的性质**。
+
+    **为什么按字段做，而不是挂一个全局 JSON 编码器**：编码器只能按「值大不大」判断，
+    于是同一个字段在小 id 时是 number、大 id 时是 string —— 那正是
+    `docs/api-contract.md` §8.1 警告过的「同一数组里两种元素形状」。类型必须由
+    **字段语义**决定，所以在调用点显式声明哪些字段是 id。
+
+    接受 int 与 str（幂等）；空串与空白归一为 None。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+__all__ = ["Snowflake", "new_id", "snowflake", "to_sid"]

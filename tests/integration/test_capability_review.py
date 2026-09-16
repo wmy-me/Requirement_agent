@@ -202,7 +202,8 @@ def test_confirmed_capability_becomes_matchable() -> None:
         # 现在能匹配上了
         after = service.match(match_payload)
         assert after["capabilities"][0]["matched"] is True
-        assert after["capabilities"][0]["capability_id"] == fixture.capability_id
+        # 匹配结果里的雪花 ID 是**字符串**（T1 起统一），与 fixture 手里的 int 比要转一下
+        assert after["capabilities"][0]["capability_id"] == str(fixture.capability_id)
     finally:
         fixture.cleanup()
 

@@ -272,7 +272,8 @@ def test_revert_revives_the_same_row_instead_of_inserting_a_new_one() -> None:
         after = _by_key(fixture.features())
         assert set(after) == {"F-001", "F-002", "F-003"}
         for feature_key in ("F-002", "F-003"):
-            assert after[feature_key]["id"] == fixture.feature_ids[feature_key], "复活时新建了行，id 变了"
+            # 响应里的雪花 ID 是**字符串**（T1 起统一），与 fixture 手里的 int 比要转一下
+            assert after[feature_key]["id"] == str(fixture.feature_ids[feature_key]), "复活时新建了行，id 变了"
             assert after[feature_key]["feature_key"] == feature_key, "feature_key 断裂"
 
         # 能力关联挂在 feature_id 上，因此复活后它必须还在

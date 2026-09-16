@@ -9,10 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 
+from collections.abc import Mapping
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.domain.feature_diff import PlannedRow, normalize_feature_rows, plan_sync
 from requirement_agent.domain.feature_history import (
     FeatureState,
@@ -1049,18 +1051,27 @@ class RequirementFeatureRepository:
 
     @staticmethod
     def _row_to_feature(row: dict[str, object]) -> dict[str, object]:
+        # 雪花 ID 一律字符串化（见 `common.snowflake.to_sid` 的说明）：
+        # `id`/`requirement_id`/`origin_source_id` 以及 provenance 里的 `source_id`
+        # 都会以 JSON number 发出去，而它们全部超过 2^53。`ordinal`/`origin_version_no`
+        # 是**序号不是 ID**，保持数字。
         return {
-            "id": int(row["id"]),
-            "requirement_id": int(row["requirement_id"]),
+            "id": to_sid(row["id"]),
+            "requirement_id": to_sid(row["requirement_id"]),
             "feature_key": row["feature_key"],
             "content": row["content"],
             "status": row["status"],
             "ordinal": int(row["ordinal"]),
-            "origin_source_id": row["origin_source_id"],
+            "origin_source_id": to_sid(row["origin_source_id"]),
             "origin_requirement_key": row["origin_requirement_key"],
             "origin_version_no": int(row["origin_version_no"]),
             "removed_version_no": row["removed_version_no"],
-            "provenance": list(row["provenance"] or []),
+            "provenance": [
+                {**dict(entry), "source_id": to_sid(dict(entry).get("source_id"))}
+                if isinstance(entry, Mapping)
+                else entry
+                for entry in (row["provenance"] or [])
+            ],
             "module_key": row.get("module_key"),
             "module_name": row.get("module_name"),
         }
