@@ -1,8 +1,8 @@
 # 项目现状（Current State）
 
-> 最后更新：2026-09-15（**§二 重写为统一的「待办任务」清单** —— 按「能不能现在动手」分四类；
-> 新增能力模型方案 `docs/方案_需求主线与能力模型.md`，其 4 个结构问题在 §二 A1 等你拍板。
-> 同日此前：E 批·合并闭环实现并实测（§五），测试基线 194 → 251）
+> 最后更新：2026-09-15（新增 **§六 版本模型现状** —— 此前接手的人只能从代码逆推；
+> 能力模型方案六批全部落地并验证（见 `docs/方案_需求主线与能力模型.md`），
+> 测试基线 251 → **311**。§二 已重写为统一的待办任务清单）
 > 用途：接手本项目时的**第一份文档**。记录真实进度与当前未决事项。
 >
 > ⚠️ **`docs/refactoring/archive/` 下的进度表写于各阶段施工期间，已过时，勿据此排期。**
@@ -25,7 +25,7 @@
 | 6. RBAC / 数据保留 / 可观测性 / 渠道输出闭环 | 🟡 可观测性与死信处理已完成，其余三项未做 | `/api/v1/ops/*` + 请求日志中间件 + 前端「运维」tab |
 | 7. 完整回归 + 生产验收 | ⬜ 未开始 | — |
 | ★ 对话状态机 / Git 式版本管理（**独立方案，不占上表编号**） | 🟡 A/B/C/D/E 五批已完成**且已实测验收**（见 §五），F/G 未开始 | `af56f06`、`3d47629`、`3e85390`、`bbee352`、E 批（迁移 `012`–`014`，**E 批无迁移**） |
-| 能力 / 条件模型（**独立方案**） | ⬜ 未动工，**卡在 4 个结构决策**上（见 §二 A1） | 方案见 `docs/方案_需求主线与能力模型.md` |
+| 能力 / 条件模型（**独立方案**） | ✅ **六批全部完成并验证**（见 §二 B6、方案文档 §12–§17） | `28f5f37`（1–2）、`b5ee0d7`（3）、`b311130`（4）、`1eb834e`（5）、`acfbcc9`（6） |
 
 **阶段 2 六项明细**：P1-1 Prompt 去重 ✅ ｜ P1-2 配置卫生 ✅ ｜ P1-3 `analysis_mode` 接线 ✅
 ｜ P2-1 模型参数透传 ✅ ｜ P2-2 LLM 可观测性 ✅ ｜ P2-3 向量维度决策与守卫 ✅
@@ -34,12 +34,9 @@
 ｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ **E 合并闭环 ✅** ｜ **F 版本链 DAG ⬜** ｜ **G revert + 乐观锁 ⬜**。
 F/G 是「Git 式版本管理」的收尾（§3.3–3.5），**尚未动工**；E 是 F/G 的前置，现已就位。
 
-> ⚠️ **E 批的改动尚未提交**（截至本文更新时仍在工作区）。涉及 6 个源文件、3 个 CSS/JS、
-> 5 个新增测试文件与 1 个新增领域模块 `domain/feature_diff.py`。接手前先确认这些改动还在。
-
-**测试基线**：`pytest -q` → **251 passed, 2 skipped**（36 个测试文件）。
-> 本文先后写过「73 passed」（阶段 2 结束时）与「194 passed」（★ 四批完成时）。
-> E 批新增 19 个单测 + 集成测试后升到 251。**以 251 为准。**
+**测试基线**：`pytest -q` → **311 passed, 2 skipped**（41 个测试文件）。
+> 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ **311**（能力模型六批）。
+> 每次加批次都会涨，**以最新一次实测为准**。
 
 **当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
 入口 `main.py`（薄壳 → `requirement_agent.api.app`），`src/` 顶层只剩该包。
@@ -54,7 +51,7 @@ F/G 是「Git 式版本管理」的收尾（§3.3–3.5），**尚未动工**；
 
 | 类别 | 含义 | 条数 |
 |---|---|---|
-| **A** | 🛑 **等你拍板** —— 不定就动不了 | 4 |
+| **A** | 🛑 **等你拍板** —— 不定就动不了 | **3**（A1 已解，见下） |
 | **B** | ✅ **已定计划、待实施** —— 前置已就位，可直接开工 | 6 |
 | **C** | ⏸️ **挂起** —— 你已明确说先不做 | 1 |
 | **D** | 🔧 **技术债 / 已知缺陷** —— 不阻塞，但会积累 | 11（见 §三） |
@@ -63,16 +60,16 @@ F/G 是「Git 式版本管理」的收尾（§3.3–3.5），**尚未动工**；
 
 ### 2.1 🛑 A 类：等你拍板
 
-**A1（最高优先）· 能力模型的 4 个结构问题**
+**A1 · ~~能力模型的 4 个结构问题~~ —— ✅ 已全部拍板并落地**（2026-09-15）
 
-方案见 `docs/方案_需求主线与能力模型.md`。**这四条不定，能力/条件模块的 schema 写不出来**：
+保留在此仅作决策记录；结论见 `docs/方案_需求主线与能力模型.md` §9。原文如下：
 
-| # | 问题 | 为什么卡住 |
+| # | 当时的问题 | 最终结论 |
 |---|---|---|
-| §9-1 | 你的设计图里没有「模块」，但对话里一直有；且现有 `feature.module_key` 是**需求内部**分组 | 决定要不要新建 module 表 |
-| §9-2 | `requirement_streams.capability_id` 是单列，但 REQ-000015 有 13 条功能、4 个模块 | 决定要不要中间表 |
-| §9-3 | `version_constraints(version_id, constraint_id)` 缺「修饰哪个能力」的维度 | 表结构错，必须改三元组 |
-| §9-4 | 主线判定靠的「业务对象」字段**不存在**（现有只有粗粒度的 `business_domain`） | 判定规则没有输入 |
+| §9-1 | 设计图里没有「模块」 | **模块与能力正交**，不新建 module 表；`feature.module_key` 保持独立 |
+| §9-2 | `capability_id` 单列装不下多能力需求 | 能力挂 feature 的 **N:M**（`feature_capability`） |
+| §9-3 | `version_constraints` 缺「修饰哪个能力」的维度 | 条件在抽取记录里与能力配对，归属某个能力 |
+| §9-4 | 「业务对象」字段不存在 | 抽取新增 `business_object`（批次 2 已落地） |
 
 > 方案文档另有 4 条非阻塞歧义（§9-5 能力是否也受控 / §9-6 审核记录要不要直连版本 /
 > §9-7 feature 要不要加向量 / §9-8 `version_label` 与 `version_title` 分工），可一并定。
@@ -116,7 +113,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | B3 | **阶段 5 · 影响分析的传播计算** | ⚠️ **有卡点** | 不是缺表：**没有 `depends` 边的生产者**。现有的边全是「相似/冲突」，无方向可传播。需先定依赖关系从哪来 |
 | B4 | **阶段 6 · 剩余三项** | 部分就位 | RBAC（等 A2）／数据保留（零实现，六张表无限增长）／**渠道输出闭环**（触发点与凭证已在位：`app_id`/`app_secret` 已注入 `FeishuClient` 却从未被读取） |
 | B5 | **阶段 7 · 完整回归 + 生产验收** | — | 建议放最后；`tests/e2e/` 仍为空 |
-| B6 | **能力模型批次 1–7** | ⚠️ **等 A1** | 见 `docs/方案_需求主线与能力模型.md` §7。**前 4 批全程不碰现有写入路径，可随时停** |
+| B6 | ~~能力模型批次~~ | ✅ **已完成** | 六批全部落地并验证，见 `docs/方案_需求主线与能力模型.md` §12–§17。收尾两件未做：**浏览器验证**、**主线判定建议** |
 
 ---
 
@@ -150,7 +147,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 |---|---|---|
 | 1 | **飞书渠道代码已就绪，但未与真实飞书应用联调** | 端点 `POST /api/v1/channels/feishu/webhook`（`api/routes/channels.py`）；协议实现见 `infrastructure/channels/feishu_client.py`。**未验证项**：解密/签名按官方文档实现但无官方测试向量，单测是自洽回环；URL 校验、加密回调、签名头是否与真实飞书一致，需要配一个测试应用实测。 |
 | 1b | **`source_type` 对外枚举未放宽** | `api/schemas/agent.py:15,53` 与 `api/schemas/requirements.py:20` 仍为 `web/email/meeting/manual`。渠道入库走 service 不经该校验，所以**功能上不阻塞**；但若要让 `feishu` 能经 `/requirements/submit` 等端点提交，需放宽（属对外契约变更，需授权）。 |
-| 2 | **E2E 测试为空** | `tests/` 下只有 `unit/`（25 个文件）与 `integration/`（7 个文件），原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有任何测试真的启动前端跑一遍**，前端改动只能靠 §五 的浏览器手动清单验。 |
+| 2 | **E2E 测试为空** | `tests/` 下只有 `unit/` 与 `integration/`（合计 41 个文件），原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有任何测试真的启动前端跑一遍**，前端改动只能靠 §五 的浏览器手动清单验。 |
 | 3 | **worker 未部署** | `workers/tasks.py` 提供了独立的 FastAPI 入口（`python -m requirement_agent.workers`，:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/requirement-analysis/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。**注意有两个 `worker` 包**：`infrastructure/worker/`（任务实现 + outbox，被引用的那个）与 `workers/`（仅 HTTP 入口薄壳 + `__main__.py`）。 |
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
@@ -253,7 +250,7 @@ source `225548081754537984`、2 个会话与若干 run。**这是本库唯一一
 ### 自动验证（已写进测试，一条命令）
 
 ```
-pytest -q   → 251 passed
+pytest -q   → 311 passed
 ```
 
 | 测试文件 | 验证的能力 | 关键断言 |
@@ -352,7 +349,83 @@ stage/checkpoint/module），现在走查已造出带模块的 `REQ-000015` 与�
 
 ---
 
-## 六、文档导航
+## 六、版本模型现状
+
+> 这一节记录**版本链实际长什么样**。此前没有这节，接手的人只能从代码逆推。
+> 数据取自 REQ-000015 的真实版本链（2026-09-15）。
+
+### 6.1 三张表怎么配合
+
+```
+requirement_master        一条需求（主线）—— requirement_key = REQ-000015
+  current_version = 3     ← 当前版本号
+  final_requirement       ← 当前 active 功能的拼接
+
+requirement_version       版本快照（每版一行）
+  version_no / version_title / change_type(new/add/modify/delete)
+  requirement_snapshot    该版本**完整正文快照**（不是增量）
+  change_summary          审核人写的变更说明
+  feature_changes         本版功能级变更清单（add/modify/delete）
+  capability_snapshot / constraint_snapshot   本版的能力与条件快照
+  parent_version_no / status(draft/pending_review/current/superseded)
+  superseded_by_version_no
+
+requirement_feature       功能条目（**跨版本存活的行**）
+  origin_version_no       第几版引入
+  removed_version_no      第几版移除（NULL = 还在）
+  provenance              变更史 [{version_no, source_id, kind}]
+```
+
+**关键点：版本是快照，功能是长命行。** 一条功能从 v1 活到 v3，存在区间由
+`origin_version_no` / `removed_version_no` 划定，改过的历史记在 `provenance`。
+
+### 6.2 真实版本链（REQ-000015）
+
+| | 状态 | 类型 | 父 | 快照 | 变更 | 能力快照 | 标题 |
+|---|---|---|---|---|---|---|---|
+| v1 | superseded | new | — | 227字 | 12条 | 0条 | 门店巡检管理系统 V1.0 需求 |
+| v2 | superseded | add | v1 | 238字 | 1条 | 0条 | …V1.1 需求 |
+| **v3** | **current** | add | v2 | 269字 | 3条 | **5条** | …V1.3 巡检任务模块补充需求 |
+
+版本 ← 来源也已链上（v1←source#…754537984、v2←…#308797440、v3←…#578448896）。
+v1/v2 能力快照为 0 条，因为它们建于能力模型之前——**空着比编一份更干净**；
+v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那时该列刚建出来。
+
+### 6.3 入口
+
+| 端点 | 作用 |
+|---|---|
+| `GET /requirements/{key}/versions` | 版本历史 |
+| `GET /requirements/{key}/features?at_version=N` | **某个版本当时**的功能集 |
+| `GET /requirements/{key}/diff?from=&to=` | 两版之间 added/removed/modified/unchanged |
+| `GET /requirements/{key}/trace` | 需求 + 逐版本快照 + 每版来源链 |
+| `GET /requirements/{key}/capabilities` | 当前版本的能力与条件 |
+
+详情页有四个区块：能力与条件 / 当前功能明细 / **版本 Diff** / **版本历史** / 需求关系。
+
+### 6.4 已经做到的
+
+- **每次版本变化都经过人工审核** —— 版本只在 `commit_requirement_node` 里产生，没有别的入口
+- **能看版本前后改了什么**：`/diff` 逐条给 added/removed/modified
+- **审核时先看再提交**：合并预览按模块列出 add/modify/delete
+- 每版**完整快照**，词表日后改名也不污染历史
+- **一条主线只有一个 current** —— 数据库部分唯一索引在守，不靠应用自觉
+
+### 6.5 还缺什么
+
+| 缺的 | 说明 |
+|---|---|
+| **多个候选标题** | 一条需求只有一个标题；「同一需求的不同视角入口」不存在 |
+| **文档版本链** | `document_asset` 只有 checksum 去重，**没有版本概念**；同名同格式文档改一个字会变成两个互不相干的资产 |
+| **主线判定建议** | 分析阶段不产出「建议新建 / 建议追加」+置信度；人工看候选自己判断 |
+| **行内高亮** | diff 只到「功能条目」粒度，没有内容片段级对比 |
+
+**未验证**：详情页四个区块**从未在浏览器里点过**；`/diff` 端点除被详情页调用外，
+没做过端到端验证。
+
+---
+
+## 七、文档导航
 
 | 文档 | 用途 |
 |---|---|
