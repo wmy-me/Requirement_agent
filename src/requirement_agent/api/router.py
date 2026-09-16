@@ -13,6 +13,7 @@ from fastapi import APIRouter
 
 from requirement_agent.api.routes.agent_chat import router as _agent_chat_router
 from requirement_agent.api.routes.audit import router as _audit_router
+from requirement_agent.api.routes.capabilities import router as _capabilities_router
 from requirement_agent.api.routes.channels import router as _channels_router
 from requirement_agent.api.routes.conversations import router as _conversations_router
 from requirement_agent.api.routes.documents import router as _documents_router
@@ -45,6 +46,8 @@ rest_router.include_router(_reviews_submit_router)
 # 渠道 Webhook 追加在末尾：不打扰既有路由的注册顺序
 rest_router.include_router(_channels_router)
 rest_router.include_router(_ops_router)
+# 能力 / 条件词表（批次 1）：纯新增只读路由，追加在末尾
+rest_router.include_router(_capabilities_router)
 
 
 # —— 总聚合：REST 域 + Agent 域 ——

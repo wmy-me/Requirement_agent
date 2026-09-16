@@ -48,6 +48,38 @@ def _coerce_str_list(value: object) -> list[str]:
     return [item for item in items if item]
 
 
+def _coerce_capabilities(value: object) -> list[dict[str, object]]:
+    """把模型给的能力候选归一成 `{raw_text, action, object, constraints}` 列表。
+
+    这里同样是**宁可丢一条，也不让整个抽取失败**：动作或宾语缺失的条目直接丢弃
+    （`CapabilityCandidate.is_complete` 的定义），因为 `(action, object)` 是能力身份，
+    缺一半就没法参与精确匹配，留着只会变成词表里的垃圾提案。
+    """
+    from requirement_agent.agents.extract_agent import CapabilityCandidate
+
+    if isinstance(value, dict):
+        raw = [value]
+    elif isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        return []
+
+    candidates: list[CapabilityCandidate] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        candidate = CapabilityCandidate(
+            raw_text=str(entry.get("raw_text") or entry.get("text") or "").strip(),
+            action=str(entry.get("action") or entry.get("verb") or "").strip(),
+            object=str(entry.get("object") or entry.get("target") or "").strip(),
+            # 条件一律走 _coerce_str_list：模型可能给出字符串或对象数组
+            constraints=_coerce_str_list(entry.get("constraints") or entry.get("conditions")),
+        )
+        if candidate.is_complete:
+            candidates.append(candidate)
+    return [item.model_dump() for item in candidates]
+
+
 def _coerce_modules(value: object) -> list[dict[str, object]]:
     """把模型给的模块结构归一成 `{module, items}` 列表。
 
@@ -121,6 +153,9 @@ class ExtractSkill(BaseSkill):
                 "tags": _coerce_str_list(payload.get("tags")) or fallback.tags,
                 "requirements": _coerce_str_list(payload.get("requirements")) or fallback.requirements,
                 "modules": _coerce_modules(payload.get("modules")),
+                # 能力模型（批次 2）：模型没给就留空，不影响其余字段
+                "business_object": str(payload.get("business_object") or "").strip(),
+                "capabilities": _coerce_capabilities(payload.get("capabilities")),
                 "raw_text": payload.get("raw_text") or raw_text,
                 # 标明来源：前端据此判断「要点拆解」是不是模型抽取的
                 "extraction_source": "llm",

@@ -20,6 +20,28 @@ class RequirementModule(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class CapabilityCandidate(BaseModel):
+    """一条子需求对应的**能力候选** —— 不是正式能力，只是抽取产出。
+
+    能力身份是 `(action, object)` 二元组（见方案 §9）。归并靠**精确匹配**而不是相似度：
+    「按部门筛选导出 Excel」与「导出 Excel」的语义相似度会到 0.85+，用向量必然误合。
+
+    `raw_text` 是支撑这个能力的那句原话，落库后用于人工核对（审核页要把两者并排显示）。
+    `constraints` 是**限定条件**（「按部门筛选」这类范围/维度限定），
+    **不是**状态枚举值、角色、动作或字段名 —— prompt 里给了反例，实测短文本零噪声。
+    """
+
+    raw_text: str = ""
+    action: str = ""
+    object: str = ""
+    constraints: list[str] = Field(default_factory=list)
+
+    @property
+    def is_complete(self) -> bool:
+        """动作与宾语都非空才算一条可用的能力候选。"""
+        return bool(self.action.strip() and self.object.strip())
+
+
 class ExtractedRequirement(BaseModel):
     """抽取阶段产出的标准需求载体。
 
@@ -42,6 +64,11 @@ class ExtractedRequirement(BaseModel):
     tags: list[str] = Field(default_factory=list)
     requirements: list[str] = Field(default_factory=list)
     modules: list[RequirementModule] = Field(default_factory=list)
+    # —— 能力模型（批次 2 新增，均为可选：老数据与兜底抽取不含这些字段）——
+    # 主线判定的核心输入：能力相同但业务对象不同，应判为两条需求主线（方案 §5）
+    business_object: str = ""
+    # 每条子需求一个能力候选；与 requirements / modules 并行，不改动它们
+    capabilities: list[CapabilityCandidate] = Field(default_factory=list)
     raw_text: str
     # 默认 heuristic：不做无据的声称。模型路径会显式覆盖为 llm。
     extraction_source: Literal["llm", "heuristic"] = "heuristic"

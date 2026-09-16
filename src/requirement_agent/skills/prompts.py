@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 # Prompt 版本标记：任何 prompt 变更都递增，便于追溯与后续灰度。
-PROMPT_VERSION = "2026.09.11"
+PROMPT_VERSION = "2026.09.15"
 
 
 # —— 系统提示词（三个 Skill 共用，原先就与内联版本一致）——
@@ -57,6 +57,20 @@ def build_extract_user_prompt(
         "- modules：子需求的**模块分组**，形如 [{\"module\": \"登录\", \"items\": [\"…\", \"…\"]}]。"
         "  **能分组就必须给**（子需求天然按功能域可分时，如登录/报表/权限）；"
         "  **分不出就不给**（此时省略 modules，仅给扁平 requirements）\n"
+        "- business_object：这条需求作用的**核心业务对象**，如「员工数据」「订单」「巡检计划」\n"
+        "- capabilities：**每条子需求**对应的能力候选，形如\n"
+        '  [{"raw_text": "支持按部门筛选并导出 Excel", "action": "导出", "object": "Excel",\n'
+        '    "constraints": ["按部门筛选"]}]\n'
+        "  action = 动词（导出/统计/创建/删除/推送/审批…），object = 宾语。"
+        "**一条子需求一个元素。**\n"
+        "  constraints = 对**范围/维度/批量**的限定，即「按什么筛」或「批量」，例如\n"
+        "    「按部门筛选」「按门店」「按时间维度」「按周期」「批量」。\n"
+        "  ⚠️ 下列**都不是** constraints，必须排除：\n"
+        "    · 状态或等级的**枚举值**（待执行、执行中、已完成、一般、严重、致命）\n"
+        "    · 角色或对象（巡检员、整改责任人、管理员）\n"
+        "    · 动作本身（拍照上传、填写描述、推送提醒、跟踪闭环）\n"
+        "    · 字段名或展示位置（首页看板、本月关键指标）\n"
+        "  没有限定就给 []，**宁可空着也不要凑数**。\n"
         "- raw_text：原始文本\n"
         f"source_type={source_type}\nrequester_name={requester_name or 'unknown'}\nraw_text:\n{raw_text}"
     )

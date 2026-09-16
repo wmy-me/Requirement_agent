@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
+from requirement_agent.application.capability_match_service import CapabilityMatchService
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.workflows.graphs import run_analysis
@@ -41,6 +42,7 @@ class RequirementService:
         analyze_agent: AnalyzeAgent | None = None,
         risk_agent: RiskAgent | None = None,
         document_parser: DocumentParser | None = None,
+        capability_matcher: CapabilityMatchService | None = None,
     ) -> None:
         self.source_repo = source_repo or RequirementSourceRepository()
         self.master_repo = master_repo or RequirementMasterRepository()
@@ -48,6 +50,7 @@ class RequirementService:
         self.analyze_agent = analyze_agent or AnalyzeAgent()
         self.risk_agent = risk_agent or RiskAgent()
         self.document_parser = document_parser or DocumentParser()
+        self.capability_matcher = capability_matcher or CapabilityMatchService()
 
     def submit_requirement(self, source: RequirementSource) -> dict[str, object]:
         """提交并分析一条需求来源。
@@ -145,6 +148,13 @@ class RequirementService:
         metadata["analysis"] = analysis
         metadata["risk"] = risk
         metadata["extracted"] = extracted
+        # —— 能力/条件候选与词表比对（方案批次 2）——
+        # 只写 pending_confirmation 提案与匹配记录，**不写任何正式数据**。
+        # 这是 A 级「自动归档」范畴：记的是事实（模型抽出了什么、匹配上了什么），
+        # 不是业务决策（哪些能力正式成立）—— 后者由人工在审核页确认。
+        metadata["capability_match"] = self.capability_matcher.match(
+            extracted, source_id=saved_source.id
+        )
         metadata["retrieval_filters"] = {
             "channel": saved_source.source_type,
             "department": metadata.get("department"),

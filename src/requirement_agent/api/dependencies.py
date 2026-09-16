@@ -19,7 +19,9 @@ from requirement_agent.application.retrieval_service import RetrievalService
 from requirement_agent.application.review_service import ReviewService
 from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
+    CapabilityRepository,
     ChatRepository,
+    ConstraintVocabRepository,
     DocumentAssetRepository,
     MemoryRepository,
     RequirementFeatureRepository,
@@ -52,6 +54,9 @@ feature_repo = RequirementFeatureRepository()
 chat_repo = ChatRepository()
 memory_repo = MemoryRepository()
 relation_repo = RequirementRelationRepository()
+# 能力 / 限定条件的受控词表（方案批次 1）
+capability_repo = CapabilityRepository()
+constraint_repo = ConstraintVocabRepository()
 # 运维面（/api/v1/ops）用：查看异步队列积压与处理死信
 outbox_repo = OutboxRepository()
 
@@ -112,9 +117,11 @@ __all__ = [
     "actor_id_or_default",
     "analyze_agent",
     "audit_repo",
+    "capability_repo",
     "channel_ingest_service",
     "chat_repo",
     "chat_sessions",
+    "constraint_repo",
     "document_chunk_task",
     "document_parser",
     "document_repo",
