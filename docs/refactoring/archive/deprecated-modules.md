@@ -45,7 +45,49 @@
 |---|---|
 | `src/interfaces/api/`（routes/schemas）、`src/interfaces/http/auth.py` | 早前「死代码清理」已删除并提交（`5c5386f`）；当前无残留引用 |
 | **`src/interfaces/` 整个包** | 阶段1 收尾（commit `180578b`）已删除：全部路由/依赖/Schema/聚合器迁至 `src/requirement_agent/api/`；可由 git 历史恢复 |
-| **`src/requirement_agent/tools/` 整个包**（2026-09-16） | 见下方盘点。恢复命令：`git checkout <删除前的 commit> -- src/requirement_agent/tools/`；最早的 MCP 形态见 `git show df44749^:src/interfaces/mcp/tools.py` |
+| **`src/requirement_agent/tools/` 整个包**（2026-09-16） | 见下方盘点。⚠️ **该路径已被新内容占用**，恢复命令见下方警告；最早的 MCP 形态见 `git show df44749^:src/interfaces/mcp/tools.py` |
+
+> ### ⚠️ 这个路径现在住着**另一个** `tools` 包，恢复不能照旧命令抄
+>
+> 2026-09-16 在**同一路径** `src/requirement_agent/tools/` 落地了**新的 Agent 工具层**
+> （`07edb20`，方案 `docs/方案_Agent工具层.md`）：`base.py` / `registry.py` / 10 个工具模块。
+> 与被删掉的那个包（MCP 时代的 `health.py` / `requirements.py` / `reviews.py` / `_deps.py`）
+> **只共享路径，没有任何继承关系** —— 新包甚至就是因为它才被写出来的。
+>
+> 直接跑 `git checkout b8fc783^ -- src/requirement_agent/tools/` 会**用旧包的 `__init__.py`
+> 覆盖新包的名录**，于是 10 个新工具模块**不再被导入**、`@register` 不执行、
+> 注册表变空 —— `tests/unit/test_tool_registry.py` 会红（**响亮地失败，不是静默**）。
+>
+> **想看旧包的内容 —— 不要往工作区里 checkout**，用 `git show` 读单个文件：
+>
+> ```bash
+> git show b8fc783^:src/requirement_agent/tools/requirements.py   # 旧包里的某个文件
+> git ls-tree -r b8fc783^ --name-only | grep 'tools/'             # 旧包里都有什么
+> ```
+>
+> 真要整包拿回来，先 checkout 到一个**空目录**再比对（`git --work-tree=<空目录> checkout ...`），
+> 别覆盖现行工具层。
+>
+> **它的能力并没有丢**，多数已被新工具层覆盖（见下方对照表）。
+
+### 旧包的 7 个方法 → 新工具层的去向（2026-09-16 核对）
+
+| 旧方法 | 现在 |
+|---|---|
+| `search_requirements` | ✅ **同名同义**，新工具层有 |
+| `submit_requirement` | ✅ **同名同义**（仍是唯一写入口，只进待审） |
+| `get_requirement_detail(requirement_id)` | ✅ 换成 `get_requirement(requirement_key)` —— **改按 `requirement_key` 定位**（雪花 id 前端根本拿不到） |
+| `get_requirement_versions(requirement_id)` | ✅ 换成 `trace_requirement(requirement_key)` —— **更强**：不只版本号，还带每版的来源链 |
+| `submit_review_decision(...)` | ❌ **故意不做** —— 裁决是人的职责，这是新工具层的硬约束（方案 §2.2） |
+| `get_master_requirements(limit, status)` | ⚠️ **没有对应**（见下） |
+| `health_check` | ❌ 没有对应，也不需要（真实健康检查在 `api/routes/health.py`） |
+| `ingest_channel_event`（未进 `__all__`） | ❌ 没有对应 —— 渠道接入本身是挂起项（current-state §二 C1） |
+
+> **`get_master_requirements` 是个真实缺口**：新工具层有 `search_requirements`（按语义找）
+> 与 `get_requirement`（按编号取），但**没有「浏览 / 列举需求」**这一类。
+> 模型想回答「现在一共有哪些需求」时无从下手。要不要补一个 `list_requirements`
+> 是待定项 —— 补的成本很低（转发到 `RequirementService.list_requirements`），
+> 但要先想清楚「列举」会不会把整个需求库灌进上下文（可能要强制分页 + 上限）。
 
 ### 已删除：`src/requirement_agent/tools/` 盘点（2026-09-16）
 
