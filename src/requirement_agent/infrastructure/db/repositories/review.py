@@ -14,8 +14,27 @@ from sqlalchemy.orm import Session
 
 from requirement_agent.common.snowflake import new_id
 from requirement_agent.domain.feature_diff import PlannedRow, normalize_feature_rows, plan_sync
+from requirement_agent.domain.feature_history import (
+    FeatureState,
+    PlannedRevertRow,
+    reconstruct_features_at_version,
+)
 from requirement_agent.domain.requirement import RequirementReview
 from requirement_agent.infrastructure.db.session import SessionLocal
+
+
+def _revert_provenance(version_no: int, requirement_key: str, kind: str) -> dict[str, object]:
+    """回滚产生的 provenance 记录。
+
+    `source_id` 恒为 `None`：回滚没有来源（它是人对库的操作，不是某条来源落库的结果）。
+    如实留空比编一个强 —— 读者能一眼看出这条变更不是来源驱动的。
+    """
+    return {
+        "version_no": version_no,
+        "source_id": None,
+        "requirement_key": requirement_key,
+        "kind": kind,
+    }
 
 
 class RequirementReviewRepository:
@@ -343,6 +362,204 @@ class RequirementFeatureRepository:
 
         return changes
 
+    def reconcile_features(
+        self,
+        requirement_id: int,
+        plan: list[PlannedRevertRow],
+        *,
+        requirement_key: str,
+        version_no: int,
+        session: Session,
+    ) -> list[dict[str, object]]:
+        """把功能行按 `plan` 对齐到「目标版本时刻」的样子（**回滚专用**），返回 `feature_changes`。
+
+        与 `sync_features` 的关键差别：**不做内容匹配**。回滚的目标集合来自
+        `domain.feature_history.reconstruct_features_at_version`，每条的 `feature_key` 是
+        **已知的**，没有「猜谁是谁」的空间 —— 也正因如此不该复用 `plan_sync`：它是靠内容哈希
+        猜身份，一旦现有集合里混入已软删的同内容行就会挑错配对，一删一活、两条行都错。
+
+        三条与 `sync_features` **刻意不同**的写库规则，每条都有理由：
+
+        1. `add` 且命中**已软删**的行 → UPDATE **复活原行**，不新建。新建会让 `feature_key`
+           断裂，更要紧的是 `feature_capability.feature_id` 会指向那条不再生效的旧行，
+           而 `list_for_requirement` 只认 `status='active'` —— 复活后这条功能的能力标签会凭空消失。
+        2. `delete` 带 `AND status='active'` 守卫。少了它，对一行已经软删的行重复判定会
+           **重写它的 `removed_version_no`**，静默污染「它当初是哪一版删的」这段历史。
+        3. `keep` **不写** `status` / `removed_version_no`。`sync_features` 的 keep 分支会写
+           `status='active'`，那是为并集语义服务的；回滚里若照抄，就会把一批不该复活的行
+           集体复活。
+
+        `provenance` 的 `source_id` 为 `None`：回滚没有来源，如实留空比编一个强。
+        `kind` 只用既有的 `add` / `modify` / `delete` 三值，不新增枚举。
+        """
+        by_id = {int(item.row_id): item for item in plan if item.row_id is not None}
+        changes: list[dict[str, object]] = []
+
+        for item in plan:
+            if item.op == "add":
+                if item.row_id is None:
+                    # 表里没有这个 key（防御路径）：用计划里的 key 建行，**不走
+                    # `_next_feature_key`** —— 那个是「给全新内容分配新号」用的，
+                    # 会把一个已知身份的行改成另一个身份，溯源链就断了。
+                    session.execute(
+                        text(
+                            """
+                            INSERT INTO requirement_feature (
+                                id, requirement_id, feature_key, content, status, ordinal,
+                                origin_source_id, origin_requirement_key, origin_version_no,
+                                provenance, content_hash, module_key, module_name
+                            ) VALUES (
+                                :id, :requirement_id, :feature_key, :content, 'active', :ordinal,
+                                NULL, :requirement_key, :version_no,
+                                CAST(:provenance AS JSONB), :content_hash, :module_key, :module_name
+                            )
+                            """
+                        ),
+                        {
+                            "id": new_id(),
+                            "requirement_id": requirement_id,
+                            "feature_key": item.feature_key,
+                            "content": item.content,
+                            "ordinal": item.ordinal,
+                            "requirement_key": requirement_key,
+                            "version_no": version_no,
+                            "provenance": json.dumps([_revert_provenance(version_no, requirement_key, "add")]),
+                            "content_hash": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                            "module_key": item.module_key,
+                            "module_name": item.module_name,
+                        },
+                    )
+                else:
+                    # 复活已软删的原行（就地 UPDATE），保住 id / feature_key / 能力关联。
+                    row = by_id[item.row_id]
+                    provenance = self._provenance_for(item.row_id, session=session)
+                    provenance.append(_revert_provenance(version_no, requirement_key, "add"))
+                    session.execute(
+                        text(
+                            """
+                            UPDATE requirement_feature
+                            SET content = :content,
+                                content_hash = :content_hash,
+                                ordinal = :ordinal,
+                                module_key = :module_key,
+                                module_name = :module_name,
+                                status = 'active',
+                                removed_version_no = NULL,
+                                provenance = CAST(:provenance AS JSONB),
+                                updated_at = NOW()
+                            WHERE id = :id
+                            """
+                        ),
+                        {
+                            "id": row.row_id,
+                            "content": item.content,
+                            "content_hash": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                            "ordinal": item.ordinal,
+                            "module_key": item.module_key,
+                            "module_name": item.module_name,
+                            "provenance": json.dumps(provenance),
+                        },
+                    )
+                changes.append({"op": "add", "feature_key": item.feature_key, "content": item.content})
+                continue
+
+            if item.op == "delete":
+                provenance = self._provenance_for(item.row_id, session=session)
+                provenance.append(_revert_provenance(version_no, requirement_key, "delete"))
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET status = 'deleted',
+                            removed_version_no = :version_no,
+                            provenance = CAST(:provenance AS JSONB),
+                            updated_at = NOW()
+                        WHERE id = :id AND status = 'active'
+                        """
+                    ),
+                    {
+                        "id": item.row_id,
+                        "version_no": version_no,
+                        "provenance": json.dumps(provenance),
+                    },
+                )
+                changes.append({"op": "delete", "feature_key": item.feature_key, "content": item.content})
+                continue
+
+            if item.op == "modify":
+                provenance = self._provenance_for(item.row_id, session=session)
+                provenance.append(_revert_provenance(version_no, requirement_key, "modify"))
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET content = :content,
+                            content_hash = :content_hash,
+                            ordinal = :ordinal,
+                            module_key = :module_key,
+                            module_name = :module_name,
+                            status = 'active',
+                            removed_version_no = NULL,
+                            provenance = CAST(:provenance AS JSONB),
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": item.row_id,
+                        "content": item.content,
+                        "content_hash": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                        "ordinal": item.ordinal,
+                        "module_key": item.module_key,
+                        "module_name": item.module_name,
+                        "provenance": json.dumps(provenance),
+                    },
+                )
+                change: dict[str, object] = {
+                    "op": "modify",
+                    "feature_key": item.feature_key,
+                    "before": item.before,
+                    "after": item.content,
+                }
+                if item.module_before is not None:
+                    change["module_before"] = item.module_before[0]
+                    change["module_after"] = item.module_key
+                changes.append(change)
+                continue
+
+            # keep：内容没变，只可能要对齐 ordinal 与模块标签。
+            # **不写 status / removed_version_no** —— 见 docstring 第 3 条。
+            if item.row_id is not None:
+                session.execute(
+                    text(
+                        """
+                        UPDATE requirement_feature
+                        SET ordinal = :ordinal,
+                            module_key = :module_key,
+                            module_name = :module_name,
+                            updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": item.row_id,
+                        "ordinal": item.ordinal,
+                        "module_key": item.module_key,
+                        "module_name": item.module_name,
+                    },
+                )
+
+        return changes
+
+    def _provenance_for(self, row_id: int | None, *, session: Session) -> list[dict[str, object]]:
+        """取某行的现有 provenance（读改写，避免覆盖掉此前的变更史）。"""
+        if row_id is None:
+            return []
+        row = session.execute(
+            text("SELECT provenance FROM requirement_feature WHERE id = :id"), {"id": row_id}
+        ).mappings().first()
+        return list((row or {}).get("provenance") or [])
+
     def preview_sync(
         self,
         requirement_id: int,
@@ -526,7 +743,15 @@ class RequirementFeatureRepository:
         include_deleted: bool = False,
         session: Session | None = None,
     ) -> list[dict[str, object]]:
-        """按 REQ 编号列 feature，支持指定版本生效区间或包含已删除项。"""
+        """按 REQ 编号列 feature，支持指定版本生效区间或包含已删除项。
+
+        ⚠️ `at_version=N` 返回的是**N 版本时刻的成员与内容**——不只是「当时哪些行存在」，
+        `content` / `module_*` 也回到当时的值（由 `_list_rows_at_version` 沿
+        `feature_changes` 反向回放得到）。这一点与 `include_deleted` 互斥：
+        给了 `include_deleted` 就以它为准、不再做版本复原（保持既有行为）。
+        """
+        if at_version is not None and not include_deleted:
+            return self._list_rows_at_version(requirement_key, at_version, session=session)
         owns_session = session is None
         session = session or SessionLocal()
         if at_version is None and not include_deleted:
@@ -560,6 +785,113 @@ class RequirementFeatureRepository:
         if owns_session:
             session.close()
         return [self._row_to_feature(row) for row in rows]
+
+    def list_feature_changes_after(
+        self,
+        *,
+        requirement_id: int,
+        after_version_no: int = 0,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        """取某主线**版本号大于** `after_version_no` 的 `feature_changes`（升序）。
+
+        历史逆放的原料。刻意与 `list_by_requirement_key` 同住一个类：复原的读取与
+        功能行的读取是同一份事实的两个入口，分到两个 repo 只会制造第二处需要同步的 owner。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT version_no, feature_changes
+                    FROM requirement_version
+                    WHERE requirement_id = :requirement_id AND version_no > :after_version_no
+                    ORDER BY version_no ASC
+                    """
+                ),
+                {"requirement_id": requirement_id, "after_version_no": after_version_no},
+            ).mappings().all()
+            return [
+                {"version_no": int(row["version_no"]), "feature_changes": list(row["feature_changes"] or [])}
+                for row in rows
+            ]
+        finally:
+            if owns_session:
+                session.close()
+
+    def _list_rows_at_version(
+        self,
+        requirement_key: str,
+        at_version: int,
+        *,
+        session: Session | None,
+    ) -> list[dict[str, object]]:
+        """某版本时刻的功能行：读当前**全部**行（含已软删）+ 其后的变更记录，交给
+        `domain.feature_history` 反向回放。
+
+        为什么不能只靠 SQL 的 `origin_version_no / removed_version_no` 区间：那两个列只描述
+        **成员区间**，`content` 是就地覆写的当前值 —— 只按区间筛，得到的会是「当时存在哪些
+        功能 + 今天的文字」。差集就出在这里。
+
+        输出的字段集与不走 `at_version` 时**逐字段一致**（静态列取当前行），差异只在
+        `content`/`module_*`/`ordinal` 与「当时是否存活」。
+        已知近似：`provenance` 仍是截至当前的累积，不是当时的（既有实现也是如此，前端不渲染）。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            current = self.list_by_requirement_key(requirement_key, include_deleted=True, session=session)
+            if not current:
+                return []
+            history = self.list_feature_changes_after(
+                requirement_id=int(current[0]["requirement_id"]),
+                after_version_no=at_version,
+                session=session,
+            )
+            states = reconstruct_features_at_version(current, history, target_version=at_version)
+            by_key = {str(row["feature_key"]): row for row in current}
+            return [self._state_to_row(state, by_key.get(state.feature_key)) for state in states]
+        finally:
+            if owns_session:
+                session.close()
+
+    @staticmethod
+    def _state_to_row(
+        state: FeatureState,
+        current_row: dict[str, object] | None,
+    ) -> dict[str, object]:
+        """把复原出来的动态字段与当前行的静态字段合回一行。
+
+        `current_row` 为 None 只可能出现在「记录里有、表里没有」的防御路径上
+        （软删时代不该发生）；此时静态列填 None 而不是丢行 —— 丢行会让复原**静默少一条**，
+        而少一条比多一条难发现得多。
+        """
+        base: dict[str, object] = (
+            dict(current_row)
+            if current_row is not None
+            else {
+                "id": None,
+                "requirement_id": None,
+                "origin_source_id": None,
+                "origin_requirement_key": None,
+                "origin_version_no": None,
+                "provenance": [],
+            }
+        )
+        base.update(
+            {
+                "feature_key": state.feature_key,
+                "content": state.content,
+                "ordinal": state.ordinal,
+                "module_key": state.module_key,
+                "module_name": state.module_name,
+                # 复原出来的都是「当时存活」的行。
+                "status": "active",
+                "removed_version_no": None,
+            }
+        )
+        return base
 
     def diff_by_requirement_key(
         self,
