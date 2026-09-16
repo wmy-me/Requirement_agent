@@ -1103,7 +1103,7 @@ class RequirementVersionRepository:
                     SELECT v.id, v.requirement_id, v.parent_version_id, v.parent_version_no, v.version_no,
                            v.version_title, v.change_type, v.requirement_snapshot,
                            v.change_summary, v.diff_payload, v.feature_changes, v.created_by, v.reviewed_by,
-                           v.created_at
+                           v.created_at, v.status
                     FROM requirement_version v
                     JOIN requirement_master m ON m.id = v.requirement_id
                     WHERE m.requirement_key = :requirement_key
@@ -1119,6 +1119,10 @@ class RequirementVersionRepository:
                 "requirement_id": to_sid(row["requirement_id"]),
                 "parent_version_id": to_sid(row["parent_version_id"]),
                 "parent_version_no": row["parent_version_no"],
+                # `status` 必须返回：契约 §8.5 要求前端「用 status === 'current' 判断当前版，
+                # 不要假设 version_no 最大」，而这两个端点此前都没给这个字段 ——
+                # 前端只能靠猜，等于把那条约定写在了空气里。
+                "status": row["status"],
                 "version_no": int(row["version_no"]),
                 "version_title": row["version_title"],
                 "change_type": row["change_type"],
@@ -1154,6 +1158,7 @@ class RequirementVersionRepository:
                 text(
                     """
                     SELECT v.id AS version_id, v.version_no, v.parent_version_no, v.version_title, v.change_type,
+                           v.status,
                            v.requirement_snapshot, v.change_summary, v.diff_payload, v.feature_changes,
                            v.created_by, v.reviewed_by, v.created_at AS version_created_at,
                            s.id AS source_id, s.source_type, s.source_event_id,
@@ -1179,6 +1184,7 @@ class RequirementVersionRepository:
                     "version_id": version_id,
                     "version_no": int(row["version_no"]),
                     "parent_version_no": row["parent_version_no"],
+                    "status": row["status"],
                     "version_title": row["version_title"],
                     "change_type": row["change_type"],
                     "requirement_snapshot": row["requirement_snapshot"],

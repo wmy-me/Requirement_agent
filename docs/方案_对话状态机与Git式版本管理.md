@@ -261,9 +261,35 @@ CREATE INDEX IF NOT EXISTS idx_feature_module ON requirement_feature (requiremen
 这样「中间插入一行」不再级联改写后续所有条目。**这是合并场景的必要前提**——
 现在的算法在「两个相似需求合并」时会把目标 REQ 的既有功能大面积误改。
 
-### 3.3 版本链 DAG 与可视化
+### 3.3 版本链 DAG 与可视化 —— ⚠️ **前提不成立，(a) 的做法已废弃**（2026-09-16 实现时发现）
 
-#### (a) 让版本真的成「链」
+> ### ❌ 本节的 `merged_from_*` 是错的：它记下来会恒等于自己
+>
+> 原文假设「一次版本可能引入**另一个 REQ** 的内容」，所以要两列记「从哪条 REQ 的哪一版
+> 并进来」。实现前查真实数据，发现：
+>
+> ```
+> REQ-000015 v2  diff_payload.target_requirement_key = REQ-000015   ← 等于自己
+> REQ-000015 v3  diff_payload.target_requirement_key = REQ-000015   ← 等于自己
+> ```
+>
+> **因为本系统的合并是「来源 → REQ」，不是「REQ → REQ」。** 待合并的东西是一条
+> `requirement_source`（还在待审），它**还没有 `requirement_key`**。所以
+> `target_key` 指的就是「被并进去的那条 REQ 自己」，写进 `merged_from_*` 就是自指，
+> 前端画出来的虚线会与 `parent_version_no` 的实线完全重合 —— 一个什么都不说的字段。
+>
+> 这一点在代码里其实早有记录：`commit_nodes._merge_confirmations` 的 docstring 写着
+> **「来源此时还不是正式 REQ，表结构根本装不下这条边」**。
+>
+> **替代做法（已落地）**：真实存在的跨实体关系是 **「版本 ← 来源」**
+> （`requirement_version_source`），而它此前**从没被前端渲染过**。所以把「合流」换成
+> **溯源**：时间轴画 `change_type` 色点 + `parent_version_no` 实线 +
+> **每版的来源链**（`/trace` 的 `sources[]`）。
+>
+> **如果将来要做 REQ→REQ 的合并**（比如「把 REQ-B 整体并入 REQ-A」），那时这两列才有意义，
+> 届时再加（`ADD COLUMN` 是纯新增，随时可补）。
+
+#### (a) 让版本真的成「链」（原方案，**未采用**，保留作记录）
 
 ```sql
 ALTER TABLE requirement_version
@@ -278,19 +304,23 @@ ALTER TABLE requirement_version
 `commit_requirement_node` 在合并路径（`target_key` 非空）时写入 `merged_from_*`。
 现在这条信息**完全丢失**——`diff_payload` 里连 `target_requirement_key` 都没回显。
 
-#### (b) 前端画出来
+#### (b) 前端画出来 —— ✅ **已落地（2026-09-16），但画的是溯源而非合流**
 
-把「版本历史」从降序平铺列表改成一棵**纵向时间轴**：
+把「版本历史」从降序平铺列表改成**纵向时间轴**。实际做的与原文的差别只在第二、三条：
 
-- 每个版本一个节点，左对齐按 `version_no` 排列
-- `parent_version_no` 连**实线**（相邻版本）
-- `merged_from_*` 连**虚线**到被并入 REQ 的对应版本（跨 REQ，需要 trace 端点补返回
-  `merged_from` 与对方的 key/name）
-- `change_type` 用不同色点：`new` / `add` / `modify` / `delete`
-- 点节点展开该版本的 `feature_changes`（已有数据）
+| 原计划 | 实际做的 | 为什么 |
+|---|---|---|
+| 每个版本一个节点 | ✅ 同 | —— |
+| `parent_version_no` 连**实线** | ✅ 同（显示为「↑ 基于 V{n}」） | —— |
+| ~~`merged_from_*` 连虚线~~ | ❌ **不做** | 见 (a)：那个字段会恒等于自己 |
+| `change_type` 用不同色点 | ✅ 同（`ct-new/add/modify/delete`） | —— |
+| 点节点展开 `feature_changes` | ✅ 同；**正文快照也一并收起来** | 此前无条件铺整段，一版几百字会把时间轴淹掉 |
+| —— | ➕ **画出每版的来源**（「← 来源 #… · 渠道 · 发起人」） | 这才是真实存在的跨实体关系，且此前从没被渲染过 |
 
-后端 `trace_by_requirement_key` 需补两件事：SELECT 里带出 `merged_from_*`，
-并在返回里附上被合并方的 `requirement_key` / `requirement_name`（前端画虚线要有落点）。
+后端**不需要为新字段改任何东西** —— `/trace` 早就返回了 `sources[]`。
+唯一补的是一个**契约与实现不符的缺口**：`/versions` 与 `/trace` 都**没返回 `status`**，
+而 `docs/api-contract.md` §8.5 早就要求前端「用 `status === 'current'` 判断当前版」。
+两个端点都已补上。
 
 #### (c) 顺带修掉两个小缺陷
 
@@ -368,7 +398,7 @@ ALTER TABLE requirement_version
 | **C** | ✅ **已完成**：续跑（§1.2b/c）：`_try_replay` 扩展 + `POST /runs/{id}/resume`（SSE 从中断 stage 继续）+ 前端「继续上次分析」卡片 | B | 中。续跑不重复计费 |
 | **D** | ✅ **已完成**（迁移 `014`）：模块化（§3.1）：抽取两级结构 + feature 加模块列 + 落库 | 无 | 中。动抽取 schema |
 | **E** | **合并闭环**（§3.2）：预合并预览 + 审核页入口 + 关系状态联动 | D | 中高。先修 `sync_features` 的匹配键再开入口 |
-| **F** | **版本链 DAG**（§3.3）：merged_from 两列 + trace 补字段 + 前端时间轴 | E | 中。纯展示，但依赖 E 的数据 |
+| **F** | ✅ **已完成**（2026-09-16，无迁移）：前端溯源时间轴 + 每版来源链 + diff 版本选择。~~merged_from 两列~~ **未做且不应做**（见 §3.3(a)） | E | 中 |
 | **G** | ✅ **已完成**（2026-09-16，无迁移）：revert（§3.4）+ `lock_version` 乐观锁（§3.5），另补了 §3.4 漏掉的「历史内容复原」 | E | 中 |
 
 > **F 批的一个前置**：G 批的回滚版本 `change_type` 恒为 `modify`（DB CHECK 没有 `revert`），

@@ -135,6 +135,10 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 `{"items":[{id, requirement_id, parent_version_id, parent_version_no, version_no, version_title, change_type, requirement_snapshot, change_summary, diff_payload, feature_changes, created_by, reviewed_by, created_at}]}`
 
 > `id` / `requirement_id` / `diff_payload.source_id` 都是**字符串**（雪花 ID，见 §1.1）。
+>
+> ⚠️ **新增 `status`**（2026-09-16）：此前两个版本端点都**不返回** `status`，而 §8.5
+> 早就要求前端「用 `status === 'current'` 判断当前版，不要假设 version_no 最大」——
+> 等于把那条约定写在了空气里。现在 `/versions` 与 `/trace` 都给了。
 
 ### `GET /api/v1/requirements/{key}/features`
 入参 `at_version`（可选）、`include_deleted`。
@@ -166,9 +170,25 @@ capabilities（capabilities 那个带 `.catch` 兜底，见 §8.3）。
 > 所以这条数据上的 `modified` 仍为 0 是**真实结果，不是没修复**。
 
 ### `GET /api/v1/requirements/{key}/trace`
-需求主体 + 逐版本快照 + 每版来源链。顶层 `{requirement, versions}`。
-`requirement` 里有 `lock_version` —— 它**不再是死列**：写端点现在做乐观锁 CAS，
-冲突会以 409 体现（见 §4）。回滚产生的版本**没有来源**，该版本的 `sources` 为 `[]`（合法形状）。
+需求主体 + 逐版本快照 + **每版来源链**。顶层 `{requirement, versions}`。
+
+- 版本项含 `sources[]`（`source_id` / `source_type` / `requester_name` / `original_text` /
+  `structured_requirement` / `processing_status` / `submitted_at` …），
+  每项字段与 §4 待办列表同源。
+- `requirement` 里有 `lock_version` —— 它**不再是死列**：写端点现在做乐观锁 CAS，
+  冲突会以 409 体现（见 §4）。
+- 回滚产生的版本**没有来源**，该版本的 `sources` 为 `[]`（合法形状）。
+
+> ⚠️ **时间轴的「来源链」就在这里，不在 `/versions`。** 两个端点分工：
+> `/versions` 是轻量列表（含 `diff_payload` / `feature_changes`），`/trace` 多一份来源链。
+> 前端两个都并发拉，按 `version_no` 对齐即可 —— 不必为这一处再发一次请求。
+>
+> ⚠️ **没有「版本合流」这个字段，那是故意的。** 方案 `§3.3` 原本要在版本之间画一条虚线表示
+> 「本版并入了另一条 REQ 的哪一版」，但实测那个前提不成立：本系统的合并是
+> **「来源 → REQ」**，待合并的东西是一条 `requirement_source`、**还没有 requirement_key**
+> （`commit_nodes` 的 `_merge_confirmations` 里也写着「表结构装不下这条边」）。
+> 照原方案实现，那个字段会**恒等于版本自己所属的 REQ**，虚线就是实线的重复。
+> 真实存在的跨实体关系是「版本 ← 来源」，也就是上面的 `sources[]`。
 
 ### `GET /api/v1/requirements/{key}/relations`
 `{"items":[...]}`，**双向**（我指向别人 + 别人指向我），每项：

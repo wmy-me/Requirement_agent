@@ -1350,7 +1350,7 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
     if (req.final_requirement) html += `<p style="font-size:12px;color:var(--text-2);margin:2px 0 8px"></p>`;
     html += `<div class="section-label">能力与条件</div><div class="capability-block"></div>`;
     html += `<div class="section-label">当前功能明细</div><ul class="timeline feature-lines"></ul>`;
-    html += `<div class="section-label">版本 Diff</div><ul class="timeline diff-lines"></ul>`;
+    html += `<div class="section-label">版本 Diff</div><div class="diff-controls"></div><ul class="timeline diff-lines"></ul>`;
     html += `<div class="section-label">版本历史</div><ul class="timeline version-lines"></ul>`;
     html += `<div class="section-label">需求关系</div><ul class="timeline relation-lines"></ul>`;
     detailEl.innerHTML = html;
@@ -1372,30 +1372,144 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
       li.innerHTML = `<div class="t-head">${esc(f.feature_key || '')}${moduleTag}</div><div class="t-sub">引入 V${esc(f.origin_version_no || '')}${f.origin_source_id ? ` · source #${esc(f.origin_source_id)}` : ''}</div><pre>${esc(f.content || '')}</pre>`;
       featureLine.appendChild(li);
     });
-    const diffHtml = [];
-    (diffItems.added || []).forEach((item) => diffHtml.push(`<li><div class="t-head">新增 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
-    (diffItems.modified || []).forEach((item) => diffHtml.push(`<li><div class="t-head">修改 ${esc(item.feature_key || '')}</div><div class="t-sub">Before → After</div><pre>${esc(item.before || '')}\n---\n${esc(item.after || '')}</pre></li>`));
-    (diffItems.removed || []).forEach((item) => diffHtml.push(`<li><div class="t-head">删除 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
-    diffLine.innerHTML = diffHtml.length ? diffHtml.join('') : `<li style="border:0;padding-left:0"><span class="empty-hint">当前相邻版本无差异</span></li>`;
+    // —— 版本 Diff：可选任意两版 ——
+    // 后端一直支持 `from_version`/`to_version`，但前端从不传参，所以只能看相邻两版
+    // （方案 §3.3(c)）。版本下拉的选项来自同一份版本列表，不需要再拉接口。
+    const renderDiff = (d) => {
+      const rows = [];
+      (d.added || []).forEach((item) => rows.push(`<li><div class="t-head">新增 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
+      (d.modified || []).forEach((item) => rows.push(`<li><div class="t-head">修改 ${esc(item.feature_key || '')}</div><div class="t-sub">Before → After</div><pre>${esc(item.before || '')}\n---\n${esc(item.after || '')}</pre></li>`));
+      (d.removed || []).forEach((item) => rows.push(`<li><div class="t-head">删除 ${esc(item.feature_key || '')}</div><pre>${esc(item.content || '')}</pre></li>`));
+      diffLine.innerHTML = rows.length
+        ? rows.join('')
+        : `<li style="border:0;padding-left:0"><span class="empty-hint">这两版之间没有差异</span></li>`;
+    };
+    renderDiff(diffItems);
+
+    const diffControls = detailEl.querySelector('.diff-controls');
+    const versionNos = (vers.items || trace.versions || []).map((v) => v.version_no).sort((a, b) => a - b);
+    if (versionNos.length >= 2 && diffControls) {
+      const mk = (label, value) => {
+        const span = document.createElement('span');
+        span.textContent = label;
+        const sel = document.createElement('select');
+        versionNos.forEach((n) => {
+          const opt = document.createElement('option');
+          opt.value = String(n);
+          opt.textContent = `V${n}`;
+          if (n === value) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        diffControls.appendChild(span);
+        diffControls.appendChild(sel);
+        return sel;
+      };
+      const fromSel = mk('从', diffItems.from_version);
+      const toSel = mk('到', diffItems.to_version);
+      const reloadDiff = async () => {
+        try {
+          const d = await apiJson(
+            `/api/v1/requirements/${encodeURIComponent(key)}/diff`
+              + `?from_version=${encodeURIComponent(fromSel.value)}&to_version=${encodeURIComponent(toSel.value)}`
+          );
+          renderDiff(d || {});
+        } catch (err) {
+          diffLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">读取失败</span></li>`;
+        }
+      };
+      fromSel.addEventListener('change', reloadDiff);
+      toSel.addEventListener('change', reloadDiff);
+    }
+    // —— 版本时间轴 ——
+    //
+    // ⚠️ **这里没有「合流虚线」，那是故意的。** 方案 §3.3 原本要在版本之间画一条虚线，
+    //    表示「本版并入了另一条 REQ 的哪一版」。实测发现那个前提不成立：本系统的合并是
+    //    **「来源 → REQ」**，待合并的东西是一条 `requirement_source`、**还没有
+    //    requirement_key**，所以根本不存在「REQ 的版本并进另一条 REQ」这件事
+    //    （`commit_nodes` 的 `_merge_confirmations` 里也写着「表结构装不下这条边」）。
+    //    照原方案实现，那个字段会恒等于版本自己所属的 REQ，画出来就是实线的重复。
+    //
+    //    真实存在的跨实体关系是 **「版本 ← 来源」**（`requirement_version_source`），
+    //    也就是下面那条「← 来源 #…」。它此前**从没被渲染过**。
+    //
+    //    版本列表用 `/versions`，来源链在 `/trace` 里 —— 两个端点各有分工，都已并发拉过，
+    //    按 version_no 对上即可（不为这一处再发一次请求）。
+    const sourcesByVersion = {};
+    (trace.versions || []).forEach((v) => { sourcesByVersion[v.version_no] = v.sources || []; });
     const versions = vers.items || trace.versions || [];
-    if (!versions.length) versionLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无版本记录</span></li>`;
-    versions.forEach((v) => {
-      const li = document.createElement('li');
-      const head = document.createElement('div');
-      head.className = 't-head';
-      head.textContent = `V${v.version_no} · ${v.change_type || ''}`;
-      const sub = document.createElement('div');
-      sub.className = 't-sub';
-      sub.textContent = `${v.change_summary || v.version_title || ''}（${v.created_by || ''} · ${fmtTime(v.created_at) || ''}）`;
-      li.appendChild(head);
-      li.appendChild(sub);
-      if (v.requirement_snapshot) {
-        const pre = document.createElement('pre');
-        pre.textContent = v.requirement_snapshot;
-        li.appendChild(pre);
-      }
-      versionLine.appendChild(li);
-    });
+    if (!versions.length) {
+      versionLine.innerHTML = `<li style="border:0;padding-left:0"><span class="empty-hint">无版本记录</span></li>`;
+    } else {
+      versions.forEach((v) => {
+        const li = document.createElement('li');
+        // ct-* 决定节点颜色；当前版本再单独标一下
+        li.className = `ct-${v.change_type || 'add'}${v.status === 'current' ? ' ver-current' : ''}`;
+
+        const head = document.createElement('div');
+        head.className = 't-head';
+        head.textContent = `V${v.version_no} · ${v.change_type || ''}${v.status === 'current' ? ' · 当前' : ''}`;
+        li.appendChild(head);
+
+        const sub = document.createElement('div');
+        sub.className = 't-sub';
+        sub.textContent = `${v.change_summary || v.version_title || ''}（${v.created_by || ''} · ${fmtTime(v.created_at) || ''}）`;
+        li.appendChild(sub);
+
+        // 同主线内的前驱
+        if (v.parent_version_no) {
+          const link = document.createElement('div');
+          link.className = 'ver-link';
+          link.textContent = `↑ 基于 V${v.parent_version_no}`;
+          li.appendChild(link);
+        }
+
+        // 本版由哪条来源产生 —— 真实的溯源链
+        (sourcesByVersion[v.version_no] || []).forEach((s) => {
+          const line = document.createElement('div');
+          line.className = 'ver-source';
+          const who = s.requester_name ? ` · ${s.requester_name}` : '';
+          line.textContent = `← 来源 #${s.source_id || ''} · ${s.source_type || ''}${who}`;
+          li.appendChild(line);
+        });
+
+        // 本版的功能级变更（收起，点开才看）
+        const changes = v.feature_changes || [];
+        if (changes.length) {
+          const det = document.createElement('details');
+          det.className = 'ver-more';
+          const sum = document.createElement('summary');
+          sum.textContent = `本版变更 ${changes.length} 条`;
+          det.appendChild(sum);
+          const box = document.createElement('div');
+          box.className = 'ver-changes';
+          changes.forEach((c) => {
+            const row = document.createElement('div');
+            if (c.op === 'modify') {
+              row.textContent = `${c.feature_key} 改写：${c.before || ''} → ${c.after || ''}`;
+            } else {
+              row.textContent = `${c.feature_key} ${c.op === 'add' ? '新增' : '删除'}：${c.content || ''}`;
+            }
+            box.appendChild(row);
+          });
+          det.appendChild(box);
+          li.appendChild(det);
+        }
+
+        // 正文快照也收起来 —— 此前无条件铺整段，一版几百字会把时间轴淹掉
+        if (v.requirement_snapshot) {
+          const det = document.createElement('details');
+          det.className = 'ver-more';
+          const sum = document.createElement('summary');
+          sum.textContent = '正文快照';
+          det.appendChild(sum);
+          const pre = document.createElement('pre');
+          pre.textContent = v.requirement_snapshot;
+          det.appendChild(pre);
+          li.appendChild(det);
+        }
+        versionLine.appendChild(li);
+      });
+    }
 
     // —— 需求关系：分析阶段算出、审核通过时落库的 REQ↔REQ 边；proposed 的等待人工裁决 ——
     const relations = relationRes.items || [];

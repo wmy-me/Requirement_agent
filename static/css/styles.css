@@ -355,6 +355,26 @@ input, textarea { font-family: inherit; }
 .timeline .t-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
 .timeline pre { margin: 6px 0 0; font-size: 11px; background: var(--surface-2); border-radius: 8px; padding: 8px; overflow: auto; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
 
+/* —— 版本时间轴（F 批）——
+   节点颜色按 change_type 区分：一眼看出这一版是新建、追加、改写还是删除。
+   当前版本把竖线换成主色，免得在一长串历史里找「我现在在哪」。 */
+.timeline li.ct-new::before { background: var(--accent); }
+.timeline li.ct-add::before { background: var(--success); }
+.timeline li.ct-modify::before { background: var(--warning); }
+.timeline li.ct-delete::before { background: var(--danger); }
+.timeline li.ver-current { border-left-color: var(--accent); }
+.ver-link, .ver-source { font-size: 11px; color: var(--text-2); margin-top: 3px; }
+.ver-more { margin-top: 5px; }
+.ver-more > summary { font-size: 11px; color: var(--accent-ink); cursor: pointer; }
+.ver-more > summary:hover { text-decoration: underline; }
+/* ⚠️ 变更清单用 div 不用 li —— `.timeline li` 会给每个 li 加竖线与圆点，
+   嵌在节点里会连带继承，看起来像一串版本。 */
+.ver-changes { margin: 5px 0 0; padding: 7px 9px; background: var(--surface-2); border-radius: 8px; }
+.ver-changes > div { font-size: 11px; color: var(--text-2); word-break: break-word; }
+.ver-changes > div + div { margin-top: 3px; }
+.diff-controls { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 11px; color: var(--text-3); }
+.diff-controls select { font-size: 11px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+
 .audit-item { display: flex; gap: 8px; padding: 7px 4px; border-bottom: 1px dashed var(--border); font-size: 12px; }
 .audit-item .a-time { color: var(--text-3); flex: none; font-size: 11px; }
 .audit-item .a-type { color: var(--text); font-weight: 600; }
