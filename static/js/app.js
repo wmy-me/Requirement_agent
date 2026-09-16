@@ -1271,9 +1271,21 @@ function renderCapabilityBlock(el, data) {
   const caps = capabilities.map((c) => {
     const tag = REVIEW_STATUS_LABEL[c.review_status] || c.review_status || '';
     const cls = c.review_status === 'confirmed' ? 'ok' : (c.review_status === 'dismissed' ? 'off' : 'wait');
+    // 能力本身还没被确认时额外提示 —— 此时它连匹配都参与不了（见职责边界 §11）
+    const capWaiting = c.capability_status === 'pending_confirmation'
+      ? ' <span class="cap-tag wait">能力待确认</span>' : '';
+    // 只有 proposed 才给裁决按钮；confirmed/dismissed 是终态（撤回需重新分析）
+    const actions = c.review_status === 'proposed'
+      ? `<div class="doc-actions">
+           <button class="btn ghost" data-cap-act="confirmed"
+                   data-f="${c.feature_id}" data-c="${c.capability_id}">确认关联</button>
+           <button class="btn ghost" data-cap-act="dismissed"
+                   data-f="${c.feature_id}" data-c="${c.capability_id}">驳回</button>
+         </div>` : '';
     return `<li>
-      <div class="t-head">${esc(c.display_name || '')} <span class="cap-tag ${cls}">${esc(tag)}</span></div>
+      <div class="t-head">${esc(c.display_name || '')} <span class="cap-tag ${cls}">${esc(tag)}</span>${capWaiting}</div>
       <div class="t-sub">${esc(c.feature_key || '')} · ${esc(c.feature_content || '')}</div>
+      ${actions}
     </li>`;
   }).join('');
   const cons = constraints.map((c) => {
@@ -1286,6 +1298,29 @@ function renderCapabilityBlock(el, data) {
     <ul class="timeline cap-lines">${caps || '<li><div class="t-sub">无</div></li>'}</ul>
     ${constraints.length ? `<div class="section-label" style="margin-top:8px">当前版本条件</div>
       <ul class="timeline cap-lines">${cons}</ul>` : ''}`;
+
+  // 事件委托：裁决后局部重载，不重新拉整页
+  el.onclick = async (e) => {
+    const btn = e.target.closest('[data-cap-act]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await apiJson('/api/v1/feature-capabilities', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feature_id: Number(btn.dataset.f),
+          capability_id: Number(btn.dataset.c),
+          status: btn.dataset.capAct,
+        }),
+      });
+      toast(btn.dataset.capAct === 'confirmed' ? '已确认该能力关联' : '已驳回该能力关联', 'ok');
+      if (el._reload) el._reload();
+    } catch (err) {
+      toast('裁决失败：' + err.message, 'err');
+      btn.disabled = false;
+    }
+  };
 }
 
 async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
@@ -1317,7 +1352,9 @@ async function showRequirementDetail(key, name, targetId = 'lib-panel-detail') {
     detailEl.innerHTML = html;
     detailEl.querySelector('.d-title').textContent = `${key} · ${name || ''}`;
     if (req.final_requirement) detailEl.querySelector('p').textContent = req.final_requirement;
-    renderCapabilityBlock(detailEl.querySelector('.capability-block'), capabilityRes);
+    const capBlock = detailEl.querySelector('.capability-block');
+    capBlock._reload = () => showRequirementDetail(key, name, targetId);
+    renderCapabilityBlock(capBlock, capabilityRes);
     const featureLine = detailEl.querySelector('.feature-lines');
     const diffLine = detailEl.querySelector('.diff-lines');
     const versionLine = detailEl.querySelector('.version-lines');

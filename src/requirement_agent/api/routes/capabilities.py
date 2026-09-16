@@ -20,6 +20,12 @@ from requirement_agent.api.dependencies import (
     constraint_repo,
     feature_capability_repo,
 )
+from requirement_agent.api.schemas.capabilities import (
+    CapabilityStatusRequest,
+    ConstraintAliasRequest,
+    FeatureCapabilityReviewRequest,
+)
+from requirement_agent.config.settings import settings
 
 router = APIRouter()
 
@@ -100,3 +106,61 @@ async def list_streams_by_capability(
         limit=limit,
     )
     return {"items": items}
+
+
+# ── 人工裁决（批次 5）────────────────────────────────────────────────────
+#
+# 这是「受控词表新增」与「能力匹配」两条职责边界的落地入口。
+# 按方案 §11，**AI 没有任何自动通道能走到这里** —— proposed / pending_confirmation
+# 只能由人翻成 confirmed / active。
+
+
+@router.patch("/api/v1/feature-capabilities")
+async def review_feature_capability(payload: FeatureCapabilityReviewRequest) -> dict[str, object]:
+    """裁决「某条功能有没有某个能力」（方案 §11 B 级：人工一键确认）。
+
+    只接受 `confirmed` / `dismissed`。**这是能力在需求上正式成立的唯一入口** ——
+    在此之前关联一律是 `proposed`（AI 提议），搜索与展示都会如实标注。
+    """
+    updated = feature_capability_repo.update_status(
+        feature_id=payload.feature_id,
+        capability_id=payload.capability_id,
+        status=payload.status,
+        decided_by=settings.api_actor_id,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="feature capability link not found"
+        )
+    return updated
+
+
+@router.patch("/api/v1/capabilities/{capability_id}")
+async def update_capability_status(
+    capability_id: int, payload: CapabilityStatusRequest
+) -> dict[str, object]:
+    """裁决能力本身：确认成立（`active`）/ 停用（`deprecated`）/ 打回提案态。
+
+    `active` 之后该能力才参与 `find_exact` 的精确匹配 —— 也就是说，
+    **AI 提议的新能力在被人确认之前，后续需求都匹配不到它**。
+    """
+    updated = capability_repo.update_status(capability_id, payload.status)
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="capability not found")
+    return updated
+
+
+@router.post("/api/v1/constraints/aliases")
+async def add_constraint_alias(payload: ConstraintAliasRequest) -> dict[str, object]:
+    """把一个原始表达登记为某条件的别名（人工四个选项之一）。
+
+    另外三个选项（合并已有条件 / 新增正式条件 / 不结构化只留原文）分别对应
+    直接沿用现有行、走条件词表、以及什么都不做 —— 都不需要新端点。
+    """
+    if constraint_repo.get(payload.constraint_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="constraint not found")
+    return constraint_repo.add_alias(
+        alias=payload.alias,
+        constraint_id=payload.constraint_id,
+        created_by=settings.api_actor_id or "review",
+    )
