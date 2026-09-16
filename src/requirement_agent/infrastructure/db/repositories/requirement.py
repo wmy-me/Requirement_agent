@@ -733,10 +733,12 @@ class RequirementVersionRepository:
                     """
                     INSERT INTO requirement_version (
                         id, requirement_id, parent_version_id, version_no, version_title, change_type,
-                        requirement_snapshot, change_summary, diff_payload, created_by, reviewed_by, feature_changes, parent_version_no
+                        requirement_snapshot, change_summary, diff_payload, created_by, reviewed_by, feature_changes, parent_version_no,
+                        capability_snapshot, constraint_snapshot, status
                     ) VALUES (
                         :id, :requirement_id, :parent_version_id, :version_no, :version_title, :change_type,
-                        :requirement_snapshot, :change_summary, :diff_payload, :created_by, :reviewed_by, :feature_changes, :parent_version_no
+                        :requirement_snapshot, :change_summary, :diff_payload, :created_by, :reviewed_by, :feature_changes, :parent_version_no,
+                        CAST(:capability_snapshot AS JSONB), CAST(:constraint_snapshot AS JSONB), :status
                     )
                     RETURNING id, requirement_id, version_no
                     """
@@ -755,6 +757,13 @@ class RequirementVersionRepository:
                     "reviewed_by": version.reviewed_by,
                     "feature_changes": json.dumps(getattr(version, "feature_changes", []) or []),
                     "parent_version_no": getattr(version, "parent_version_no", None),
+                    "capability_snapshot": json.dumps(
+                        getattr(version, "capability_snapshot", None) or []
+                    ),
+                    "constraint_snapshot": json.dumps(
+                        getattr(version, "constraint_snapshot", None) or []
+                    ),
+                    "status": getattr(version, "status", "current") or "current",
                 },
             ).mappings().one()
             if owns_session:
@@ -769,6 +778,52 @@ class RequirementVersionRepository:
                 session.rollback()
                 session.close()
             raise
+
+    def supersede_current(
+        self,
+        *,
+        requirement_id: int,
+        keep_version_no: int,
+        session: Session | None = None,
+    ) -> int:
+        """把该主线里**除 `keep_version_no` 之外**的 current 版本降为 `superseded`。
+
+        ⚠️ **必须在插入新版本之前调用。** 数据库上有部分唯一索引
+        `uq_version_current (requirement_id) WHERE status = 'current'`，
+        而 `save()` 插入时状态默认就是 `current` —— 若先插入再降级，
+        **第二条版本写入时会直接撞唯一约束**（实测踩过一次）。
+        正确顺序：先调本方法把旧的降级，再 `save()` 插入新的。
+
+        `superseded_by_version_no` 用 `COALESCE` 只填一次：历史版本一旦被某版本取代
+        就固定下来，不该被后续版本改写。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE requirement_version
+                    SET status = 'superseded',
+                        superseded_by_version_no = COALESCE(superseded_by_version_no, :version_no)
+                    WHERE requirement_id = :requirement_id
+                      AND version_no <> :version_no
+                      AND status = 'current'
+                    """
+                ),
+                {"requirement_id": requirement_id, "version_no": keep_version_no},
+            )
+            affected = result.rowcount
+            if owns_session:
+                session.commit()
+            return affected
+        except Exception:
+            if owns_session:
+                session.rollback()
+            raise
+        finally:
+            if owns_session:
+                session.close()
 
     def link_source(self, version_id: int, source_id: int, session: Session | None = None) -> None:
         """记录“版本 ← 来源”关联（relation_type='source'），幂等（重复关联忽略）。"""

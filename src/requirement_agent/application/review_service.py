@@ -10,6 +10,7 @@ from requirement_agent.workflows.commit_nodes import feature_rows_for_source
 from requirement_agent.workflows.graphs import run_decision
 from requirement_agent.infrastructure.db.repositories import (
     AuditRepository,
+    FeatureCapabilityRepository,
     RequirementFeatureRepository,
     RequirementMasterRepository,
     RequirementRelationRepository,
@@ -34,6 +35,7 @@ class ReviewService:
         audit_repo: AuditRepository | None = None,
         outbox_repo: OutboxRepository | None = None,
         relation_repo: RequirementRelationRepository | None = None,
+        feature_capability_repo: FeatureCapabilityRepository | None = None,
         session_factory: Callable[[], Session] = SessionLocal,
     ) -> None:
         self.review_repo = review_repo or RequirementReviewRepository()
@@ -44,6 +46,7 @@ class ReviewService:
         self.audit_repo = audit_repo or AuditRepository()
         self.outbox_repo = outbox_repo or OutboxRepository()
         self.relation_repo = relation_repo or RequirementRelationRepository()
+        self.feature_capability_repo = feature_capability_repo or FeatureCapabilityRepository()
         self.session_factory = session_factory
 
     def submit_decision(
@@ -91,6 +94,7 @@ class ReviewService:
             "audit_repo": self.audit_repo,
             "outbox_repo": self.outbox_repo,
             "relation_repo": self.relation_repo,
+            "feature_capability_repo": self.feature_capability_repo,
             "source_id": source_id,
             "decision": decision,
             "reviewer_id": reviewer_id,

@@ -491,3 +491,190 @@ class ConstraintVocabRepository:
             "created_at": as_display_iso(row["created_at"]),
             "updated_at": as_display_iso(row["updated_at"]),
         }
+
+
+class FeatureCapabilityRepository:
+    """功能条目 ↔ 能力的关联（方案批次 3）。
+
+    **关联挂在 feature 上，不是挂在 REQ 上** —— 这是方案的核心决定：feature 已有
+    一整套生命周期（`status` / `origin_version_no` / `removed_version_no`），
+    需求更新后不再支持某能力 → 该 feature 被软删 → 关联自动失效，不需要任何新代码。
+    这正好回答「某个需求不再支持 PDF 导出了，把来源删掉」那个场景。
+
+    写入一律 `proposed`（`link_many` 在 SQL 里写死）：AI 提议的关联需要人工裁决，
+    **只有 `confirmed` 才代表该能力在这个需求上正式成立**。
+    """
+
+    def link_many(
+        self,
+        *,
+        links: list[dict[str, object]],
+        session: Session | None = None,
+    ) -> int:
+        """批量写入关联，返回**实际新增**条数。
+
+        `links` 元素为 `{"feature_id", "capability_id", "raw_text"?, "confidence"?}`。
+        重复关联走 `DO NOTHING`：同一条关联会被反复算出，不该重复落，
+        而且**不能覆盖人工已有的裁决**（confirmed/dismissed 不该被下一次分析翻回 proposed）。
+        """
+        if not links:
+            return 0
+        owns_session = session is None
+        session = session or SessionLocal()
+        inserted = 0
+        try:
+            for item in links:
+                result = session.execute(
+                    text(
+                        """
+                        INSERT INTO feature_capability (
+                            feature_id, capability_id, raw_text, confidence, review_status
+                        ) VALUES (
+                            :feature_id, :capability_id, :raw_text, :confidence, 'proposed'
+                        )
+                        ON CONFLICT (feature_id, capability_id) DO NOTHING
+                        """
+                    ),
+                    {
+                        "feature_id": int(item["feature_id"]),
+                        "capability_id": int(item["capability_id"]),
+                        "raw_text": _text(item.get("raw_text"))[:2000],
+                        "confidence": item.get("confidence"),
+                    },
+                )
+                inserted += result.rowcount
+            if owns_session:
+                session.commit()
+            return inserted
+        except Exception:
+            if owns_session:
+                session.rollback()
+            raise
+        finally:
+            if owns_session:
+                session.close()
+
+    def list_for_requirement(
+        self,
+        requirement_id: int,
+        *,
+        review_status: str | None = None,
+        session: Session | None = None,
+    ) -> list[dict[str, object]]:
+        """某条需求下全部「功能 ↔ 能力」关联（含 feature 与能力的关键字段）。
+
+        只返回**仍生效**的 feature（`status='active'`）—— 已删功能上的关联
+        不该出现在当前视图里（它仍然留在表中，供历史版本查询）。
+        """
+        owns_session = session is None
+        session = session or SessionLocal()
+        clauses = ["f.requirement_id = :rid", "f.status = 'active'"]
+        params: dict[str, object] = {"rid": requirement_id}
+        if review_status:
+            clauses.append("fc.review_status = :rs")
+            params["rs"] = review_status
+        try:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT fc.feature_id, fc.capability_id, fc.raw_text, fc.confidence,
+                           fc.review_status, fc.decided_by,
+                           f.feature_key, f.content AS feature_content,
+                           c.action, c.object, c.display_name, c.status AS capability_status
+                    FROM feature_capability fc
+                    JOIN requirement_feature f ON f.id = fc.feature_id
+                    JOIN capability c ON c.id = fc.capability_id
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY f.ordinal, c.action, c.object
+                    """
+                ),
+                params,
+            ).mappings().all()
+        finally:
+            if owns_session:
+                session.close()
+        return [self._normalize(row) for row in rows]
+
+    def list_for_feature(
+        self, feature_id: int, *, session: Session | None = None
+    ) -> list[dict[str, object]]:
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT fc.feature_id, fc.capability_id, fc.raw_text, fc.confidence,
+                           fc.review_status, fc.decided_by,
+                           NULL::TEXT AS feature_key, NULL::TEXT AS feature_content,
+                           c.action, c.object, c.display_name, c.status AS capability_status
+                    FROM feature_capability fc
+                    JOIN capability c ON c.id = fc.capability_id
+                    WHERE fc.feature_id = :fid
+                    ORDER BY c.action, c.object
+                    """
+                ),
+                {"fid": feature_id},
+            ).mappings().all()
+        finally:
+            if owns_session:
+                session.close()
+        return [self._normalize(row) for row in rows]
+
+    def update_status(
+        self,
+        *,
+        feature_id: int,
+        capability_id: int,
+        status: str,
+        decided_by: str | None = None,
+        session: Session | None = None,
+    ) -> dict[str, object] | None:
+        """人工裁决一条关联（confirmed / dismissed）。**这是能力正式成立的唯一入口。**"""
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            row = session.execute(
+                text(
+                    """
+                    UPDATE feature_capability
+                    SET review_status = :status, decided_by = :decided_by
+                    WHERE feature_id = :fid AND capability_id = :cid
+                    RETURNING feature_id, capability_id, review_status
+                    """
+                ),
+                {"fid": feature_id, "cid": capability_id, "status": status, "decided_by": decided_by},
+            ).mappings().first()
+            if owns_session:
+                session.commit()
+        except Exception:
+            if owns_session:
+                session.rollback()
+            raise
+        finally:
+            if owns_session:
+                session.close()
+        if not row:
+            return None
+        return {
+            "feature_id": int(row["feature_id"]),
+            "capability_id": int(row["capability_id"]),
+            "review_status": row["review_status"],
+        }
+
+    @staticmethod
+    def _normalize(row) -> dict[str, object]:
+        return {
+            "feature_id": int(row["feature_id"]),
+            "capability_id": int(row["capability_id"]),
+            "feature_key": row.get("feature_key"),
+            "feature_content": row.get("feature_content"),
+            "action": row["action"],
+            "object": row["object"],
+            "display_name": row["display_name"],
+            "capability_status": row.get("capability_status"),
+            "raw_text": row.get("raw_text"),
+            "confidence": float(row["confidence"]) if row.get("confidence") is not None else None,
+            "review_status": row["review_status"],
+            "decided_by": row.get("decided_by"),
+        }

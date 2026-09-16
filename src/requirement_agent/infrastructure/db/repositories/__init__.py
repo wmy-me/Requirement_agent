@@ -11,6 +11,7 @@ from requirement_agent.infrastructure.db.repositories.audit import AuditReposito
 from requirement_agent.infrastructure.db.repositories.capability import (
     CapabilityRepository,
     ConstraintVocabRepository,
+    FeatureCapabilityRepository,
 )
 from requirement_agent.infrastructure.db.repositories.chat import ChatRepository
 from requirement_agent.infrastructure.db.repositories.document import DocumentAssetRepository
@@ -32,6 +33,7 @@ __all__ = [
     "ChatRepository",
     "ConstraintVocabRepository",
     "DocumentAssetRepository",
+    "FeatureCapabilityRepository",
     "MemoryRepository",
     "RequirementFeatureRepository",
     "RequirementMasterRepository",

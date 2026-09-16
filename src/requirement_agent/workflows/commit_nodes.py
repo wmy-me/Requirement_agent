@@ -237,6 +237,112 @@ def _merge_confirmations(
     return confirmations
 
 
+def _normalize_text(value: Any) -> str:
+    """归一化文本用于对应：去掉所有空白（含全角空格）。"""
+    return "".join(str(value or "").split())
+
+
+def _build_capability_links(
+    active_features: list[dict[str, Any]],
+    match_payload: dict[str, Any],
+) -> list[dict[str, object]]:
+    """把分析阶段匹配到的能力挂到对应的 feature 上（批次 3）。
+
+    靠 `capabilities[].raw_text` 与 `feature.content` 的**归一后精确匹配**建立对应 ——
+    抽取时 `raw_text` 本该就是那条子需求的原话。
+
+    **对不上就不挂**：宁可少挂，也不要挂错。挂错会让能力视图里出现
+    「这条需求有这个能力」的假象，而它正是人工审核要依赖的东西。
+    """
+    by_text: dict[str, dict[str, Any]] = {}
+    for hit in (match_payload or {}).get("capabilities") or []:
+        if not isinstance(hit, dict) or not hit.get("capability_id"):
+            continue
+        key = _normalize_text(hit.get("raw_text"))
+        if key:
+            by_text.setdefault(key, hit)
+
+    links: list[dict[str, object]] = []
+    for feature in active_features:
+        hit = by_text.get(_normalize_text(feature.get("content")))
+        if hit is None:
+            continue
+        links.append(
+            {
+                "feature_id": int(feature["id"]),
+                "capability_id": int(hit["capability_id"]),
+                # 用 feature 的正文而不是模型改写的 raw_text：审核页要展示的是
+                # 落库后的功能原文，两者并排比对才有意义
+                "raw_text": str(feature.get("content") or "")[:2000],
+            }
+        )
+    return links
+
+
+def _capability_snapshot(
+    active_features: list[dict[str, Any]],
+    match_payload: dict[str, Any],
+    links: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """按**本版本的功能集**冻结一份能力快照。
+
+    一个能力可能由多条功能支撑（如「导出 Excel」既有「导出报表」也有「批量导出」），
+    所以按 capability 聚合出 `feature_keys`。
+    """
+    hits = {
+        int(hit["capability_id"]): hit
+        for hit in (match_payload or {}).get("capabilities") or []
+        if isinstance(hit, dict) and hit.get("capability_id")
+    }
+    by_feature = {int(link["feature_id"]): link for link in links}
+
+    grouped: dict[int, dict[str, object]] = {}
+    for feature in active_features:
+        link = by_feature.get(int(feature["id"]))
+        if link is None:
+            continue
+        capability_id = int(link["capability_id"])
+        entry = grouped.setdefault(
+            capability_id,
+            {
+                "capability_id": capability_id,
+                "action": hits.get(capability_id, {}).get("action"),
+                "object": hits.get(capability_id, {}).get("object"),
+                "display_name": hits.get(capability_id, {}).get("display_name"),
+                "review_status": "proposed",
+                "feature_keys": [],
+            },
+        )
+        entry["feature_keys"].append(feature.get("feature_key"))
+    return list(grouped.values())
+
+
+def _constraint_snapshot(match_payload: dict[str, Any]) -> list[dict[str, object]]:
+    """冻结条件匹配结果：命中的记正式键，未命中的只记原文。
+
+    未命中的**记下来但不入词表** —— 人工审核时要能看到「模型提过这个条件」，
+    才有依据决定是合并、新增、作为别名，还是不结构化。
+    """
+    constraints = (match_payload or {}).get("constraints") or {}
+    snapshot: list[dict[str, object]] = []
+    for item in constraints.get("matched") or []:
+        if isinstance(item, dict):
+            snapshot.append(
+                {
+                    "raw": item.get("raw"),
+                    "constraint_key": item.get("constraint_key"),
+                    "matched": True,
+                    "alias_hit": bool(item.get("alias_hit")),
+                }
+            )
+    for item in constraints.get("unmatched") or []:
+        if isinstance(item, dict):
+            snapshot.append(
+                {"raw": item.get("raw"), "constraint_key": None, "matched": False}
+            )
+    return snapshot
+
+
 def feature_rows_for_source(source: Any, edited_requirement: str | None) -> list[Any]:
     """来源 → 参与版本治理的功能行。**唯一入口，新建支与合并支都必须用它。**
 
@@ -349,6 +455,22 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
             # master.final_requirement 始终以当前 active features 的确定性拼接结果为准。
             canonical_req_text = joined
 
+    # —— 能力关联与版本快照（批次 3）——
+    # 必须在 version 构造**之前**算好：快照要随版本一起落库。
+    # 关联一律写 proposed（仓储层在 SQL 里写死），**只有人工确认才代表能力正式成立**。
+    capability_links: list[dict[str, object]] = []
+    capability_snapshot: list[dict[str, object]] = []
+    constraint_snapshot: list[dict[str, object]] = []
+    feature_capability_repo = ctx.get("feature_capability_repo")
+    if feature_repo is not None and master.id is not None:
+        active_features = feature_repo.list_active(int(master.id), session=session)
+        match_payload = source.metadata.get("capability_match") or {}
+        capability_links = _build_capability_links(active_features, match_payload)
+        capability_snapshot = _capability_snapshot(active_features, match_payload, capability_links)
+        constraint_snapshot = _constraint_snapshot(match_payload)
+        if feature_capability_repo is not None and capability_links:
+            feature_capability_repo.link_many(links=capability_links, session=session)
+
     version = RequirementVersion(
         requirement_id=int(master.id or 0),
         parent_version_id=None,
@@ -359,6 +481,8 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
         requirement_snapshot=canonical_req_text,
         change_summary=comment or "审核通过并生成版本快照",
         feature_changes=feature_changes,
+        capability_snapshot=capability_snapshot,
+        constraint_snapshot=constraint_snapshot,
         diff_payload={
             "decision": decision,
             "reviewer_id": reviewer_id,
@@ -381,6 +505,12 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
         },
         created_by=reviewer_id,
         reviewed_by=reviewer_id,
+    )
+    # ⚠️ **必须先把旧的 current 降级，再插入新版本。**
+    # 数据库的部分唯一索引不允许同主线两个 current 并存，而 save() 插入时状态默认
+    # 就是 current —— 顺序反过来会在**第二条版本**上直接撞唯一约束（实测踩过一次）。
+    ctx["version_repo"].supersede_current(
+        requirement_id=int(master.id or 0), keep_version_no=next_version, session=session
     )
     saved_version = ctx["version_repo"].save(version, session=session)
     if saved_version.id is not None and source.id is not None:

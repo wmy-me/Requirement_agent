@@ -99,6 +99,26 @@ class FakeVersionRepo:
         self.links.append((version_id, source_id))
         return None
 
+    def supersede_current(self, *, requirement_id, keep_version_no, session=None):
+        """批次 3：把旧的 current 降级。**必须先于 save 调用**（见仓储层 docstring）。"""
+        self.superseded = (requirement_id, keep_version_no)
+        return 1
+
+
+class FakeFeatureCapabilityRepo:
+    """批次 3 的 feature ↔ capability 关联。
+
+    必须显式传入：不传时 ReviewService 会默认构造**真实**仓储，
+    而这里的 session 是 FakeSession（没有 execute）。与 FakeRelationRepo 同理。
+    """
+
+    def __init__(self):
+        self.links = []
+
+    def link_many(self, *, links, session=None):
+        self.links.extend(links)
+        return len(links)
+
 
 class FakeFeatureRepo:
     def __init__(self):
@@ -245,6 +265,7 @@ def test_review_service_approves_and_commits_version() -> None:
         audit_repo=FakeAuditRepo(),
         outbox_repo=outbox_repo,
         relation_repo=FakeRelationRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
 
@@ -297,6 +318,7 @@ def test_review_service_uses_structured_extraction_without_manual_edit() -> None
         audit_repo=FakeAuditRepo(),
         outbox_repo=outbox_repo,
         relation_repo=FakeRelationRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
 
@@ -343,6 +365,7 @@ def test_review_service_merges_into_existing_requirement_with_feature_overrides(
         version_repo=version_repo,
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
 
@@ -407,6 +430,7 @@ def test_review_service_merge_without_overrides_keeps_target_name() -> None:
         version_repo=version_repo,
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
 
@@ -451,6 +475,7 @@ def _merge_and_capture_prune(merge_mode: str | None) -> bool:
         version_repo=FakeVersionRepo(),
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
     extra = {"merge_mode": merge_mode} if merge_mode else {}
@@ -481,6 +506,7 @@ def test_review_service_rolls_back_when_audit_write_fails() -> None:
         version_repo=FakeVersionRepo(),
         audit_repo=FailingAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
+        feature_capability_repo=FakeFeatureCapabilityRepo(),
         session_factory=lambda: session,
     )
 

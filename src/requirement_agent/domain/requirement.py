@@ -69,6 +69,15 @@ class RequirementVersion:
     id: int | None = None
     diff_payload: dict[str, object] = field(default_factory=dict)
     feature_changes: list[dict[str, object]] = field(default_factory=list)
+    # —— 能力模型（批次 3）——
+    # 这两个是**快照**：冻结「做这个版本时系统是怎么理解能力与条件的」。
+    # 不是真相（真相在 feature_capability 与词表），只是留档 —— 词表日后改名，
+    # 快照不该跟着变，否则历史会被污染。
+    capability_snapshot: list[dict[str, object]] = field(default_factory=list)
+    constraint_snapshot: list[dict[str, object]] = field(default_factory=list)
+    # draft / pending_review / current / superseded；同主线只有一个 current
+    # （由数据库的部分唯一索引 `uq_version_current` 保证，不靠应用自觉）
+    status: str = "current"
     created_by: str = "system"
     reviewed_by: str = "system"
 
