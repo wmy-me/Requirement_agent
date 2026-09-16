@@ -120,6 +120,23 @@ class FakeFeatureCapabilityRepo:
         return len(links)
 
 
+class FakeTitleRepo:
+    """候选标题仓储。
+
+    必须显式传入：不传时 ReviewService 会默认构造**真实**仓储，而这里的 session
+    是 FakeSession。当前测试之所以没炸，只是因为 fixture 的元数据里没有
+    business_object / capability_match，派生结果为空 —— 那种「碰巧没事」的隐性
+    炸弹（同 FakeRelationRepo 的说明）。
+    """
+
+    def __init__(self):
+        self.titles = []
+
+    def upsert_many(self, *, requirement_id, titles, session=None):
+        self.titles.extend(titles)
+        return len(titles)
+
+
 class FakeFeatureRepo:
     def __init__(self):
         self.features = []
@@ -266,6 +283,7 @@ def test_review_service_approves_and_commits_version() -> None:
         outbox_repo=outbox_repo,
         relation_repo=FakeRelationRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
 
@@ -319,6 +337,7 @@ def test_review_service_uses_structured_extraction_without_manual_edit() -> None
         outbox_repo=outbox_repo,
         relation_repo=FakeRelationRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
 
@@ -366,6 +385,7 @@ def test_review_service_merges_into_existing_requirement_with_feature_overrides(
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
 
@@ -431,6 +451,7 @@ def test_review_service_merge_without_overrides_keeps_target_name() -> None:
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
 
@@ -476,6 +497,7 @@ def _merge_and_capture_prune(merge_mode: str | None) -> bool:
         audit_repo=FakeAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
     extra = {"merge_mode": merge_mode} if merge_mode else {}
@@ -507,6 +529,7 @@ def test_review_service_rolls_back_when_audit_write_fails() -> None:
         audit_repo=FailingAuditRepo(),
         outbox_repo=FakeOutboxRepo(),
         feature_capability_repo=FakeFeatureCapabilityRepo(),
+        title_repo=FakeTitleRepo(),
         session_factory=lambda: session,
     )
 

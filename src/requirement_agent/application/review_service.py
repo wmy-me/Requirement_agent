@@ -16,6 +16,7 @@ from requirement_agent.infrastructure.db.repositories import (
     RequirementRelationRepository,
     RequirementReviewRepository,
     RequirementSourceRepository,
+    RequirementTitleCandidateRepository,
     RequirementVersionRepository,
 )
 from requirement_agent.infrastructure.db.session import SessionLocal
@@ -36,6 +37,7 @@ class ReviewService:
         outbox_repo: OutboxRepository | None = None,
         relation_repo: RequirementRelationRepository | None = None,
         feature_capability_repo: FeatureCapabilityRepository | None = None,
+        title_repo: RequirementTitleCandidateRepository | None = None,
         session_factory: Callable[[], Session] = SessionLocal,
     ) -> None:
         self.review_repo = review_repo or RequirementReviewRepository()
@@ -47,6 +49,7 @@ class ReviewService:
         self.outbox_repo = outbox_repo or OutboxRepository()
         self.relation_repo = relation_repo or RequirementRelationRepository()
         self.feature_capability_repo = feature_capability_repo or FeatureCapabilityRepository()
+        self.title_repo = title_repo or RequirementTitleCandidateRepository()
         self.session_factory = session_factory
 
     def submit_decision(
@@ -95,6 +98,7 @@ class ReviewService:
             "outbox_repo": self.outbox_repo,
             "relation_repo": self.relation_repo,
             "feature_capability_repo": self.feature_capability_repo,
+            "title_repo": self.title_repo,
             "source_id": source_id,
             "decision": decision,
             "reviewer_id": reviewer_id,

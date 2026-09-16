@@ -29,6 +29,7 @@ from requirement_agent.infrastructure.db.repositories import (
     RequirementFeatureRepository,
     RequirementRelationRepository,
     RequirementSourceRepository,
+    RequirementTitleCandidateRepository,
     RequirementVersionRepository,
 )
 from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
@@ -61,6 +62,7 @@ relation_repo = RequirementRelationRepository()
 capability_repo = CapabilityRepository()
 constraint_repo = ConstraintVocabRepository()
 feature_capability_repo = FeatureCapabilityRepository()
+title_repo = RequirementTitleCandidateRepository()
 # 运维面（/api/v1/ops）用：查看异步队列积压与处理死信
 outbox_repo = OutboxRepository()
 
@@ -148,5 +150,6 @@ __all__ = [
     "risk_agent",
     "source_repo",
     "summarize_text",
+    "title_repo",
     "version_repo",
 ]

@@ -26,6 +26,7 @@ from requirement_agent.api.routes.requirements_write import router as _requireme
 from requirement_agent.api.routes.reviews import router as _reviews_read_router
 from requirement_agent.api.routes.reviews import submit_router as _reviews_submit_router
 from requirement_agent.api.routes.sources import router as _sources_router
+from requirement_agent.api.routes.titles import router as _titles_router
 from requirement_agent.api.routes.system import router as _system_router
 
 
@@ -48,6 +49,7 @@ rest_router.include_router(_channels_router)
 rest_router.include_router(_ops_router)
 # 能力 / 条件词表（批次 1）：纯新增只读路由，追加在末尾
 rest_router.include_router(_capabilities_router)
+rest_router.include_router(_titles_router)
 
 
 # —— 总聚合：REST 域 + Agent 域 ——

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from requirement_agent.agents.analyze_agent import thresholds_for
+from requirement_agent.domain.requirement_titles import derive_title_candidates
 from requirement_agent.domain.requirement import AuditEvent, RequirementMaster, RequirementReview, RequirementVersion
 from requirement_agent.workflows.canonical import canonical_requirement, canonical_title
 
@@ -470,6 +471,36 @@ def commit_requirement_node(state: dict[str, Any]) -> dict[str, Any]:
         constraint_snapshot = _constraint_snapshot(match_payload)
         if feature_capability_repo is not None and capability_links:
             feature_capability_repo.link_many(links=capability_links, session=session)
+
+    # —— 候选标题（同一需求的不同视角入口）——
+    # 从**已有数据**派生，不调模型：同一个需求的几种叫法本来就对应业务对象/能力/条件。
+    # 一律 proposed；列表只出 confirmed，所以这里不会让人看到没确认过的叫法。
+    title_repo = ctx.get("title_repo")
+    if title_repo is not None and master.id is not None:
+        extracted_meta = source.metadata.get("extracted") or {}
+        capability_hits = (source.metadata.get("capability_match") or {}).get("capabilities") or []
+        constraint_keys = [
+            item["constraint_key"]
+            for item in (source.metadata.get("capability_match") or {})
+            .get("constraints", {})
+            .get("matched", [])
+            if item.get("constraint_key")
+        ]
+        derived = derive_title_candidates(
+            business_object=str(extracted_meta.get("business_object") or ""),
+            capabilities=[
+                {
+                    "action": hit.get("action"),
+                    "object": hit.get("object"),
+                    "capability_id": hit.get("capability_id"),
+                }
+                for hit in capability_hits
+                if isinstance(hit, dict)
+            ],
+            constraint_keys=constraint_keys,
+        )
+        if derived:
+            title_repo.upsert_many(requirement_id=int(master.id), titles=derived, session=session)
 
     version = RequirementVersion(
         requirement_id=int(master.id or 0),

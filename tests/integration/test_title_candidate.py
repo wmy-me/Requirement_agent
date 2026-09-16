@@ -164,3 +164,162 @@ def test_list_confirmed_groups_by_requirement() -> None:
     finally:
         trans.rollback()
         conn.close()
+
+
+# ── HTTP 级：端点 ───────────────────────────────────────────────────────
+
+
+import os
+
+os.environ.setdefault("API_AUTH_TOKEN", "test-api-token")
+
+from fastapi.testclient import TestClient
+
+from requirement_agent.api.app import app
+from requirement_agent.infrastructure.db.session import SessionLocal
+
+client = TestClient(app)
+
+
+class _TitleFixture:
+    """一条需求 + 一条能力 + 一条功能 + 一条 proposed 标题，用完删干净。"""
+
+    def __init__(self) -> None:
+        self.tag = uuid.uuid4().hex[:8]
+        self.master_id = uuid.uuid4().int % 9_000_000_000_000_000 + 1_000_000_000_000_000
+        self.key = f"REQ-TIT-{self.tag}"
+        self.capability_id = uuid.uuid4().int % 9_000_000_000_000_000 + 1_000_000_000_000_000
+        self.feature_id = uuid.uuid4().int % 9_000_000_000_000_000 + 1_000_000_000_000_000
+        with SessionLocal() as session:
+            session.execute(
+                text(
+                    "INSERT INTO requirement_master (id, requirement_key, requirement_name, "
+                    "final_requirement, current_version, status, lock_version) "
+                    "VALUES (:id, :k, '标题端点测试', 'x', 1, 'active', 1)"
+                ),
+                {"id": self.master_id, "k": self.key},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO capability (id, action, object, display_name, status, created_by) "
+                    "VALUES (:id, :a, 'Excel', :d, 'active', 'test')"
+                ),
+                {"id": self.capability_id, "a": f"导出{self.tag}", "d": f"导出{self.tag} Excel"},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO requirement_feature (id, requirement_id, feature_key, content, "
+                    "status, ordinal, origin_source_id, origin_requirement_key, origin_version_no, "
+                    "provenance, content_hash) "
+                    "VALUES (:id, :rid, 'F-001', '支持导出 Excel', 'active', 1, NULL, :k, 1, "
+                    "CAST('[]' AS JSONB), 'h')"
+                ),
+                {"id": self.feature_id, "rid": self.master_id, "k": self.key},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO feature_capability (feature_id, capability_id, raw_text, review_status) "
+                    "VALUES (:f, :c, '支持导出 Excel', 'proposed')"
+                ),
+                {"f": self.feature_id, "c": self.capability_id},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO requirement_title_candidate (id, requirement_id, title, angle, "
+                    "capability_id, source, review_status) "
+                    "VALUES (:id, :rid, :t, 'capability', :c, 'analysis', 'proposed')"
+                ),
+                {
+                    "id": uuid.uuid4().int % 9_000_000_000_000_000 + 1_000_000_000_000_000,
+                    "rid": self.master_id,
+                    "t": f"Excel导出能力{self.tag}",
+                    "c": self.capability_id,
+                },
+            )
+            session.commit()
+
+    def title_id(self) -> int:
+        with SessionLocal() as session:
+            return session.execute(
+                text("SELECT id FROM requirement_title_candidate WHERE requirement_id=:r"),
+                {"r": self.master_id},
+            ).scalar()
+
+    def cleanup(self) -> None:
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM requirement_title_candidate WHERE requirement_id=:r"),
+                {"r": self.master_id},
+            )
+            session.execute(
+                text("DELETE FROM feature_capability WHERE capability_id=:c"), {"c": self.capability_id}
+            )
+            session.execute(
+                text("DELETE FROM capability WHERE id=:c"), {"c": self.capability_id}
+            )
+            session.execute(
+                text("DELETE FROM requirement_feature WHERE requirement_id=:r"), {"r": self.master_id}
+            )
+            session.execute(
+                text("DELETE FROM requirement_master WHERE id=:r"), {"r": self.master_id}
+            )
+            session.commit()
+
+
+def test_list_titles_carries_highlight() -> None:
+    """**这是这批标题的意义**：内容不变，但从不同标题点进去高亮不同。"""
+    fixture = _TitleFixture()
+    try:
+        response = client.get(f"/api/v1/requirements/{fixture.key}/titles")
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert len(items) == 1
+        assert items[0]["review_status"] == "proposed"
+        highlight = items[0]["highlight"]
+        assert highlight["kind"] == "capability"
+        assert highlight["feature_keys"] == ["F-001"]  # 锚到该能力的那条功能
+    finally:
+        fixture.cleanup()
+
+
+def test_confirm_title_makes_it_visible() -> None:
+    fixture = _TitleFixture()
+    try:
+        response = client.patch(
+            f"/api/v1/requirement-titles/{fixture.title_id()}", json={"status": "confirmed"}
+        )
+        assert response.status_code == 200
+        assert response.json()["review_status"] == "confirmed"
+
+        confirmed = client.get(
+            f"/api/v1/requirements/{fixture.key}/titles", params={"review_status": "confirmed"}
+        ).json()["items"]
+        assert len(confirmed) == 1
+    finally:
+        fixture.cleanup()
+
+
+def test_add_manual_title() -> None:
+    fixture = _TitleFixture()
+    try:
+        response = client.post(
+            f"/api/v1/requirements/{fixture.key}/titles", json={"title": "人工起的名"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["inserted"] == 1
+        assert response.json()["item"]["angle"] == "free"
+        assert response.json()["item"]["review_status"] == "proposed"
+    finally:
+        fixture.cleanup()
+
+
+def test_unknown_requirement_titles_returns_404() -> None:
+    assert client.get("/api/v1/requirements/REQ-NOPE-9/titles").status_code == 404
+
+
+def test_unknown_title_patch_returns_404() -> None:
+    assert client.patch(
+        "/api/v1/requirement-titles/999999999", json={"status": "confirmed"}
+    ).status_code == 404
