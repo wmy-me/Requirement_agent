@@ -157,19 +157,27 @@ API_AUTH_TOKEN=...
 
 #### 前端（`/ui`）怎么带 token（2026-09-17）
 
-**服务端在启动时把 token 写进 `/static/js/ui-config.js`，页面自动带上 —— 使用者不需要填。**
+**服务端在返回 `/ui` 时把 token 直接写进 HTML，页面自动带上 —— 使用者不需要填。**
 
-```js
-// static/js/ui-config.js —— 启动时由 api/app.py 从 .env 生成，已在 .gitignore
-window.RA_UI_TOKEN = "…";
+```html
+<!-- index.html 里的占位符，服务端返回时替换 -->
+<!-- RA_UI_TOKEN_INJECT -->
+<!-- 替换成：<script>window.RA_UI_TOKEN = "…";</script> -->
 ```
 
 `app.js` 的 `authHeaders()` 读它，`apiJson()`（31 个调用点）与三处 SSE / 续跑的
-裸 `fetch()` 统一带上。读取顺序：**注入的配置 → `localStorage`（手工覆盖）→ 弹框**；
-正常情况下永远走第一条。
+裸 `fetch()` 统一带上。
 
-为什么是「写文件」而不是写进 `app.js`：`app.js` 是代码、进 git；这份是**部署产物**。
-换 token 只需改 `.env` 重启，**不会把密钥写进 git 历史**（写进去就删不干净了）。
+> ⚠️ **这里原先写的是「启动时生成 `static/js/ui-config.js`、页面用 `<script src>` 引它」。
+> 那个做法被换掉了** —— 它多了一次请求，也就多了一个会失败的地方（实测有人因此
+> 仍然看到「输入 token」的弹窗）。注入进 HTML 是**一次响应同时拿到页面和 token**，
+> 没有第二个请求、没有加载顺序、没有中间态。占位符缺失时会退回到插在 `</head>` 之前，
+> 并打一条 warning（静默不注入会让所有人看到 401 而不知道原因）。
+
+**没有「输入 token」的弹窗，这是刻意的。** 这是公司内网共用的一套工作台，
+token 是**服务入口凭证**而不是个人凭证 —— 弹框问每个人要既是纯摩擦，
+也解决不了任何真实问题。401 时前端报的是「页面里没有拿到 API token，
+这是服务端配置问题」，指向服务端而不是指向使用者。
 
 ##### 想让前端只拿到受限凭证
 
@@ -185,8 +193,62 @@ UI_EXPOSED_TOKEN=<前端 token>
 （审核页照常用），但写在页面里的那个凭证即使被别处拿到，也动不了
 `/requirements/{key}/revert` 与 `/ops/*`。不配则回退到 `API_AUTH_TOKEN`。
 
-> ⚠️ **这份配置是发给所有能打开页面的人的**（`/static/*` 是豁免路径）。
+> ⚠️ **这份配置是发给所有能打开页面的人的**（`/ui` 与 `/static/*` 是豁免路径）。
 > 所以别把 admin token 放进 `UI_EXPOSED_TOKEN` —— 除非这台服务本来就只对可信网络开放。
+
+---
+
+## 1.3 工作台新增端点（2026-09-17）
+
+前端重构前做「界面 → 接口」对账时发现 6 个端点不存在、对应界面做不出来。
+它们全部是**读已存在的数据**，不新增表、不改既有端点。全部只读（`read` 档次）。
+
+| 端点 | 用途 | 关键口径 |
+|---|---|---|
+| `GET /api/v1/stats/overview?trend_periods=12` | 总览页全部指标 | ⚠️ 见下「分母」 |
+| `GET /api/v1/sources?status=&source_type=&requester=&limit=` | 来源中心列表 | 只给**摘要**（正文前 200 字），不带 `metadata` |
+| `GET /api/v1/reviews/history?status=&limit=` | 审核历史 | 默认 `approved/rejected/committed`，**不含 `returned`** |
+| `GET /api/v1/ops/models?task_type=&limit=` | 模型调用记录 + 路由诊断 | `routing.unrecognized` 报「配了没生效」的条目 |
+| `GET /api/v1/ops/worker` | 消费循环健康 | ⚠️ 见下「stale_processing」 |
+| `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | 运行列表 | **`source_id` 现在是可选的** |
+
+#### `stats/overview` 的返回
+
+```json
+{"pending_review": 3, "pending_total": 3, "high_risk": 6, "conflict": 0,
+ "dead_letter": 0, "requirements_total": 4, "sources_total": 12,
+ "analysed_sources": 11,
+ "source_status_counts": {"pending_review": 3, "committed": 7, ...},
+ "channel_counts": {"web": 12},
+ "domain_counts": {"workflow": 5, "auth": 3, ...},
+ "risk_matrix": [{"quality_risk": "high", "change_risk": "medium", "count": 3}],
+ "submission_trend": [{"period": "2026-W37", "count": 4}]}
+```
+
+> ⚠️ **`high_risk` / `conflict` / `risk_matrix` 只统计「分析过的」来源**
+> （从 `requirement_source.metadata` 读，那是分析产物）。**`analysed_sources`
+> 是它们的分母** —— 展示时必须带上，否则「高危 6 条」会被读成全库统计。
+> `submission_trend` 按时间**正序**返回，可直接画折线。
+
+#### `ops/worker` 的两个坑
+
+- **`stale_processing`**：认领后超过 `stale_timeout_seconds` 仍未收尾的事件数。
+  这是「消费者崩了」**唯一可靠的信号** —— 只看各状态计数看不出来，
+  崩溃后那些行会永远停在 `processing`，队列看上去「有在干活」。
+- **`consumer` 为 `null` 不代表「系统没有消费者」**：它只说**这个 API 进程**
+  没跑内嵌循环。生产形态是独立 Worker（`python -m requirement_agent.workers`），
+  那个进程不在本端点里。判断有没有在消费，看队列是否推进（`counts` 的变化）。
+
+#### `sources` 的 `linked_requirement_key`
+
+每项带「**这条来源最终变成了哪条需求**」（由 `requirement_version_source` 左连接取到，
+取版本号最大的一条）。没入库的来源是 `null` —— 那不是错误，是「还没变成需求」。
+
+#### `agent/runs` 的 `source_id`
+
+原先**强制要求**（不带就 422，理由是「全表扫没有意义」）。有了任务列表页之后，
+那条限制从「防误用」变成了「做不到」（前端只能一个个来源去问）。
+现在**可选**：带 → 按来源反查；不带 → 最近的运行。两条路都有索引支撑。
 
 ---
 

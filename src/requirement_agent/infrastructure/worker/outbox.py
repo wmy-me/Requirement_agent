@@ -289,6 +289,31 @@ class OutboxRepository:
         counts.update({str(row["status"]): int(row["n"]) for row in rows})
         return counts
 
+    def count_stale_processing(self) -> int:
+        """**卡住的事件数**：认领后超过 `stale_timeout_seconds` 仍未收尾的。
+
+        这是「Worker 卡住了」唯一可靠的信号 —— 只看 `count_by_status` 看不出来：
+        一个消费者崩掉之后，它认领的行会永远停在 `processing`，而队列看起来
+        「有在工作的样子」（有 processing 行）。判据与 `claim_pending` 里
+        顺带回收僵尸事件用的是**同一个阈值**，否则会出现「面板说没问题、
+        但事件其实在等回收」的分歧。
+        """
+        with SessionLocal() as session:
+            return int(
+                session.execute(
+                    text(
+                        """
+                        SELECT count(*) FROM outbox_event
+                        WHERE status = 'processing'
+                          AND locked_at IS NOT NULL
+                          AND locked_at < NOW() - make_interval(secs => :secs)
+                        """
+                    ),
+                    {"secs": self.stale_timeout_seconds},
+                ).scalar()
+                or 0
+            )
+
     def retry_dead_letter(self, event_id: int) -> bool:
         """把一条死信重置回 pending 等待重投；成功返回 True。
 

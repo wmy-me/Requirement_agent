@@ -109,3 +109,25 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
             exc,
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.get("/api/v1/reviews/history")
+async def list_review_history(
+    status_filter: list[str] | None = Query(
+        default=None,
+        alias="status",
+        description="按状态过滤，可重复传；默认 approved / rejected / committed（即「审过的」）",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, object]:
+    """**审核历史**：已经裁决过的来源（新→旧）。
+
+    此前只有 `/reviews/pending`（待审队列），**没有已审列表** —— 审核中心的
+    「历史」页做不出来，也无法回看「上周那条为什么被拒了」。
+
+    默认口径是 `approved / rejected / committed` 三种终态。**`returned`（退回修改）
+    不在默认里**：它不是终态，退回后来源会重新进入分析流程，出现在「历史」里
+    会让人以为那件事已经结束了。
+    """
+    statuses = status_filter or ["approved", "rejected", "committed"]
+    return {"items": source_repo.list_sources(statuses=statuses, limit=limit)}

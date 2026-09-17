@@ -105,6 +105,38 @@ class AgentRunRepository:
             ).mappings().all()
         return [dict(row) for row in rows]
 
+    def list_recent(
+        self, *, limit: int = 50, status: str | None = None, run_type: str | None = None
+    ) -> list[dict[str, object]]:
+        """最近的全部运行（新→旧），可按状态与类型过滤。
+
+        与 `list_by_source` 的区别是**不绑来源** —— 智能分析页要的是
+        「最近都跑过什么」，而不是「某条来源跑过几次」。两者都需要，
+        所以是两个方法而不是给其中一个加可选参数（那样调用方读不出意图）。
+        """
+        where: list[str] = []
+        params: dict[str, object] = {"limit": max(1, min(limit, 200))}
+        if status:
+            where.append("status = :status")
+            params["status"] = status
+        if run_type:
+            where.append("run_type = :run_type")
+            params["run_type"] = run_type
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT {_RUN_COLUMNS} FROM agent_run
+                    {clause}
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
     def mark_running(self, run_id: str, *, current_node: str | None = None) -> None:
         """`queued → running`。节点名一并写入，让「跑到哪了」在第一个节点就能查到。"""
         self._update_run(run_id, status="running", current_node=current_node)

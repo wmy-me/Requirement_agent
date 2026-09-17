@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -350,6 +350,83 @@ class RequirementSourceRepository:
                 "original_payload": dict(row["original_payload"] or {}),
                 "metadata": _stringify_source_metadata(row["metadata"]),
                 "processing_status": row["processing_status"],
+                "submitted_at": as_display_iso(row["submitted_at"]),
+                "updated_at": as_display_iso(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def list_sources(
+        self,
+        *,
+        statuses: Sequence[str] | None = None,
+        source_type: str | None = None,
+        requester: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        """来源列表（**来源中心**与**审核历史**共用）。
+
+        与 `list_by_status` 的区别：那个只按单个状态取、且返回**全量正文与 metadata**
+        （审核工作区要用）。这里是列表视图，返回**摘要**：
+
+        · 正文只给前 200 字（列表不渲染全文，整段带走会让 payload 膨胀几个数量级）；
+        · 不带 `metadata`（可能几十 KB）—— 点进详情走 `/reviews/{source_id}/detail`；
+        · 多带一个 `linked_requirement_key`：**这条来源最终变成了哪条需求**。
+          它由 `requirement_version_source` 左连接取到（一条来源可能进了多个版本，
+          取版本号最大的那条）。
+
+        ⚠️ `statuses` 为空表示**不限状态**，而不是「没有状态」—— 传空列表与传 None
+        都当作不限，免得前端筛「全部」时反而查出空。
+        """
+        where: list[str] = []
+        params: dict[str, object] = {"limit": max(1, min(limit, 500))}
+        if statuses:
+            where.append("rs.processing_status = ANY(:statuses)")
+            params["statuses"] = list(statuses)
+        if source_type:
+            where.append("rs.source_type = :source_type")
+            params["source_type"] = source_type
+        if requester:
+            where.append("rs.requester_name = :requester")
+            params["requester"] = requester
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT rs.id, rs.source_type, rs.requester_name, rs.submitted_at,
+                           rs.updated_at, rs.processing_status, rs.error_message,
+                           left(coalesce(rs.original_text, ''), 200) AS excerpt,
+                           linked.requirement_key AS linked_requirement_key
+                    FROM requirement_source rs
+                    LEFT JOIN LATERAL (
+                        SELECT rm.requirement_key
+                        FROM requirement_version_source rvs
+                        JOIN requirement_version rv ON rv.id = rvs.version_id
+                        JOIN requirement_master rm ON rm.id = rv.requirement_id
+                        WHERE rvs.source_id = rs.id
+                        ORDER BY rv.version_no DESC
+                        LIMIT 1
+                    ) linked ON TRUE
+                    {clause}
+                    ORDER BY rs.updated_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings().all()
+
+        return [
+            {
+                # 雪花 id 一律字符串（契约 §1.1）
+                "source_id": to_sid(row["id"]),
+                "source_type": row["source_type"],
+                "requester_name": row["requester_name"],
+                "processing_status": row["processing_status"],
+                "error_message": row["error_message"],
+                "excerpt": row["excerpt"],
+                "linked_requirement_key": row["linked_requirement_key"],
                 "submitted_at": as_display_iso(row["submitted_at"]),
                 "updated_at": as_display_iso(row["updated_at"]),
             }

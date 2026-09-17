@@ -892,19 +892,28 @@ async def get_agent_run(run_id: str) -> dict[str, object]:
 
 
 @router.get("/api/v1/agent/runs")
-async def list_agent_runs(source_id: int | None = None, limit: int = 20) -> dict[str, object]:
-    """按来源反查运行记录（新→旧）。`source_id` 必填 —— 全表扫没有意义。
+async def list_agent_runs(
+    source_id: int | None = None,
+    status: str | None = None,
+    run_type: str | None = None,
+    limit: int = 20,
+) -> dict[str, object]:
+    """运行记录（新→旧）。两种用法：
 
-    「这条需求被分析过几次」是排查「为什么结论变了」的第一个问题。
+    · **带 `source_id`** —— 「这条需求被分析过几次」，排查「为什么结论变了」的第一步；
+    · **不带** —— 「最近都跑过什么」，智能分析页的任务列表要用。
+
+    ⚠️ 这里原先**强制**要求 `source_id`（不带就 422），理由是「全表扫没有意义」。
+    那个理由在当时成立（只有按来源反查的需求），但一旦有了任务列表页，
+    它就从「防误用」变成了「做不到」—— 前端只能一个个来源去问。
+    现在按是否传参决定走哪条查询，两条路都有索引支撑。
     """
-    if source_id is None:
-        from fastapi import HTTPException, status
-
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="必须带 source_id（不支持全表列举）",
-        )
-    return {"items": run_tracking.repo.list_by_source(source_id, limit=limit)}
+    repo = run_tracking.repo
+    if source_id is not None:
+        return {"items": repo.list_by_source(source_id, limit=limit)}
+    return {
+        "items": repo.list_recent(limit=limit, status=status, run_type=run_type)
+    }
 
 
 @router.get("/api/v1/agent/runs/{run_id}/events")

@@ -27,6 +27,10 @@ from requirement_agent.infrastructure.db.repositories.relation import Requiremen
 from requirement_agent.infrastructure.db.repositories.title_candidate import (
     RequirementTitleCandidateRepository,
 )
+from requirement_agent.infrastructure.db.repositories.model_invocation import (
+    ModelInvocationRepository,
+)
+from requirement_agent.infrastructure.db.repositories.stats import StatsRepository
 from requirement_agent.infrastructure.db.repositories.review import (
     RequirementFeatureRepository,
     RequirementReviewRepository,
@@ -42,6 +46,7 @@ __all__ = [
     "DocumentAssetRepository",
     "FeatureCapabilityRepository",
     "MemoryRepository",
+    "ModelInvocationRepository",
     "RequirementFeatureRepository",
     "RequirementMasterRepository",
     "RequirementRelationRepository",
@@ -49,4 +54,5 @@ __all__ = [
     "RequirementSourceRepository",
     "RequirementTitleCandidateRepository",
     "RequirementVersionRepository",
+    "StatsRepository",
 ]

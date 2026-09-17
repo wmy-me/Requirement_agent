@@ -32,6 +32,8 @@ from requirement_agent.infrastructure.db.repositories import (
     RequirementSourceRepository,
     RequirementTitleCandidateRepository,
     RequirementVersionRepository,
+    ModelInvocationRepository,
+    StatsRepository,
 )
 from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
@@ -71,6 +73,10 @@ feature_capability_repo = FeatureCapabilityRepository()
 title_repo = RequirementTitleCandidateRepository()
 # 运维面（/api/v1/ops）用：查看异步队列积压与处理死信
 outbox_repo = OutboxRepository()
+stats_repo = StatsRepository()
+# 模型调用记录（B3.1）。**装配在这里**：provider 只管产出记录，消费由组合根决定
+# （见 infrastructure/llm/invocation.py 的说明）—— 这里再拿一份给查询端点用。
+model_invocation_repo = ModelInvocationRepository()
 
 # —— 记忆 / 记忆抽取 ——
 memory_context_builder = MemoryContextBuilder(memory_repo)
@@ -148,6 +154,7 @@ __all__ = [
     "memory_repo",
     "object_storage",
     "outbox_repo",
+    "stats_repo",
     "relation_repo",
     "requirement_analysis_task",
     "requirement_service",
