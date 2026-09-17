@@ -27,6 +27,17 @@ class RiskAssessment(BaseModel):
     confidence: float = 0.7
     source: Literal["llm", "heuristic"] = "heuristic"
 
+    # —— 降级标记（B3.1b）——
+    # ⚠️ 追加实施文档 §4.5：「**风险和冲突判断降级后必须标记，不得静默当作确定结果**」。
+    #
+    # 两种降级都算：① 主模型失败、走了备用模型；② 模型整条链路失败、退回启发式规则。
+    # 两者的共同点都是「这个结论**不是主模型给的**」—— 审核人据此决定要不要更谨慎，
+    # 而不是把它当成一次正常的模型判断。
+    degraded: bool = False
+    degraded_reason: str | None = None
+    """降级原因，中文、可直接展示。未降级时为 None。"""
+
+
 
 class RiskAgent:
     """风险评估入口。
@@ -40,7 +51,7 @@ class RiskAgent:
 
     def assess(self, extracted: ExtractedRequirement) -> RiskAssessment:
         """评估质量风险、变更风险与技术影响。"""
-        if not self.skill.provider.is_configured():
+        if not self.skill.has_llm():
             return self._heuristic_assess(extracted)
         return self.skill.assess(extracted)
 
@@ -53,6 +64,9 @@ class RiskAgent:
         confidence = RiskAgent()._confidence_score(extracted)
 
         return RiskAssessment(
+            degraded=True,
+            degraded_reason="未配置模型，结论来自启发式规则",
+        
             quality_risk=quality_risk,
             change_risk=change_risk,
             technical_impact_risk=technical_impact_risk,

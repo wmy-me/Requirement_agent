@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "bind_prompt_version",
+    "last_route_outcome",
+    "set_last_route_outcome",
     "bind_run_id",
     "current_prompt_version",
     "current_run_id",
@@ -47,6 +49,18 @@ _current_prompt_version: ContextVar[str | None] = ContextVar(
     "llm_invocation_prompt_version", default=None
 )
 
+#: 最近一次路由调用的结果摘要（`{"degraded","source","reason","model"}` 或 None）。
+#
+# 用 ContextVar 而不是技能实例上的属性：技能（`AnalyzeSkill` 等）在
+# `api/dependencies.py` 里是**进程级单例**，API 并发请求会共用同一个实例 ——
+# 挂在实例上会出现「A 请求读到 B 请求的降级状态」。
+#
+# 由 `BaseSkill._generate_json` 在**每次调用开始时清空**，成功后再写入；
+# 于是「读不到」= 这次调用没成功，调用方据此走「启发式降级」分支。
+_last_route_outcome: ContextVar[dict[str, Any] | None] = ContextVar(
+    "llm_last_route_outcome", default=None
+)
+
 #: 记录消费者。由组合根装配；**没装配时静默丢弃**（见 `record_invocation`）。
 _recorder: Callable[[dict[str, Any]], None] | None = None
 #: 记录器是否**已确定**。与「`_recorder is None`」是两回事 ——
@@ -60,6 +74,15 @@ def current_run_id() -> str | None:
 
 def current_prompt_version() -> str | None:
     return _current_prompt_version.get()
+
+
+def set_last_route_outcome(payload: dict[str, Any] | None) -> None:
+    """记下最近一次路由调用的结果。`None` 表示「还没成功过」。"""
+    _last_route_outcome.set(payload)
+
+
+def last_route_outcome() -> dict[str, Any] | None:
+    return _last_route_outcome.get()
 
 
 @contextmanager

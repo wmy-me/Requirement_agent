@@ -183,6 +183,21 @@ class RequirementService:
         metadata["analysis"] = analysis
         metadata["risk"] = risk
         metadata["extracted"] = extracted
+        # —— 降级标记（B3.1b）——
+        # ⚠️ 追加实施文档 §4.5：「**风险和冲突判断降级后必须标记，不得静默当作确定结果**」。
+        #
+        # 结论本身照常产出（降级好过什么都给不出），但必须让审核人知道
+        # 「这不是主模型给的」—— 他据此决定要不要更谨慎，而不是当成一次正常判断。
+        degraded_fields = [
+            name for name, payload in (("analysis", analysis), ("risk", risk))
+            if payload.get("degraded")
+        ]
+        if degraded_fields:
+            metadata["degradation"] = {
+                "degraded": True,
+                "fields": degraded_fields,
+                "reason": analysis.get("degraded_reason") or risk.get("degraded_reason"),
+            }
         # —— 能力/条件候选与词表比对（方案批次 2）——
         # 只写 pending_confirmation 提案与匹配记录，**不写任何正式数据**。
         # 这是 A 级「自动归档」范畴：记的是事实（模型抽出了什么、匹配上了什么），

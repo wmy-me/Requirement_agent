@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.base_skill import BaseSkill, degradation_marker
 from requirement_agent.skills.prompts import ANALYZE_SYSTEM_PROMPT, build_analyze_user_prompt
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ class AnalyzeSkill(BaseSkill):
         fallback = AnalyzeAgent._heuristic_analyze(
             extracted, historical_requirements, gates=gates, cal=cal
         )
-        if not self.provider.is_configured():
+        if not self.has_llm():
             return fallback
 
         system_prompt = ANALYZE_SYSTEM_PROMPT
@@ -122,6 +122,7 @@ class AnalyzeSkill(BaseSkill):
             conflict = bool(payload.get("conflict"))
             independent = not (duplicate or related or conflict)
 
+            degraded, degraded_reason = degradation_marker()
             result = AnalysisResult(
                 duplicate=duplicate,
                 related=related,
@@ -130,12 +131,19 @@ class AnalyzeSkill(BaseSkill):
                 reasoning=str(payload.get("reasoning") or fallback.reasoning),
                 candidates=normalized_candidates,
                 suggestion=_coerce_suggestion(payload.get("suggestion")),
+                # 降级标记（B3.1b）：模型来自备用链时也要标 —— 追加文档 §4.5
+                degraded=degraded,
+                degraded_reason=degraded_reason,
             )
             return result
         except Exception as exc:
             # 不做“半模型半规则”混用，失败时整体回退，保证结果语义稳定。
             logger.warning("event=skill_fallback skill=analyze error=%s", exc)
-            return fallback
+            # ⚠️ **降级必须标记**：这份结论是规则给的，不是模型给的。
+            # 不标的话，审核人会把它当成一次正常的模型判断（§4.5 明令禁止）。
+            return fallback.model_copy(
+                update={"degraded": True, "degraded_reason": f"模型调用失败（{exc}），结论来自启发式规则"}
+            )
 
 
 def _coerce_suggestion(value: object) -> dict[str, object] | None:

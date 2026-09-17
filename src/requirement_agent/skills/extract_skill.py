@@ -132,7 +132,7 @@ class ExtractSkill(BaseSkill):
         from requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
 
         fallback = ExtractAgent._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
-        if not self.provider.is_configured():
+        if not self.has_llm():
             return fallback
 
         system_prompt = EXTRACT_SYSTEM_PROMPT

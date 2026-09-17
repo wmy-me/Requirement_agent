@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from requirement_agent.skills.base_skill import BaseSkill
+from requirement_agent.skills.base_skill import BaseSkill, degradation_marker
 from requirement_agent.skills.prompts import RISK_SYSTEM_PROMPT, build_risk_user_prompt
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class RiskSkill(BaseSkill):
             extracted = ExtractedRequirement.model_validate(extracted)
 
         fallback = RiskAgent._heuristic_assess(extracted)
-        if not self.provider.is_configured():
+        if not self.has_llm():
             return fallback
 
         system_prompt = RISK_SYSTEM_PROMPT
@@ -63,7 +63,17 @@ class RiskSkill(BaseSkill):
                 # 标明来源：前端据此决定写「模型置信度」还是「规则估算置信度」
                 source="llm",
             )
+            # 降级标记（B3.1b）：追加文档 §4.5 —— 风险判断降级后**必须标注**
+            degraded, reason = degradation_marker()
+            if degraded:
+                result = result.model_copy(
+                    update={"degraded": True, "degraded_reason": reason}
+                )
             return result
         except Exception as exc:
             logger.warning("event=skill_fallback skill=risk error=%s", exc)
-            return fallback
+            # ⚠️ **降级必须标记**：风险是「转人工审核，不自动批准」的那类判断
+            # （追加文档 §4.2），静默当成确定结果尤其危险。
+            return fallback.model_copy(
+                update={"degraded": True, "degraded_reason": f"模型调用失败（{exc}），结论来自启发式规则"}
+            )

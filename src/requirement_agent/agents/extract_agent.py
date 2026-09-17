@@ -100,7 +100,7 @@ class ExtractAgent:
         requester_name: str | None = None,
     ) -> ExtractedRequirement:
         """把原文转换成结构化需求，不写数据库。"""
-        if not self.skill.provider.is_configured():
+        if not self.skill.has_llm():
             return self._fallback_extract(raw_text, source_type=source_type, requester_name=requester_name)
         return self.skill.extract(raw_text, source_type=source_type, requester_name=requester_name)
 

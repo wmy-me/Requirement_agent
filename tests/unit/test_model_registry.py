@@ -219,3 +219,239 @@ def test_supported_providers_is_a_closed_enum() -> None:
     assert set(SUPPORTED_PROVIDERS) == {"deepseek", "openai"}
     assert ModelSpec(provider="typo", model="x").supported is False
     assert ModelSpec(provider="deepseek", model="").supported is False
+
+
+# ── ⑥ 错误分类：决定「要不要换模型」（B3.1b）─────────────────────────────
+
+
+def _status_error(status: int) -> Exception:
+    import httpx
+
+    request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (429, "rate_limited"),
+        (500, "retryable"),
+        (503, "retryable"),
+        (408, "retryable"),
+        (400, "invalid_request"),
+        (401, "invalid_request"),
+        (422, "invalid_request"),
+    ],
+)
+def test_http_status_classification(status: int, expected: str) -> None:
+    from requirement_agent.infrastructure.llm.errors import classify_error
+
+    assert classify_error(_status_error(status)) == expected
+
+
+def test_transport_and_content_are_distinguished() -> None:
+    import httpx
+
+    from requirement_agent.infrastructure.llm.errors import classify_error
+
+    assert classify_error(httpx.ConnectError("refused")) == "transport"
+    assert classify_error(httpx.ReadTimeout("slow")) == "transport"
+    # 模型答了，但内容不可用（不是 JSON / 缺字段）
+    assert classify_error(ValueError("not json")) == "content"
+    assert classify_error(KeyError("data")) == "content"
+
+
+def test_invalid_request_is_not_fallback_worthy() -> None:
+    """**这条是 B3.1b 最要紧的边界。**
+
+    请求本身有问题（schema 写错、密钥无效、模型名不存在）—— 换谁都是一样的结果。
+    换备用模型只会把「代码里的 bug」伪装成「主模型不太行」，然后白白多花一次调用。
+    """
+    from requirement_agent.infrastructure.llm.errors import (
+        classify_error,
+        is_fallback_worthy,
+    )
+
+    assert is_fallback_worthy(classify_error(_status_error(400))) is False
+    assert is_fallback_worthy(classify_error(_status_error(401))) is False
+    # 其余都值得试下一个
+    for status in (429, 500, 408):
+        assert is_fallback_worthy(classify_error(_status_error(status))) is True
+    assert is_fallback_worthy(classify_error(ValueError("bad json"))) is True
+
+
+def test_classification_never_raises() -> None:
+    """分类本身出问题不该盖住原始异常。"""
+    from requirement_agent.infrastructure.llm.errors import classify_error
+
+    class Weird(BaseException):
+        def __str__(self) -> str:
+            raise RuntimeError("连 str 都炸")
+
+    assert classify_error(Weird()) == "unknown"
+
+
+# ── ⑦ 降级链执行 ──────────────────────────────────────────────────────────
+
+
+def test_router_falls_back_to_the_next_model() -> None:
+    """主模型失败 → 沿链换到备用，并把「用到了第几级」如实带出来。"""
+    from requirement_agent.infrastructure.llm.router import ModelRouter
+
+    registry = _with_routes(
+        '{"risk": {"provider": "deepseek", "model": "primary",'
+        ' "fallbacks": [{"provider": "openai", "model": "backup"}]}}'
+    )
+    calls: list[str] = []
+
+    class _Provider:
+        def __init__(self, spec, task_type=""):
+            self.spec = spec
+            self.model = spec.model
+            self.fallback_level = 0
+            self.fallback_from = None
+
+        def is_configured(self) -> bool:
+            return True
+
+        def generate(self, prompt, system_prompt=None):
+            calls.append(self.model)
+            if self.model == "primary":
+                raise _status_error(503)  # 可重试/值得换
+            return "备用模型的输出"
+
+    import requirement_agent.infrastructure.llm.router as router_mod
+
+    original = router_mod.LLMProvider
+    router_mod.LLMProvider = _Provider
+    try:
+        outcome = ModelRouter(registry).generate("risk", "p")
+    finally:
+        router_mod.LLMProvider = original
+
+    assert calls == ["primary", "backup"]
+    assert outcome.text == "备用模型的输出"
+    assert outcome.fallback_level == 1
+    assert outcome.degraded is True
+    assert outcome.fallback_from == "deepseek/primary"
+
+
+def test_router_does_not_fall_back_on_invalid_request() -> None:
+    """`invalid_request` 直接抛 —— **不去试备用模型**（见上面的边界说明）。"""
+    from requirement_agent.infrastructure.llm.router import ModelRouter
+
+    registry = _with_routes(
+        '{"risk": {"provider": "deepseek", "model": "primary",'
+        ' "fallbacks": [{"provider": "openai", "model": "backup"}]}}'
+    )
+    calls: list[str] = []
+
+    class _Provider:
+        def __init__(self, spec, task_type=""):
+            self.model = spec.model
+
+        def is_configured(self) -> bool:
+            return True
+
+        def generate(self, prompt, system_prompt=None):
+            calls.append(self.model)
+            raise _status_error(400)
+
+    import requirement_agent.infrastructure.llm.router as router_mod
+
+    original = router_mod.LLMProvider
+    router_mod.LLMProvider = _Provider
+    try:
+        with pytest.raises(Exception):
+            ModelRouter(registry).generate("risk", "p")
+    finally:
+        router_mod.LLMProvider = original
+
+    assert calls == ["primary"], "请求本身有问题时不该去试备用模型"
+
+
+def test_router_reraises_original_error_for_a_single_model_chain() -> None:
+    """**兼容红线**：链上只有主模型时（默认配置）重抛**原始异常**。
+
+    包一层 `AllModelsFailedError` 会让「引入 fallback」改变默认配置下的错误类型 ——
+    既有调用方与测试会莫名其妙地挂。
+    """
+    from requirement_agent.infrastructure.llm.router import ModelRouter
+
+    settings.model_routes = {}  # 默认：链上只有全局那一个模型
+    boom = _status_error(503)
+
+    class _Provider:
+        def __init__(self, spec, task_type=""):
+            self.model = spec.model
+
+        def is_configured(self) -> bool:
+            return True
+
+        def generate(self, prompt, system_prompt=None):
+            raise boom
+
+    import requirement_agent.infrastructure.llm.router as router_mod
+
+    original = router_mod.LLMProvider
+    router_mod.LLMProvider = _Provider
+    try:
+        with pytest.raises(Exception) as caught:
+            ModelRouter(ModelRegistry(settings)).generate("risk", "p")
+    finally:
+        router_mod.LLMProvider = original
+
+    assert caught.value is boom, "必须原样重抛，不能包装"
+
+
+# ── ⑧ 「有没有模型可用」要看**整条链**（B3.1b）────────────────────────────
+
+
+def test_has_any_configured_looks_at_the_whole_chain() -> None:
+    """**主模型没配、备用配了 → 照样应该走模型。**
+
+    实测撞到过：`risk` 的主模型配成没凭据的 openai，而各处的「有没有模型」前置检查
+    都只问 `self.provider.is_configured()`（= 主模型），于是直接退回启发式，
+    **备用链根本没机会**。有备用却不用，与「配了路由却没生效」是同一类失望。
+    """
+    from requirement_agent.infrastructure.llm.router import ModelRouter
+
+    settings.model_routes = json.loads(
+        '{"risk": {"provider": "openai", "model": "gpt-4o-mini",'
+        ' "fallbacks": [{"provider": "deepseek", "model": "deepseek-chat"}]}}'
+    )
+    router = ModelRouter(ModelRegistry(settings))
+
+    assert router.has_any_configured("risk") is True, (
+        "openai 没配密钥，但 deepseek 那一级配了 —— 整条链是可用的"
+    )
+
+
+def test_has_any_configured_is_false_when_nothing_is_configured() -> None:
+    from requirement_agent.infrastructure.llm.router import ModelRouter
+
+    settings.model_routes = json.loads(
+        '{"risk": {"provider": "openai", "model": "a",'
+        ' "fallbacks": [{"provider": "openai", "model": "b"}]}}'
+    )
+    router = ModelRouter(ModelRegistry(settings))
+
+    # 本机没配 OPENAI_API_KEY，所以这一整条链都不可用
+    if settings.openai_api_key.get_secret_value().strip():
+        pytest.skip("本机配了 OPENAI_API_KEY，这条断言的前提不成立")
+    assert router.has_any_configured("risk") is False
+
+
+def test_skill_has_llm_sees_the_chain() -> None:
+    """技能层的前置判断走 `has_llm()` 而不是 `provider.is_configured()`。"""
+    from requirement_agent.skills.analyze_skill import AnalyzeSkill
+
+    settings.model_routes = json.loads(
+        '{"analyze": {"provider": "openai", "model": "gpt-4o-mini",'
+        ' "fallbacks": [{"provider": "deepseek", "model": "deepseek-chat"}]}}'
+    )
+    skill = AnalyzeSkill()
+
+    assert skill.provider.is_configured() is False, "前提：主模型（openai）本机没配"
+    assert skill.has_llm() is True, "但备用链是配了的，不该判成「没有模型」"
