@@ -10,7 +10,6 @@ from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
 from requirement_agent.application.capability_match_service import CapabilityMatchService
-from requirement_agent.common.time import as_display_iso
 from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.workflows.graphs import run_analysis
 from requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
@@ -162,13 +161,18 @@ class RequirementService:
         tool_calls = list(result.get("tool_calls") or [])
         if tool_calls:
             metadata["tool_calls"] = tool_calls
-        metadata["retrieval_filters"] = {
-            "channel": saved_source.source_type,
-            "department": metadata.get("department"),
-            "business_domain": metadata.get("business_domain"),
-            "sensitivity_level": metadata.get("sensitivity_level"),
-            "submitted_at": as_display_iso(saved_source.submitted_at),
-        }
+        # —— 检索证据（B4 批 4）——
+        # 每条候选的余弦、查询级落差、当时生效的校准基线、过滤模式。**候选不裁剪。**
+        # 落它的理由见 `workflows/agents_nodes._retrieval_record`：判定用了两把锁之后，
+        # 要复校阈值就必须知道「当时到底召回了什么、各自多少分」，而这些事后查不回来。
+        #
+        # ⚠️ 这里**删掉了** `metadata["retrieval_filters"]`。它原先算好一堆维度
+        # （渠道/部门/领域/密级）却**零消费者** —— 没有任何代码读它回填检索，
+        # 前端也没读。留着会让人以为「检索真的按这些维度过滤了」。
+        # 现在过滤的真实状态在 `retrieval.filters` 里，那是**实际发生**的而不是「本来是这些」。
+        retrieval = dict(result.get("retrieval") or {})
+        if retrieval:
+            metadata["retrieval"] = retrieval
         self.source_repo.update_status(saved_source.id or 0, "pending_review", metadata=metadata)
         return {
             "source_id": saved_source.id,

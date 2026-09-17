@@ -106,15 +106,24 @@ class RequirementQueryService:
 
     # ── 检索 ──────────────────────────────────────────────────────────────
 
-    def search_requirements(self, query: str, limit: int = 5) -> list[dict[str, object]]:
+    def search_requirements(
+        self, query: str, limit: int = 5, *, channel: str | None = None
+    ) -> list[dict[str, object]]:
         """按语义检索历史需求。
 
         **没有命中是完全正常的结果** —— 返回空列表，不是错误。
+
+        `channel` 传了就**真过滤**（硬）。分析路径默认不传 —— 理由见
+        `config/settings.py` 的 `SIMILARITY_FILTER_MODE`：同一条需求从两个渠道提
+        本就该判重复，按渠道切会把它藏掉。
         """
         cleaned = (query or "").strip()
         if not cleaned:
             return []
-        rows = self.retrieval_service.search(cleaned, limit=_clamp(limit, MAX_SEARCH_LIMIT))
+        filters = {"channel": channel} if channel else None
+        rows = self.retrieval_service.search(
+            cleaned, limit=_clamp(limit, MAX_SEARCH_LIMIT), filters=filters
+        )
         return [
             {
                 "requirement_key": row.get("requirement_key"),
@@ -129,6 +138,8 @@ class RequirementQueryService:
                 # 纯关键词命中的候选没有余弦，这里是 `None` —— 判定层据此标 `unverifiable`，
                 # 而不是拿一个量纲不同的数充数。见 `domain/similarity_scale.py`。
                 "vector_similarity": row.get("vector_similarity"),
+                # 来路。`soft` 模式的渠道标注直接复用它，不另算一份。
+                "source_types": list(row.get("source_types") or []),
             }
             for row in rows
         ]

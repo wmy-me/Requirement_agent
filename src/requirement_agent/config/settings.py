@@ -123,6 +123,22 @@ class Settings(BaseSettings):
     similarity_recall_limit: int = Field(
         default=10, ge=1, le=20, alias="SIMILARITY_RECALL_LIMIT"
     )
+    # 分析图检索时要不要按渠道过滤。三档：
+    #   off  —— 完全不传 filters。与接线前**逐字节一致**，用于对照与回滚。
+    #   soft —— **不删候选**，只给每条候选附「与本次来源同渠道吗」（默认）。
+    #   hard —— 真过滤。⚠️ 只对显式调用方有意义，分析路径基本不该用，理由见下。
+    #
+    # ⚠️ **为什么默认 soft 而不是 hard。** 实测四个可过滤维度没有一个能安全用于硬过滤
+    # （2026-09-17，库里 12 条来源 / 4 条需求）：
+    #   · department / sensitivity_level —— 12/12 全是 NULL，硬过滤返回 **0 条候选**，
+    #     于是 analyze 判「独立」→ 一个真重复被静默入库。这是项目最怕的场景。
+    #   · source_type —— 12/12 全是 'web'，今天过滤是空操作；等飞书流量进来，
+    #     按渠道过滤会**藏掉跨渠道的重复**（同一条需求从两个渠道提，本就该判重复）。
+    #   · business_domain —— 有值，但**库里唯一那条真实关系两端 domain 不同**
+    #     （REQ-000015 门店巡检 workflow ↔ REQ-000002 报表导出 report）。
+    #     硬过滤会把它直接丢掉。
+    # soft 只标注、不删候选，所以零漏召回风险；标注本身也让审核人看得到「这条来自别的渠道」。
+    similarity_filter_mode: str = Field(default="soft", alias="SIMILARITY_FILTER_MODE")
 
     # 后台 outbox 消费循环：由 API 进程持续认领 embedding 同步 / 文档分片事件
     outbox_consumer_enabled: bool = Field(default=True, alias="OUTBOX_CONSUMER_ENABLED")
@@ -283,6 +299,17 @@ class Settings(BaseSettings):
             related_contrast=self.similarity_contrast_related,
             candidate_relevance=floor,
         )
+
+    @field_validator("similarity_filter_mode")
+    @classmethod
+    def _validate_filter_mode(cls, value: str) -> str:
+        """拼错的模式名会被静默当成默认值，那等于配置没生效却没人知道。"""
+        normalized = str(value).strip().lower()
+        if normalized not in ("off", "soft", "hard"):
+            raise ValueError(
+                f"SIMILARITY_FILTER_MODE 只能是 off / soft / hard，收到 {value!r}"
+            )
+        return normalized
 
     def similarity_calibration_is_stale(self) -> bool:
         """当前 embedding 模型与「阈值是在哪个模型上量的」是否对不上。

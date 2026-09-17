@@ -140,9 +140,38 @@ def test_tool_call_record_shape() -> None:
     record = tool_call_record(
         "search_requirements", {"query": "x", "limit": 5}, ToolResult.success([1, 2, 3])
     )
-    assert set(record) == {"tool", "params", "status", "duration_ms", "count", "message"}
+    assert set(record) == {
+        "tool", "params", "status", "duration_ms", "count", "message", "sample",
+    }
     assert record["count"] == 3
     assert record["params"] == {"query": "x", "limit": 5}
+
+
+def test_tool_call_record_samples_which_rows_came_back() -> None:
+    """**留痕要能回答「是哪几条」，不只是「有几条」。**
+
+    此前只记 `count`，于是排查「为什么这条没判重复」时，唯一有用的信息恰恰缺失 ——
+    知道召回了 4 条，不知道是哪 4 条。
+    """
+    rows = [
+        {"requirement_key": "REQ-000001", "vector_similarity": 0.81},
+        {"requirement_key": "REQ-000002", "vector_similarity": 0.77},
+        {"requirement_key": "REQ-000003", "vector_similarity": 0.70},
+        {"requirement_key": "REQ-000004", "vector_similarity": 0.66},
+    ]
+    record = tool_call_record("search_requirements", {"query": "x"}, ToolResult.success(rows))
+
+    assert record["count"] == 4, "总数照旧"
+    assert [row["requirement_key"] for row in record["sample"]] == [
+        "REQ-000001", "REQ-000002", "REQ-000003",
+    ], "只抽前几条 —— 审计日志不该成为数据副本"
+
+
+def test_tool_call_record_sample_is_none_for_non_list_results() -> None:
+    """非列表结果没有「哪几条」可言，给 `None` 而不是空列表。"""
+    record = tool_call_record("get_requirement_detail", {}, ToolResult.success({"a": 1}))
+
+    assert record["sample"] is None
 
 
 def test_tool_call_record_counts_dict_results() -> None:

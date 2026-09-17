@@ -71,6 +71,7 @@ class _CallRecord:
     duration_ms: float
     count: int | None
     message: str | None
+    sample: list[dict[str, Any]] | None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -80,7 +81,31 @@ class _CallRecord:
             "duration_ms": self.duration_ms,
             "count": self.count,
             "message": self.message,
+            "sample": self.sample,
         }
+
+
+# 留痕里抽样几条结果。**刻意只取前几条，不是全部** —— 审计日志不该成为数据副本
+# （与 `tools/base.py` 的 `_ARG_TEXT_CHARS` 同一条理由）。但「一条都不记」也不够用：
+# 此前只记 `count`，于是留痕能告诉你「召回了 5 条」却告诉不了你是哪 5 条，
+# 而排查「为什么这条没判重复」时，那正是唯一有用的信息。
+_SAMPLE_SIZE = 3
+
+
+def _result_sample(value: object) -> list[dict[str, Any]] | None:
+    """从工具结果里抽前几条的「编号 + 余弦」。非列表结果返回 `None`。"""
+    if not isinstance(value, list):
+        return None
+    rows: list[dict[str, Any]] = []
+    for item in value[:_SAMPLE_SIZE]:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {"requirement_key": item.get("requirement_key")}
+        # 只有检索类结果才有余弦；没有就**不写这个键**，免得看起来像「余弦是 null」
+        if "vector_similarity" in item:
+            row["vector_similarity"] = item.get("vector_similarity")
+        rows.append(row)
+    return rows or None
 
 
 def invoke(name: str, params: dict[str, Any] | None = None, *, consumer: str = "analysis") -> ToolResult:
@@ -124,6 +149,7 @@ def tool_call_record(
         duration_ms=result.duration_ms,
         count=count,
         message=result.message,
+        sample=_result_sample(value),
     ).as_dict()
 
 

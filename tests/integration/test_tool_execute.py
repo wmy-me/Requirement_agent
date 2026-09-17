@@ -70,7 +70,13 @@ def test_search_requirements_returns_candidates() -> None:
     first = result.result[0]
     # **只给余弦，不给排序分。** 排序分（`retrieval_score`/`score`）是管道内部的东西，
     # 递给模型只会让它拿一个「叫 similarity 却不是相似度」的数下结论。
-    assert set(first) == {"requirement_key", "requirement_name", "vector_similarity"}
+    # `source_types` 是来路，`soft` 模式的渠道标注直接复用它（B4 批 4）。
+    assert set(first) == {
+        "requirement_key",
+        "requirement_name",
+        "vector_similarity",
+        "source_types",
+    }
     assert first["requirement_key"].startswith("REQ-")
     # 不断言非空：纯关键词命中的候选没有余弦，那是合法的 `None`
     assert first["vector_similarity"] is None or 0.0 <= first["vector_similarity"] <= 1.0

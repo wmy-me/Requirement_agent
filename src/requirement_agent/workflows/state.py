@@ -40,8 +40,22 @@ class RequirementState(TypedDict, total=False):
     ctx: dict[str, Any]
 
     # —— 工具调用记录（B3）：每个节点把调过的工具追加进来，供落库与排障 ——
-    # 形状见 `tools/invoker.tool_call_record`：tool / params / status / duration_ms / count
+    # 形状见 `tools/invoker.tool_call_record`：
+    # tool / params / status / duration_ms / count / sample（前几条的编号与余弦）
     tool_calls: Annotated[list[dict[str, Any]], add]
+
+    # —— 检索证据（B4 批 4）—— 由 `retrieve_node` 产出，落进 `requirement_source.metadata["retrieval"]`。
+    #
+    # **与 `candidates` 是两回事，别混。** `candidates` 是给 analyze 用的原始召回（工具输出），
+    # 这个字段是「这次检索发生了什么」的可复算记录：每条候选的余弦与 relevance、
+    # 查询级落差 contrast、当时生效的校准基线（含 `stale`）、过滤模式与是否真过滤。
+    #
+    # 判定结论（级别）**不在这里** —— 那是 analyze 的产出。检索侧的事实与模型侧的判断
+    # 混进同一个字段，迟早被误读成同一件事。
+    #
+    # ⚠️ 候选**一律不裁剪**：裁掉低分候选就等于抹掉「当时到底召回了什么」，
+    # 而「未召回 vs 模型否定」的区分正依赖它。
+    retrieval: dict[str, Any]
 
     # —— 错误累积 ——
     # ⚠️ 目前**没有任何消费者**（`decide_node` 与 `decision_rules` 都不读它）。

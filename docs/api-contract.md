@@ -393,6 +393,49 @@ processing_status  submitted_at  updated_at
 与 `/reviews/pending` 的单项**同一形状**（字段完全一致）。不存在 → 404。
 ⚠️ **前端没有在调这个端点**，契约此前也没写。见 §10-T5。
 
+#### `metadata` 里有什么（2026-09-17 实测）
+
+`metadata` 是**分析产物的落脚点**，审核页要展示的东西基本都在这里。当前 8 个键：
+
+```
+analysis  risk  extracted  capability_match  tool_calls  retrieval  standardized_document  business_domain
+```
+
+其中两个与「为什么判成这样」直接相关：
+
+- **`retrieval`（B4 批 4 新增）** —— 这次检索**实际发生了什么**：
+
+```json
+{
+  "query": "…", "recall_limit": 10, "candidate_count": 4,
+  "contrast": 0.16261, "contrast_confidence": "high",
+  "calibration": {"model": "Doubao-embedding", "baseline": 0.7273, "noise_ceiling": 0.812,
+                  "source": "docs/baseline/similarity_calibration_…json", "stale": false},
+  "filters": {"mode": "soft", "requested": {}, "applied": {}, "annotated_against": {"channel": "web"}},
+  "candidates": [
+    {"requirement_key": "REQ-000015", "vector_similarity": 0.865878, "relevance": 0.50817,
+     "retrieval_score": 0.032787, "keyword_score": null, "match_type": "hybrid",
+     "channel_match": true}
+  ]
+}
+```
+
+  ⚠️ 三点别搞错：
+  1. **`candidates` 不裁剪**（这里是全部 4 条），而 `metadata.analysis.candidates` 是
+     模型点过名的证据面板 —— 两者不是一回事，别互相替代。
+  2. **`relevance` 未截断，可能为负**（实测 REQ-000002 是 −0.026）。负值表示比无关文本的
+     中心还远，是合法且有信息量的值；**别在展示时钳成 0**，那会让它看起来像「刚好在基线上」。
+  3. `filters.applied` 为空**不代表没过滤**，而是 `soft` 模式本来就不过滤。
+     `annotated_against` 才是 `channel_match` 的比对依据。
+
+- **`tool_calls`** —— 每次工具调用的留痕：`tool / params / status / duration_ms /
+  count / message / sample`。**`sample` 是前 3 条的编号与余弦** —— 只有 `count` 时
+  能知道「召回了 4 条」却不知道是哪 4 条，而排查「为什么这条没判重复」时那正是唯一有用的信息。
+
+> ⚠️ `metadata["retrieval_filters"]` **已删除**（B4 批 4）。它原先算好渠道/部门/领域/密级
+> 四个维度却**零消费者** —— 没有任何代码读它回填检索，前端也没读。
+> 它只会让人以为「检索真的按这些维度过滤了」。真实状态看 `retrieval.filters`。
+
 ### `GET /api/v1/reviews/{source_id}/merge-preview`
 入参 `target_requirement_key`（必填）、`merge_mode`（`union` 默认 / `replace`）。
 
