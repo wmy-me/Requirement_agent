@@ -96,8 +96,73 @@ function scrollBottom() {
   msgs.scrollTop = msgs.scrollHeight;
 }
 
+/* ── 鉴权（B1 起服务端**默认拒绝**）────────────────────────────────────
+ *
+ * 服务端从 B1 起要求 `Authorization: Bearer <token>`，**没配 token 就是全部 401**
+ * （默认拒绝，不是默认放行 —— 见 `api/auth.py`）。前端此前从不带头，
+ * 于是所有列表页都空着、控制台一片 401。
+ *
+ * token 存在 `localStorage`，由使用者粘贴一次：
+ *   · 控制台里 `raSetToken('你的 token')` 设置
+ *   · `raClearToken()` 清除
+ * 第一次遇到 401 时也会弹一次输入框（每次加载页面只弹一次，避免并发请求弹一串）。
+ *
+ * ⚠️ **不把 token 写进页面或代码里**：`/ui` 与 `/static` 是**豁免路径**，
+ * 谁都能打开 —— 注入 token 等于把 admin 凭证发给所有人，B1 就白做了。
+ */
+const TOKEN_KEY = 'requirement_agent_token';
+let tokenPrompted = false;
+
+function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+}
+
+function authHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  const token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return headers;
+}
+
+/** 弹一次输入框要 token。**每次加载页面只问一次** —— 首屏会并发发好几个请求，
+ *  不设闸的话会弹出一串同样的框。返回设置好的 token（用户取消则返回空串）。 */
+function askForToken() {
+  if (tokenPrompted) return getToken();
+  tokenPrompted = true;
+  const entered = window.prompt(
+    '需要 API token（服务端已开启鉴权）。\n'
+    + '粘贴 .env 里 API_AUTH_TOKEN / API_AUTH_TOKENS 中对应的那个：',
+    getToken()
+  );
+  if (entered && entered.trim()) {
+    try { localStorage.setItem(TOKEN_KEY, entered.trim()); } catch (e) { /* 隐私模式下会失败 */ }
+    return entered.trim();
+  }
+  return '';
+}
+
+window.raSetToken = (t) => { try { localStorage.setItem(TOKEN_KEY, String(t).trim()); } catch (e) {} location.reload(); };
+window.raClearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} location.reload(); };
+
 async function apiJson(url, options) {
-  const resp = await fetch(url, options);
+  const opts = Object.assign({}, options || {}, {
+    headers: authHeaders((options || {}).headers),
+  });
+  let resp = await fetch(url, opts);
+
+  // 401 = 没带 / 带错 token。提示一次，拿到就用**同样的请求**重试一次。
+  // 重试只做一次：再来一次还是 401 说明 token 本身不对，那时把旧的清掉，
+  // 免得它一直卡在那里让人以为「已经配好了」。
+  if (resp.status === 401) {
+    if (askForToken()) {
+      resp = await fetch(url, Object.assign({}, opts, { headers: authHeaders((options || {}).headers) }));
+    }
+    if (resp.status === 401) {
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+      throw new Error('API token 无效或已失效 —— 用 raSetToken(\'…\') 重新设置');
+    }
+  }
+
   if (!resp.ok) {
     let detail = resp.statusText || '请求失败';
     try {
@@ -534,6 +599,8 @@ async function runChat(text, files) {
       attached.forEach((f) => form.append('files', f.file || f, f.name));
       resp = await fetch(STREAM_URL_FILES, {
         method: 'POST',
+        // 只带 Authorization：multipart 的 Content-Type 必须让浏览器自己设（带 boundary）
+        headers: authHeaders(),
         body: form,
         signal: stream.controller.signal,
       });
@@ -548,7 +615,7 @@ async function runChat(text, files) {
       };
       resp = await fetch(STREAM_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
         signal: stream.controller.signal,
       });
@@ -562,6 +629,12 @@ async function runChat(text, files) {
         const busy = new Error((info && info.message) || '本对话正在思考上一个问题。');
         busy.conversationBusy = true;
         throw busy;
+      }
+      // 401 = 没带 token。这里**不自动重试**（重试要把整条消息重发一遍，
+      // 而用户可能已经等了几秒），只提示一次并给出可操作的下一步。
+      if (resp.status === 401) {
+        askForToken();
+        throw new Error('需要 API token 才能发起对话 —— 已弹出输入框；也可在控制台执行 raSetToken(…)。');
       }
       let detail = resp.statusText;
       try {
@@ -713,9 +786,16 @@ async function resumeRun(runId) {
   try {
     const resp = await fetch('/api/v1/agent/runs/' + encodeURIComponent(runId) + '/resume', {
       method: 'POST',
+      headers: authHeaders(),
       signal: stream.controller.signal,
     });
     if (!resp.ok) {
+      // 401 = 没带 token。这里**不自动重试**（重试要把整条消息重发一遍，
+      // 而用户可能已经等了几秒），只提示一次并给出可操作的下一步。
+      if (resp.status === 401) {
+        askForToken();
+        throw new Error('需要 API token 才能发起对话 —— 已弹出输入框；也可在控制台执行 raSetToken(…)。');
+      }
       let detail = resp.statusText;
       try {
         const b = await resp.json();
