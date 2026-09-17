@@ -31,6 +31,7 @@ for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
 | `020_outbox_retry_backoff.sql` | outbox 增加 `next_attempt_at`（失败退避） |
 | `021_agent_run_tracking.sql` | **运行追踪**：`agent_run` 补列 + 补 `run_id` 唯一约束；新增 `agent_run_event`（带序号的事件流）与 `tool_invocation` |
 | `022_model_invocation.sql` | **模型调用记录**：`model_invocation`（provider/model/task_type/tokens/延迟/降级级别；embedding 的维度与版本单独记） |
+| `023_embedding_provenance.sql` | **向量来源**：三张向量表加 `embedding_model` / `embedding_dimension`（可空 = 来源未知，**不可回填当前模型名**） |
 
 > **编号规则（事实惯例，2026-09-17 补记）**：只追加、不改旧文件。
 > 需要改已有对象（约束、索引）时，在新迁移里 `DROP ... IF EXISTS` 再建，
@@ -59,6 +60,21 @@ for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
 **若将来要重建索引**，唯一路径是先降到 ≤2000 维：换一个维度 ≤2000 的 embedding 模型，
 或对现有向量做降维（如 Matryoshka 截断）。那需要一次破坏性迁移（改列类型 → 清空向量 →
 重建索引 → 用 `scripts/reindex_embeddings.py` 回填），属于独立决策，不要在没评估召回损失前动手。
+
+### 换 embedding 模型时必须重算存量向量（§4.6）
+
+`023` 起三张向量表都记 `embedding_model` / `embedding_dimension`，`GET /api/v1/health/embedding`
+会报出「库里的向量是不是当前模型算的」。**换模型后不重算**的后果是：
+
+    库里是旧模型的向量，查询用新模型编码 → pgvector 照常算余弦 →
+    **返回一个看起来完全正常的分数**，而两个向量根本不在同一个空间里。
+
+不报错、不告警 —— 这是最难发现的一类失效。找到后复制端点返回的 `action`
+（`python -m scripts.reindex_embeddings`）即可。
+
+> ⚠️ **`embedding_model IS NULL` 的存量行不等于「匹配」**，它的含义是「不知道」。
+> 检出逻辑按「需要重算」处理，**不要**用当前模型名去回填 —— 那些向量可能来自
+> 任何一个旧模型，回填等于撒谎，而且下次换模型时会正好放过它们。
 
 ### 维度必须两处一致
 

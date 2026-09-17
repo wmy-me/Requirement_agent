@@ -17,6 +17,17 @@ from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
 
+def _chunk_content_hash(chunk_text: str) -> str:
+    """分片指纹。**与迁移 019 回填时用的公式逐字一致**：
+    `encode(sha256(convert_to(btrim(chunk_text), 'UTF8')), 'hex')`。
+
+    不一致的话，老行与新行会得到两种 hash，去重索引形同虚设。
+    """
+    import hashlib
+
+    return hashlib.sha256(chunk_text.strip().encode("utf-8")).hexdigest()
+
+
 class DocumentAssetRepository:
     """Persistence for uploaded artefacts and chunked document RAG."""
 
@@ -138,6 +149,19 @@ class DocumentAssetRepository:
             ).mappings().first()
         return self._normalize_asset_row(row) if row else None
 
+    @staticmethod
+    def _embedding_model_name() -> str:
+        """当前 embedding 模型名。走统一取值器，避免与 MODEL_ROUTES 不一致。
+
+        局部导入：与本文件其余 embedding 依赖一样（模块 docstring 说明了理由 ——
+        未配置向量能力时不该影响主流程）。
+        """
+        from requirement_agent.infrastructure.embedding.embedding_service import (
+            current_embedding_model,
+        )
+
+        return current_embedding_model()
+
     def add_chunks(self, document_id: int, content: str, *, chunk_size: int = 600, overlap: int = 120) -> list[dict[str, object]]:
         """将文本切块并逐块写入 document_chunk（含向量），返回保存的分块列表。
 
@@ -161,8 +185,13 @@ class DocumentAssetRepository:
                 row = session.execute(
                     text(
                         """
-                        INSERT INTO document_chunk (id, document_id, chunk_index, chunk_text, embedding, metadata)
-                        VALUES (:id, :document_id, :chunk_index, :chunk_text, :embedding, CAST(:metadata AS JSONB))
+                        INSERT INTO document_chunk
+                            (id, document_id, chunk_index, chunk_text, embedding, metadata,
+                             embedding_model, embedding_dimension, content_hash)
+                        VALUES
+                            (:id, :document_id, :chunk_index, :chunk_text, :embedding,
+                             CAST(:metadata AS JSONB), :embedding_model, :embedding_dimension,
+                             :content_hash)
                         RETURNING id, document_id, chunk_index, chunk_text, metadata, created_at
                         """
                     ),
@@ -173,6 +202,17 @@ class DocumentAssetRepository:
                         "chunk_text": chunk,
                         "embedding": embedding,
                         "metadata": json.dumps({"source": "fixed-slice"}),
+                        # 来源（B3.1 §4.6）：不记的话，换 embedding 模型后
+                        # 「新旧向量混在一起」没有任何地方能察觉
+                        "embedding_model": self._embedding_model_name(),
+                        "embedding_dimension": len(embedding),
+                        # ⚠️ **必须写 content_hash**（B3.1 顺手修的既有缺陷）：
+                        # 这一列是迁移 019 加的，公式 `sha256(btrim(chunk_text))`，
+                        # 但它**只在 019 里回填过一次，代码里从来没有人写**。
+                        # 而本方法是「先 DELETE 再 INSERT」—— 于是任何一次重新分片
+                        # （上传新版本、跑重算脚本）都会把已有分片的 hash 抹成 NULL，
+                        # `(document_id, content_hash)` 那个去重索引随之失效。
+                        "content_hash": _chunk_content_hash(chunk),
                     },
                 ).mappings().one()
                 saved.append(self._normalize_chunk_row(row))
@@ -298,7 +338,10 @@ class DocumentAssetRepository:
         return [chunk for chunk in chunks if chunk]
 
     def _embed_text(self, text: str) -> list[float]:
-        from requirement_agent.infrastructure.embedding.embedding_service import EmbeddingService
+        from requirement_agent.infrastructure.embedding.embedding_service import (
+    EmbeddingService,
+    current_embedding_model,
+)
 
         return EmbeddingService().embed(text)
 

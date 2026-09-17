@@ -9,6 +9,9 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 from requirement_agent.common.snowflake import new_id
+from requirement_agent.infrastructure.embedding.embedding_service import (
+    current_embedding_model,
+)
 from requirement_agent.common.time import as_utc_iso, parse_display_time
 from requirement_agent.config.settings import settings
 
@@ -104,15 +107,28 @@ class RequirementVectorRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO requirement_embedding (id, requirement_id, embedding, source_text)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO requirement_embedding
+                        (id, requirement_id, embedding, source_text,
+                         embedding_model, embedding_dimension)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (requirement_id) DO UPDATE SET
                         embedding = EXCLUDED.embedding,
                         source_text = EXCLUDED.source_text,
+                        -- ❗ 来源必须跟着一起更新：改了 embedding 却留着旧的模型名，
+                        -- 会让「这条向量是谁算的」这件事**说谎**，比不记更坏。
+                        embedding_model = EXCLUDED.embedding_model,
+                        embedding_dimension = EXCLUDED.embedding_dimension,
                         updated_at = NOW()
                     RETURNING requirement_id, source_text
                     """,
-                    (new_id(), requirement_id, embedding, source_text),
+                    (
+                        new_id(),
+                        requirement_id,
+                        embedding,
+                        source_text,
+                        current_embedding_model(),
+                        len(embedding),
+                    ),
                 )
                 result = cur.fetchone()
             conn.commit()

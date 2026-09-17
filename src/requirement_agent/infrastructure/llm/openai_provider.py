@@ -96,7 +96,13 @@ class LLMProvider:
         # 免得 B3.1b 再改一次表的写入）。level 0 = 主模型。
         self.fallback_level = 0
         self.fallback_from: str | None = None
-        self.embedding_model = settings.embedding_model
+        # ⚠️ embedding **也受 MODEL_ROUTES 管**：初版这里恒取 settings.embedding_model，
+        # 于是 `MODEL_ROUTES["embedding"]` 配了不生效 —— 更糟的是
+        # **我们会把一个错的模型名记进向量来源**（记错比不记还坏）。
+        self.embedding_model = (
+            spec.model if (spec is not None and task_type == "embedding")
+            else settings.embedding_model
+        )
         self.temperature = settings.llm_temperature
         self.timeout = settings.llm_timeout_seconds
         self.stream_read_timeout = settings.llm_stream_read_timeout_seconds

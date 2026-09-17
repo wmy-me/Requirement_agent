@@ -10,6 +10,9 @@ import json
 from sqlalchemy import text
 
 from requirement_agent.common.snowflake import new_id
+from requirement_agent.infrastructure.embedding.embedding_service import (
+    current_embedding_model,
+)
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.infrastructure.db.session import SessionLocal
 
@@ -35,8 +38,8 @@ class MemoryRepository:
             row = session.execute(
                 text(
                     """
-                    INSERT INTO memory_note (id, actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta, embedding)
-                    VALUES (:id, :actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB), CAST(:embedding AS vector))
+                    INSERT INTO memory_note (id, actor_id, kind, content, source_conversation_id, source_message_id, ref_requirement_key, importance, meta, embedding, embedding_model, embedding_dimension)
+                    VALUES (:id, :actor_id, :kind, :content, CAST(:source_conversation_id AS UUID), :source_message_id, :ref_requirement_key, :importance, CAST(:meta AS JSONB), CAST(:embedding AS vector), :embedding_model, :embedding_dimension)
                     RETURNING id, actor_id, kind, status, active, content, source_conversation_id, source_message_id, ref_requirement_key, superseded_by, importance, meta, created_at, updated_at
                     """
                 ),
@@ -51,6 +54,10 @@ class MemoryRepository:
                     "importance": importance,
                     "meta": json.dumps(meta or {}),
                     "embedding": ("[" + ",".join(str(float(x)) for x in embedding) + "]") if embedding is not None else None,
+                    # 来源只在这条记忆**确实有向量**时才写 —— 没向量的行写个模型名
+                    # 会让人以为它有（而 NULL 的含义正是「没有/不知道」）
+                    "embedding_model": current_embedding_model() if embedding is not None else None,
+                    "embedding_dimension": len(embedding) if embedding is not None else None,
                 },
             ).mappings().one()
             session.commit()

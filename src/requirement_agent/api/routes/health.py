@@ -26,6 +26,47 @@ async def database_health() -> dict[str, object]:
     return {"database": ok, "status": message}
 
 
+@router.get("/api/v1/health/embedding")
+async def embedding_health() -> dict[str, object]:
+    """**库里的向量是不是当前模型算的**（B3.1 §4.6）。
+
+    换 embedding 模型之后如果不重算存量向量，检索会拿新模型去算旧向量的余弦 ——
+    pgvector 照常返回一个**看起来完全正常的分数**，没有任何地方会察觉两个向量
+    根本不在同一个空间里。这个端点就是把那件事**说出来**。
+
+    三种状态（见 `embedding_provenance` 的模块 docstring）：
+      `ok`     —— 全部来自当前模型
+      `stale`  —— 存在别的模型算的向量
+      `unknown`—— 存在来源未知的存量（迁移 023 之前的行，**不等于**匹配）
+      `empty`  —— 该表还没有向量
+
+    `action` 只在不可信时给出，且是一条**可以直接复制执行**的命令 ——
+    「该怎么办」不该让人再翻文档。
+    """
+    from requirement_agent.infrastructure.vector.embedding_provenance import (
+        inspect_embedding_provenance,
+        provenance_verdict,
+    )
+
+    trusted, reason = provenance_verdict()
+    return {
+        "trusted": trusted,
+        "reason": reason,
+        "tables": [
+            {
+                "table": report.table,
+                "status": report.status,
+                "total": report.total,
+                "by_model": report.by_model,
+                "unknown": report.unknown,
+                "current_model": report.current_model,
+            }
+            for report in inspect_embedding_provenance()
+        ],
+        "action": None if trusted else "python -m scripts.reindex_embeddings",
+    }
+
+
 @router.get("/api/v1/health/llm")
 async def llm_health() -> dict[str, object]:
     """LLM 配置与调用计量：chat/embedding 是否配置、请求调参、进程内计量快照。

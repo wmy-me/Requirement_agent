@@ -71,11 +71,23 @@ def main(dry_run: bool = False) -> int:
         if not content:
             continue
         try:
-            vec_str = "[" + ",".join(str(float(x)) for x in embed.embed(content)) + "]"
+            vector = embed.embed(content)
+            vec_str = "[" + ",".join(str(float(x)) for x in vector) + "]"
             with SessionLocal() as s:
+                # 向量与**来源**必须一起写（B3.1 §4.6）：只改向量不改模型名，
+                # 会让「这条向量是谁算的」说谎，比不记更坏。
                 s.execute(
-                    text("UPDATE memory_note SET embedding = CAST(:vec AS vector), updated_at = NOW() WHERE id = :id"),
-                    {"vec": vec_str, "id": mem["id"]},
+                    text(
+                        "UPDATE memory_note SET embedding = CAST(:vec AS vector), "
+                        "embedding_model = :model, embedding_dimension = :dim, "
+                        "updated_at = NOW() WHERE id = :id"
+                    ),
+                    {
+                        "vec": vec_str,
+                        "id": mem["id"],
+                        "model": embed.model_name,
+                        "dim": len(vector),
+                    },
                 )
                 s.commit()
             print("  memory", mem["id"], "ok")
@@ -84,6 +96,17 @@ def main(dry_run: bool = False) -> int:
             print("  FAIL memory", mem["id"], str(exc)[:160])
 
     print("\nfailures:", failures if failures else "none")
+
+    # 重算完顺带报一次来源盘点 —— 这个脚本的用途就是「换模型后清库重算」，
+    # 跑完到底清干净没有，是使用者最想知道的一件事。
+    if not dry_run:
+        from requirement_agent.infrastructure.vector.embedding_provenance import (
+            inspect_embedding_provenance,
+        )
+
+        print("\n向量来源盘点：")
+        for report in inspect_embedding_provenance():
+            print(f"  {report.table:<22} {report.status:<8} 按模型 {report.by_model} 未知 {report.unknown}")
     return 0 if not failures else 2
 
 

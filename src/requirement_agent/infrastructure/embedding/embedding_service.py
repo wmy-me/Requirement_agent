@@ -6,6 +6,18 @@ from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 
 
+def current_embedding_model() -> str:
+    """当前生效的 embedding 模型名 —— **写向量来源时一律用它**。
+
+    不直接读 `settings.embedding_model`：那会忽略 `MODEL_ROUTES["embedding"]`，
+    于是记下来的来源与实际用的模型对不上（**记错比不记更坏**）。
+    统一走注册表，与 `EmbeddingService` 实际用的那个是同一个来源。
+    """
+    from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
+
+    return ModelRegistry().get_embedding_model().model
+
+
 class EmbeddingDimensionError(RuntimeError):
     """返回向量的维度与 `EMBEDDING_DIMENSION` 不一致。
 
@@ -34,7 +46,21 @@ class EmbeddingService:
     """
 
     def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or LLMProvider()
+        if provider is not None:
+            self.provider = provider
+        else:
+            # 走注册表：`MODEL_ROUTES["embedding"]` 配了才生效（B3.1）。
+            # 没配时注册表返回全局 `EMBEDDING_MODEL` —— 与改造前一致。
+            from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
+
+            self.provider = LLMProvider(
+                spec=ModelRegistry().get_embedding_model(), task_type="embedding"
+            )
+
+    @property
+    def model_name(self) -> str:
+        """当前实际使用的 embedding 模型名 —— **写向量来源时以它为准**。"""
+        return self.provider.embedding_model
 
     def embed(self, text: str) -> list[float]:
         """返回 embedding 向量（维度取 `embedding_dimension`）。
