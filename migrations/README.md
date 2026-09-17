@@ -19,6 +19,24 @@ for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
 | `008_drop_unused_requirement_attachment.sql` | 删除从未被使用的 `requirement_attachment` |
 | `009_requirement_relation.sql` | 需求关系表（REQ ↔ REQ 的重复/关联/冲突边） |
 | `010_database_timezone.sql` | 数据库默认时区设为东八区（只影响直连客户端的显示，不改存储） |
+| `011_outbox_discarded_status.sql` | outbox 增加 `discarded` 终态（人工丢弃，不被重领） |
+| `012_conversation_run_exclusive.sql` | 同一对话最多一个活跃 run（部分唯一索引） |
+| `013_agent_run_checkpoint.sql` | `agent_run` 增加 `stage` / `checkpoint`（断点续跑） |
+| `014_requirement_feature_module.sql` | `requirement_feature` 增加模块标签 |
+| `015_capability_constraint_vocab.sql` | 能力 / 限定条件受控词表（3 张表） |
+| `016_capability_origin_source.sql` | 能力提案的来源溯源 |
+| `017_feature_capability_and_version_snapshot.sql` | `feature_capability` + 版本快照 |
+| `018_requirement_title_candidate.sql` | 候选标题表 |
+| `019_document_version_chain.sql` | 文档版本链（`document_stream`） |
+| `020_outbox_retry_backoff.sql` | outbox 增加 `next_attempt_at`（失败退避） |
+| `021_agent_run_tracking.sql` | **运行追踪**：`agent_run` 补列 + 补 `run_id` 唯一约束；新增 `agent_run_event`（带序号的事件流）与 `tool_invocation` |
+
+> **编号规则（事实惯例，2026-09-17 补记）**：只追加、不改旧文件。
+> 需要改已有对象（约束、索引）时，在新迁移里 `DROP ... IF EXISTS` 再建，
+> 或用 `DO $$ ... $$` 判存在 —— 见 `002` / `011` / `020` / `021` 的写法。
+> ⚠️ `021` 里有一条**只能判存在、不能 DROP 再建**：`agent_run_run_id_key`
+> 一旦建出，就会被同迁移建的两个外键依赖，`DROP CONSTRAINT` 会报
+> `DependentObjectsStillExist`，重跑直接失败。
 
 > **关于时间口径**：所有时间列都是 `timestamptz`，存的是绝对时刻。`010` 把数据库
 > 默认时区设为 `Asia/Shanghai`，是为了让**不经应用直接连库**（DBeaver / psql）的人

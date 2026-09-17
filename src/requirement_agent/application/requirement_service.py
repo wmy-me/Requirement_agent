@@ -10,10 +10,14 @@ from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
 from requirement_agent.application.capability_match_service import CapabilityMatchService
+from requirement_agent.application.run_tracking import RunTracking
 from requirement_agent.domain.requirement import RequirementSource
-from requirement_agent.workflows.graphs import run_analysis
-from requirement_agent.infrastructure.db.repositories import RequirementMasterRepository, RequirementSourceRepository
+from requirement_agent.infrastructure.db.repositories import (
+    RequirementMasterRepository,
+    RequirementSourceRepository,
+)
 from requirement_agent.infrastructure.parser.document_parser import DocumentParser
+from requirement_agent.workflows.graphs import run_analysis
 
 
 def _csv_cell(value: object) -> str:
@@ -42,6 +46,7 @@ class RequirementService:
         risk_agent: RiskAgent | None = None,
         document_parser: DocumentParser | None = None,
         capability_matcher: CapabilityMatchService | None = None,
+        run_tracking: RunTracking | None = None,
     ) -> None:
         self.source_repo = source_repo or RequirementSourceRepository()
         self.master_repo = master_repo or RequirementMasterRepository()
@@ -50,6 +55,7 @@ class RequirementService:
         self.risk_agent = risk_agent or RiskAgent()
         self.document_parser = document_parser or DocumentParser()
         self.capability_matcher = capability_matcher or CapabilityMatchService()
+        self.run_tracking = run_tracking or RunTracking()
 
     def submit_requirement(self, source: RequirementSource) -> dict[str, object]:
         """提交并分析一条需求来源。
@@ -127,13 +133,38 @@ class RequirementService:
             metadata=metadata,
         )
 
-        # —— Agent 编排统一走 LangGraph 分析图（抽取→检索→冲突分析→风险→决策）——
-        result = run_analysis(
+        # —— 运行追踪（B2.1）——
+        # **run 由这里建，不由图建。** 图节点只产出事件（进 state 的 `run_events` 通道），
+        # 生命周期归 Application 层 —— 理由见 `application/run_tracking.py` 的模块 docstring。
+        #
+        # `start_analysis` 失败返回 None（追踪是观测设施，不该拖垮分析），
+        # 后续所有 record/finish 在 run_id 为 None 时都是空操作。
+        run_id = self.run_tracking.start_analysis(
             source_id=saved_source.id,
-            source_text=standardized_text,
-            source_type=saved_source.source_type,
-            requester_name=saved_source.requester_name,
+            meta={"source_type": saved_source.source_type},
         )
+
+        # —— Agent 编排统一走 LangGraph 分析图（抽取→检索→冲突分析→风险→决策）——
+        try:
+            result = run_analysis(
+                source_id=saved_source.id,
+                source_text=standardized_text,
+                source_type=saved_source.source_type,
+                requester_name=saved_source.requester_name,
+            )
+        except Exception as exc:
+            # **失败要能定位到节点** —— 节点名由 `event_nodes.NodeFailure` 带出来
+            # （异常路径上 state 通道会丢，所以只能随异常传递）。
+            node = getattr(exc, "node", None)
+            self.run_tracking.fail(run_id, error=exc, node=node)
+            raise
+
+        # 事件与工具调用落库。工具调用单独落一张表 —— metadata 里那份是给
+        # 「分析→审核」跨进程传递用的，而这张表是给「按 run 反查」用的，两者不互相替代。
+        self.run_tracking.record_events(run_id, list(result.get("run_events") or []))
+        self.run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
+        self.run_tracking.finish(run_id)
+
         extracted = dict(result.get("extracted") or {})
         analysis = dict(result.get("analysis") or {})
         risk = dict(result.get("risk") or {})

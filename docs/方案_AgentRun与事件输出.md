@@ -247,14 +247,35 @@ def _sse(name, payload, *, seq=None):        # seq 为 None 时行为与现在�
 | 文件 | 改什么 | 风险 |
 |---|---|---|
 | `workflows/state.py` | 新增 `run_events: Annotated[list[dict], add]` 通道 | 低（纯追加） |
-| `workflows/graphs.py` | `run_analysis` 入口建 run、出口收尾 | **中**：它是所有分析的必经之路 |
-| `application/requirement_service.py` | 调 `run_tracking` 落事件；`update_status` 时带 run_id | 中 |
+| `workflows/graphs.py` | 建图时给每个节点包一层事件适配器（`event_nodes.traced`） | **中**：它是分析图所有调用的必经之路 |
+| `application/requirement_service.py` | **建 run / 收尾 / 落事件**（生命周期在这里，不在图里） | 中 |
 | `infrastructure/db/repositories/chat.py` | 放宽 status 的 CHECK 后，确认三处活跃判定谓词仍只用 `running` | 低 |
 | `api/routes/agent_chat.py` | `_sse` 加 `id:`；事件带 `run_id`/`sequence`；`save_progress` 同步落事件 | **中**：SSE 是前端唯一实时通道 |
-| `api/routes/agent.py` | `POST /agent/run` 建 run（现在完全不建） | 低 |
+| `api/routes/agent.py` | `POST /agent/run` 建 run + 手工产事件（它不走图） | 低 |
 | `api/auth.py` | 新 GET 端点无需改（GET 一律 read） | — |
 | `docs/api-contract.md` §6 | 补 `id:`/`run_id`/`sequence`；写明 narrative 不逐字回放 | — |
 | `scripts/verify_api_contract.py` | SPEC 补新端点 | 低 |
+
+### ⚠️ 实施时相对本方案的两处偏离（2026-09-17）
+
+**① run 的生命周期放在 Application 层，不放在 `run_analysis` 里。**
+方案原文写的是「`run_analysis` 入口建 run、出口收尾」，实施时改了，理由两条：
+
+- 方案里「它是所有分析的必经之路」这个前提**不成立** —— `/api/v1/agent/run` 走的是
+  一条独立的内联管线（`routes/agent.py`），根本不经过图。而 `run_analysis` 的
+  生产调用方**只有一个**（`requirement_service`），所以把生命周期放在调用方不是重复劳动。
+- 让图建 run 会把 `run_analysis` 变成写库的，而分析图节点在 B3 就定下「纯计算，不写库」
+  的纪律；更实际的是 `tests/unit/test_requirement_graph.py` 有三处**直接调 `run_analysis`**，
+  图一旦写库，那三条纯图测试每跑一次就往库里写一行。
+
+于是分工改成：**图产出事件（进 state 的 `run_events` 通道），Application 层管 run 的生死与落库。**
+
+**② 失败路径靠异常带节点名，不靠事件通道。**
+节点抛错时 LangGraph 的 `invoke` 会直接抛、累积的 state **全丢** ——
+所以「失败在哪一步」不可能靠事件通道传给调用方。改用 `event_nodes.NodeFailure`
+把节点名附在异常上（原始异常挂在 `__cause__`，消息里带原始文本，
+`outbox_event.last_error` 仍看得到真原因）。这会**改变经图调用时看到的异常类型**
+（`ToolInvocationError` → `NodeFailure`），已核对全仓没有生产代码依赖前者。
 
 ### **不改**
 

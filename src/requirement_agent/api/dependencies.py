@@ -40,6 +40,7 @@ from requirement_agent.infrastructure.storage.object_store import ObjectStorage
 from requirement_agent.infrastructure.channels.feishu_client import FeishuClient
 from requirement_agent.infrastructure.worker.outbox import OutboxRepository
 from requirement_agent.infrastructure.worker.tasks import DocumentChunkingTask, RequirementAnalysisTask
+from requirement_agent.application.run_tracking import RunTracking
 from requirement_agent.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,8 @@ logger = logging.getLogger(__name__)
 requirement_service = RequirementService()
 retrieval_service = RetrievalService()
 review_service = ReviewService()
+#: 运行追踪（B2.1）。无状态，共享一个实例即可。
+run_tracking = RunTracking()
 revert_service = RevertService()
 
 # —— Repository ——

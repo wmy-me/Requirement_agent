@@ -57,6 +57,17 @@ class RequirementState(TypedDict, total=False):
     # 而「未召回 vs 模型否定」的区分正依赖它。
     retrieval: dict[str, Any]
 
+    # —— 运行事件（B2.1）—— 由 `event_nodes.traced` 包出来的适配器逐节点追加。
+    #
+    # **图只产出、不落库**：分析图的节点在 B3 就定下「纯计算，不写库」的纪律，
+    # 而且异常路径上 LangGraph 的 `invoke` 会直接抛、累积的 state 会丢 ——
+    # 靠节点边算边写，在失败时恰好什么都留不下。落库由 Application 层统一做。
+    #
+    # 形状见 `domain/agent_run.RunEvent`（event_type / node / payload）。
+    # **没有 sequence** 是刻意的：序号在落库时按 run 分配，生产事件的节点不该关心
+    # 「我是第几条」—— 那会让同一段代码在不同调用路径下产生不同的序号。
+    run_events: Annotated[list[dict[str, Any]], add]
+
     # —— 错误累积 ——
     # ⚠️ 目前**没有任何消费者**（`decide_node` 与 `decision_rules` 都不读它）。
     # 保留是因为它与 `tool_calls` 是同一类东西（节点级留痕），

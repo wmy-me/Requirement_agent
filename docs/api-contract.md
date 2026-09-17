@@ -585,10 +585,59 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 | `done` | `{run_id}` |
 | `error` | `{message}`（并发冲突时 message 是中文说明） |
 
+#### `id:` 行与运行事件（2026-09-17 · B2.1 新增）
+
+`step` / `done` / `error` 三类事件现在**多一行 SSE 标准的 `id:`**，值是这次运行
+（run）内的事件序号：
+
+```
+id: 7
+event: step
+data: {"step":"analyze","label":"正在分析冲突与重复…"}
+```
+
+- **序号在每个 run 内从 1 开始**，由 `agent_run_event` 分配，`UNIQUE (run_id, sequence)`
+  保证有序不重。它**不是**全局自增。
+- **`session` / `artifacts` / `narrative` 不带 `id:`** —— 它们是传输层的东西，
+  不是「运行里发生了什么」。
+
+> ⚠️ **`narrative` 不能逐字回放。** 它是逐 token 推送的，一个长回答会产生成百上千条
+> 事件，逐条落库既没意义又很贵。断线恢复靠 **`artifacts` 里的完整 pipeline** 加
+> **最终那条完整叙述**，不是把 token 重放一遍 —— 别照「有 `after_seq` 就能逐字续传」去实现。
+
+**断线回放入口**：`GET /api/v1/agent/runs/{run_id}/events?after_seq=N&limit=M`。
+`after_seq` **是排他的**（只返回严格大于它的），所以客户端记住最后收到的 `id:` 原样回传
+即可，不用自己 +1。
+
 - 同会话并发 → **409**，`detail.active_run` 带正在跑的 run。
   注意：真跑到 409 时服务端仍会推 `error` + `done` 两个事件（`agent_chat.py:333-334`）
 - `GET /api/v1/agent/chat/{sid}/resumable` → `{"run": null}` 或 `{run_id, status, stage, steps_done, checkpoint_keys}`
 - `POST /api/v1/agent/runs/{id}/resume` → SSE，跳过已算阶段（首个 `step` 的 label 是「已恢复上次分析，从断点继续…」）
+
+**运行追踪端点**（2026-09-17 · B2.1 新增，全部只读，`read` 档次）：
+
+| 端点 | 出参 | 说明 |
+|---|---|---|
+| `GET /api/v1/agent/runs?source_id=N&limit=M` | `{items:[run…]}` | 按来源反查运行记录（新→旧）。**`source_id` 必填**，不支持全表列举 |
+| `GET /api/v1/agent/runs/{run_id}/events?after_seq=N&limit=M` | `{items, run_id, after_seq}` | **断线回放的唯一入口** |
+| `GET /api/v1/agent/runs/{run_id}/invocations` | `{run_id, tools:[…], models:[]}` | 工具调用明细。`models` 恒为空 —— 模型调用要等 B3.1 的 ModelRegistry |
+| `POST /api/v1/agent/runs/{run_id}/retry` | `{run_id, retry_of, queued}` | 重跑失败的分析。**新建 run 而非原地复活**；走 outbox 异步执行 |
+
+`run` 行的完整字段（`agent_run` 表，2026-09-17 起）：
+
+```
+id  run_id  conversation_id  source_id  run_type  client_message_id
+status  error  meta  stage  checkpoint  current_node  started_at  ended_at
+created_at  updated_at
+```
+
+- `run_type`：`conversation`（对话助手的一次回答）/ `analysis`（对某条来源做的一次分析）
+- `status`：`queued / running / waiting_review / completed / failed / cancelled / retrying`
+  —— ⚠️ **分析跑完是 `waiting_review` 而不是 `completed`**：产物是一条待审来源，
+  人要审完才算真的结束。
+- `current_node`：正在跑（失败时＝出错）的节点名。**失败定位靠它。**
+- ⚠️ **`retry` 只支持 `analysis` 类型**：对话 run 的「重试」在语义上是「把话再说一遍」，
+  那是客户端行为，不是服务端能替它决定的。
 
 **其余对话端点**（契约此前未列，前端在用）：`POST /api/v1/agent/chat`（非流式）、
 `POST /api/v1/agent/chat/stream-with-files`（多文件）、`GET /api/v1/agent/chat/{sid}`、

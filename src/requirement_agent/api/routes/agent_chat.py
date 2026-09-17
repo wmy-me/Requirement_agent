@@ -36,7 +36,9 @@ from requirement_agent.api.dependencies import (
     memory_context_builder,
     object_storage,
     retrieval_service,
+    requirement_analysis_task,
     risk_agent,
+    run_tracking,
 )
 from requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
 from requirement_agent.agents.extract_agent import ExtractedRequirement
@@ -66,9 +68,50 @@ NARRATIVE_SYSTEM_PROMPT = (
 )
 
 
-def _sse(name: str, payload: object) -> str:
-    """构造一行安全的 SSE 帧（payload 以 JSON 编码，避免原始换行破坏协议）。"""
-    return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+def _sse(name: str, payload: object, *, seq: int | None = None) -> str:
+    """构造一行安全的 SSE 帧（payload 以 JSON 编码，避免原始换行破坏协议）。
+
+    `seq` 给定时多一行标准的 `id:` —— 浏览器/客户端据此在断线重连时回传
+    `Last-Event-ID`。**`seq=None` 时输出与改造前逐字节一致**（有测试钉着这条兼容红线）：
+    现有 6 个事件名与 data 形状一个都没动，改名是破坏性的，本批次不做。
+
+    ⚠️ **`narrative` 永远不带 `seq`**：它是逐 token 推送的，一个长回答会产生
+    成百上千条事件，逐条落库既没意义又很贵。断线恢复靠的是 `artifacts` 里的完整
+    pipeline 加最终那条完整 narrative，**不是逐字回放** —— 这条已写进契约文档。
+    """
+    head = f"id: {seq}\n" if seq is not None else ""
+    return f"{head}event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+# SSE 事件名 → 运行事件的类型。**没在这张表里的事件不落库**：
+# `session`（客户端拿到 run_id）、`artifacts`（整包产物，已经落在 agent_message.artifacts）、
+# `narrative`（逐 token，见上）都是传输层的东西，不是「运行里发生了什么」。
+_SSE_TO_RUN_EVENT = {
+    "step": "progress",
+    "done": "run_completed",
+    "error": "run_failed",
+}
+
+
+def _tracked_sse(
+    run_id: str | None,
+    name: str,
+    payload: dict[str, object],
+    *,
+    node: str | None = None,
+) -> str:
+    """发一个 SSE 帧，并把对应的事件落进运行事件流（能落的话）。
+
+    **落库失败不中断流**：追踪是观测设施，它坏了不该让用户看不到回答。
+    `record_one` 拿不到序号时返回 `None`，这里就发一个不带 `id:` 的帧 —— 仍然合法。
+    """
+    seq: int | None = None
+    event_type = _SSE_TO_RUN_EVENT.get(name)
+    if run_id and event_type:
+        seq = run_tracking.record_one(
+            run_id, {"event_type": event_type, "node": node, "payload": payload}
+        )
+    return _sse(name, payload, seq=seq)
 
 
 CONVERSATION_BUSY_MESSAGE = "本对话正在思考上一个问题；可以等它跑完，或新建对话去问。"
@@ -376,7 +419,10 @@ async def _stream_chat_pipeline(
 
         # extract（第 1 步）
         if done_steps < 1:
-            yield _sse("step", {"step": "extract", "label": "正在理解你的需求…"})
+            yield _tracked_sse(
+                run_id, "step", {"step": "extract", "label": "正在理解你的需求…"},
+                node="extract",
+            )
             extracted = await run_in_threadpool(
                 extract_agent.extract,
                 run_text,
@@ -391,7 +437,10 @@ async def _stream_chat_pipeline(
 
         # retrieve（第 2 步）
         if done_steps < 2:
-            yield _sse("step", {"step": "retrieve", "label": "正在检索相似需求…"})
+            yield _tracked_sse(
+                run_id, "step", {"step": "retrieve", "label": "正在检索相似需求…"},
+                node="retrieve",
+            )
             candidates = await run_in_threadpool(
                 retrieval_service.search,
                 extracted.summary or run_text,
@@ -404,7 +453,10 @@ async def _stream_chat_pipeline(
 
         # analyze（第 3 步）
         if done_steps < 3:
-            yield _sse("step", {"step": "analyze", "label": "正在分析冲突与重复…"})
+            yield _tracked_sse(
+                run_id, "step", {"step": "analyze", "label": "正在分析冲突与重复…"},
+                node="analyze",
+            )
             analysis = await run_in_threadpool(
                 analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
             )
@@ -427,7 +479,10 @@ async def _stream_chat_pipeline(
 
         # risk（第 4 步）
         if done_steps < 4:
-            yield _sse("step", {"step": "risk", "label": "正在评估风险…"})
+            yield _tracked_sse(
+                run_id, "step", {"step": "risk", "label": "正在评估风险…"},
+                node="risk",
+            )
             risk = await run_in_threadpool(risk_agent.assess, extracted)
             risk_payload = risk.model_dump(mode="python")
             pipeline["risk"] = risk_payload
@@ -488,7 +543,7 @@ async def _stream_chat_pipeline(
                 "assistant_message_id": assistant_row["id"],
             },
         )
-        yield _sse("done", {"run_id": run_id})
+        yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
     except asyncio.CancelledError:
         chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")
         raise
@@ -496,8 +551,8 @@ async def _stream_chat_pipeline(
         error_text = f"分析遇到问题：{exc}"
         history.append({"role": "assistant", "content": error_text, "artifacts": None})
         chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
-        yield _sse("error", {"message": str(exc)})
-        yield _sse("done", {"run_id": run_id})
+        yield _tracked_sse(run_id, "error", {"message": str(exc)})
+        yield _tracked_sse(run_id, "done", {"run_id": run_id})
 
 
 async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
@@ -517,7 +572,11 @@ async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
     requester_name = meta.get("requester_name")
     history = chat_sessions.setdefault(session_id, [])
 
-    yield _sse("step", {"step": "resume", "label": "已恢复上次分析，从断点继续…"})
+    yield _tracked_sse(
+        str(run["run_id"]), "step",
+        {"step": "resume", "label": "已恢复上次分析，从断点继续…"},
+        node="resume",
+    )
     async for frame in _stream_chat_pipeline(
         session_id=session_id,
         actor_id=actor_id_or_default(None),
@@ -825,3 +884,105 @@ async def get_agent_run(run_id: str) -> dict[str, object]:
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
     return run
+
+# ── 运行事件的查询与重试（B2.1）────────────────────────────────────────────
+#
+# 这几个端点全是 GET（除 retry），按 `api/auth.py` 的现有规则：
+# GET 一律 `read` 档次、非 GET 的 `/agent/*` 是 `analyze`，**无需改分类表**。
+
+
+@router.get("/api/v1/agent/runs")
+async def list_agent_runs(source_id: int | None = None, limit: int = 20) -> dict[str, object]:
+    """按来源反查运行记录（新→旧）。`source_id` 必填 —— 全表扫没有意义。
+
+    「这条需求被分析过几次」是排查「为什么结论变了」的第一个问题。
+    """
+    if source_id is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="必须带 source_id（不支持全表列举）",
+        )
+    return {"items": run_tracking.repo.list_by_source(source_id, limit=limit)}
+
+
+@router.get("/api/v1/agent/runs/{run_id}/events")
+async def list_agent_run_events(
+    run_id: str, after_seq: int = 0, limit: int = 500
+) -> dict[str, object]:
+    """**断线回放的唯一入口。** `after_seq` 是排他的（只返回严格大于它的）。
+
+    客户端记住「最后收到的 `id:`」原样回传即可，不需要自己 +1。
+    """
+    run = run_tracking.repo.get_run(run_id)
+    if run is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    events = run_tracking.repo.list_events(run_id, after_seq=after_seq, limit=limit)
+    return {"items": events, "run_id": run_id, "after_seq": after_seq}
+
+
+@router.get("/api/v1/agent/runs/{run_id}/invocations")
+async def list_agent_run_invocations(run_id: str) -> dict[str, object]:
+    """这次运行调过哪些工具、各花了多久、结果几条。
+
+    ⚠️ **只有 `tools`。** 模型调用（`models`）要等 B3.1 的 ModelRegistry 落地 ——
+    本批次刻意没建 `model_invocation` 表：那张表的字段
+    （`task_type` / `fallback_from` / `fallback_level`）是 ModelRegistry 才引入的概念，
+    现在建了也写不满，只会是一张半空的表。
+    """
+    run = run_tracking.repo.get_run(run_id)
+    if run is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    return {"run_id": run_id, "tools": run_tracking.repo.list_tool_invocations(run_id), "models": []}
+
+
+@router.post("/api/v1/agent/runs/{run_id}/retry")
+async def retry_agent_run(run_id: str) -> dict[str, object]:
+    """重跑一次失败的分析。
+
+    **不原地复活。** 新建一个 run（`meta.retry_of` 指向旧的），原因：原地改状态会让
+    同一个 `run_id` 下出现「前后两段不相干的历史」，而事件流的 `sequence` 语义
+    正是建立在「一个 run 一段历史」之上的。
+
+    **走 outbox 异步执行**，不在 HTTP 里同步跑 —— 分析要调好几次 LLM，几秒到几十秒，
+    放进请求里必然超时。
+
+    只支持 `analysis` 类型的 run：对话 run 的「重试」在语义上是「把话再说一遍」，
+    那是客户端行为，不是一个服务端端点能替它决定的。
+    """
+    from fastapi import HTTPException, status
+
+    run = run_tracking.repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    if run.get("run_type") != "analysis":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="只支持重试 analysis 类型的 run；对话请重发那条消息",
+        )
+    if run.get("status") not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"run is {run.get('status')}, only failed or cancelled can be retried",
+        )
+    source_id = run.get("source_id")
+    if source_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="该 run 没有关联来源，无法重跑"
+        )
+
+    new_run = run_tracking.repo.create_run(
+        run_type="analysis",
+        source_id=int(source_id),
+        meta={"retry_of": run_id, "source_type": (run.get("meta") or {}).get("source_type")},
+    )
+    # 入队后由 worker（或 API 内嵌消费者）认领。`process_requirement` 对已处理过的
+    # 来源短路，所以即使来源状态不是 received 也不会重复分析——但那种情况下
+    # 这个新 run 会停在 queued，翻事件流能看出「建了但没跑」。
+    queued = requirement_analysis_task.enqueue(source_id=int(source_id))
+    return {"run_id": str(new_run["run_id"]), "retry_of": run_id, "queued": queued}

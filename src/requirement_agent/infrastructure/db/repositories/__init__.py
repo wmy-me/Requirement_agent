@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from requirement_agent.infrastructure.db.repositories.agent_run import AgentRunRepository
 from requirement_agent.infrastructure.db.repositories.audit import AuditRepository
 from requirement_agent.infrastructure.db.repositories.capability import (
     CapabilityRepository,
@@ -32,6 +33,7 @@ from requirement_agent.infrastructure.db.repositories.review import (
 )
 
 __all__ = [
+    "AgentRunRepository",
     "AuditRepository",
     "CapabilityRepository",
     "ChatRepository",

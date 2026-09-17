@@ -19,6 +19,7 @@ from requirement_agent.workflows.commit_nodes import (
     reject_requirement_node,
     route_decision,
 )
+from requirement_agent.workflows.event_nodes import traced
 from requirement_agent.workflows.state import RequirementState
 
 
@@ -27,13 +28,18 @@ def build_analysis_graph():
 
     顺序固定：先召回候选，再做关系分析；风险永远在 decide 前执行，
     保证前端与审核队列拿到的是完整分析面板。
+
+    **每个节点外面包了事件适配器**（`event_nodes.traced`，B2.1）—— 包装只发生在
+    建图这一层，`agents_nodes.py` 的节点本体一行不动（追加文档 §3.5 的要求）。
+    事件进 `state["run_events"]` 的追加通道，由调用方统一落库；图本身仍然
+    **纯计算、不写库**。
     """
     graph = StateGraph(RequirementState)
-    graph.add_node("extract", extract_node)
-    graph.add_node("retrieve", retrieve_node)
-    graph.add_node("analyze", analyze_node)
-    graph.add_node("risk", risk_node)
-    graph.add_node("decide", decide_node)
+    graph.add_node("extract", traced("extract", extract_node))
+    graph.add_node("retrieve", traced("retrieve", retrieve_node))
+    graph.add_node("analyze", traced("analyze", analyze_node))
+    graph.add_node("risk", traced("risk", risk_node))
+    graph.add_node("decide", traced("decide", decide_node))
     graph.add_edge(START, "extract")
     graph.add_edge("extract", "retrieve")
     graph.add_edge("retrieve", "analyze")
