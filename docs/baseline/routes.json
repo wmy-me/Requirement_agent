@@ -1,0 +1,575 @@
+[
+  {
+    "method": "GET",
+    "path": "/",
+    "name": "Root",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/chat",
+    "name": "Chat With Agent",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/chat/stream",
+    "name": "Stream Agent Chat",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/chat/stream-with-files",
+    "name": "Stream Agent Chat With Files",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/agent/chat/{session_id}",
+    "name": "Get Agent Chat History",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/agent/chat/{session_id}/resumable",
+    "name": "Get Resumable Run",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/run",
+    "name": "Run Agent Pipeline",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/agent/runs/{run_id}",
+    "name": "Get Agent Run",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/runs/{run_id}/pause",
+    "name": "Pause Agent Run",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/agent/runs/{run_id}/resume",
+    "name": "Resume Agent Run",
+    "tags": [
+      "requirements",
+      "agent"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/audit/events",
+    "name": "List Audit Events",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/capabilities",
+    "name": "List Capabilities",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/capabilities/{capability_id}",
+    "name": "Get Capability",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/capabilities/{capability_id}",
+    "name": "Update Capability Status",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/capabilities/{capability_id}/streams",
+    "name": "List Streams By Capability",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/channels/feishu/webhook",
+    "name": "Feishu Webhook",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/constraints",
+    "name": "List Constraints",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/constraints/aliases",
+    "name": "Add Constraint Alias",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/constraints/{constraint_id}",
+    "name": "Get Constraint",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/conversations",
+    "name": "List Conversations",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/conversations",
+    "name": "Create Conversation",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/conversations/{conversation_id}",
+    "name": "Delete Conversation",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/conversations/{conversation_id}",
+    "name": "Update Conversation",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/conversations/{conversation_id}/finalize",
+    "name": "Finalize Conversation",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/conversations/{conversation_id}/messages",
+    "name": "Get Conversation Messages",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/conversations/{conversation_id}/messages",
+    "name": "Add Conversation Message",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/documents",
+    "name": "List Documents",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/documents/search",
+    "name": "Search Document Chunks",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/documents/{document_id}",
+    "name": "Get Document",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/documents/{document_id}/chunks",
+    "name": "Get Document Chunks",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/documents/{document_id}/reindex",
+    "name": "Reindex Document Chunks",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/feature-capabilities",
+    "name": "Review Feature Capability",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/health/db",
+    "name": "Database Health",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/health/llm",
+    "name": "Llm Health",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/memory",
+    "name": "List Memory",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/memory",
+    "name": "Upsert Memory",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/memory/context",
+    "name": "Get Memory Context",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/memory/{memory_id}/delete",
+    "name": "Delete Memory",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ops/outbox",
+    "name": "Get Outbox Status",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ops/outbox/dead-letters/{event_id}/discard",
+    "name": "Discard Dead Letter",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ops/outbox/dead-letters/{event_id}/retry",
+    "name": "Retry Dead Letter",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/requirement-titles/{title_id}",
+    "name": "Review Title Candidate",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements",
+    "name": "List Requirements",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/export",
+    "name": "Export Requirements",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/features/search",
+    "name": "Search Requirement Features",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/requirements/ingest",
+    "name": "Ingest Requirement",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/requirements/relations/{relation_id}",
+    "name": "Update Requirement Relation",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/search",
+    "name": "Search Requirements",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/requirements/submit",
+    "name": "Submit Requirement",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/capabilities",
+    "name": "List Requirement Capabilities",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/diff",
+    "name": "Get Requirement Diff",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/features",
+    "name": "List Requirement Features",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/relations",
+    "name": "List Requirement Relations",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/requirements/{requirement_key}/revert",
+    "name": "Revert Requirement",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/titles",
+    "name": "List Requirement Titles",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/requirements/{requirement_key}/titles",
+    "name": "Add Title Candidate",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/trace",
+    "name": "Get Requirement Trace",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/requirements/{requirement_key}/versions",
+    "name": "List Requirement Versions",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/reviews/pending",
+    "name": "List Pending Reviews",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/reviews/submit",
+    "name": "Submit Review Decision",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/reviews/{source_id}/detail",
+    "name": "Get Review Detail",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/reviews/{source_id}/merge-preview",
+    "name": "Preview Merge Into Requirement",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/sources/{source_id}/trace",
+    "name": "Get Source Trace",
+    "tags": [
+      "requirements",
+      "requirements"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/health",
+    "name": "Healthcheck",
+    "tags": []
+  }
+]
