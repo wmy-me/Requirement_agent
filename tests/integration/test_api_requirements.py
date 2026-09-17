@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 from requirement_agent.api.app import app
 
 
-client = TestClient(app)
+# B1 起 API 需要鉴权：`API_AUTH_TOKEN` 是兼容入口，等同于一个 admin token。
+# 测具体的 401/403 行为请另建不带头的 TestClient（见 tests/integration/test_api_auth.py）。
+client = TestClient(app, headers={"Authorization": "Bearer test-api-token"})
 
 
 API_HEADERS = {"Authorization": "Bearer test-api-token"}

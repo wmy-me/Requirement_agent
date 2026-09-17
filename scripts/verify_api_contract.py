@@ -173,11 +173,18 @@ SPEC: tuple[Endpoint, ...] = (
 
 
 def _client():
+    """带鉴权的 TestClient。
+
+    ⚠️ B1 起 API 需要 `Authorization: Bearer <token>` —— 不带就是一片 401，
+    而脚本会把每个端点都报成「HTTP 401」，看起来像接口全坏了。走 `API_AUTH_TOKEN`
+    这个兼容入口（等同于一个 admin token）。
+    """
     from fastapi.testclient import TestClient
 
     from requirement_agent.api.app import app
 
-    return TestClient(app)
+    token = os.environ.get("API_AUTH_TOKEN", "test-api-token")
+    return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 
 def _walk(node, path, out, depth=0):

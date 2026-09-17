@@ -21,7 +21,9 @@ from requirement_agent.api.app import app
 from requirement_agent.application.capability_match_service import CapabilityMatchService
 from requirement_agent.infrastructure.db.session import SessionLocal
 
-client = TestClient(app)
+# B1 起 API 需要鉴权：`API_AUTH_TOKEN` 是兼容入口，等同于一个 admin token。
+# 测具体的 401/403 行为请另建不带头的 TestClient（见 tests/integration/test_api_auth.py）。
+client = TestClient(app, headers={"Authorization": "Bearer test-api-token"})
 
 
 def _new_id() -> int:

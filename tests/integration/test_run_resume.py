@@ -133,7 +133,7 @@ def test_resume_endpoint_validates_bad_runs() -> None:
 
     from requirement_agent.api.app import app
 
-    c = TestClient(app)
+    c = TestClient(app, headers={"Authorization": "Bearer test-api-token"})  # B1 起需要鉴权
     # 不存在的 run
     assert c.post(f"/api/v1/agent/runs/{uuid.uuid4()}/resume").status_code == 404
     # 已完成的 run

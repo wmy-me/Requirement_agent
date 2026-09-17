@@ -15,12 +15,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.worker.consumer import OutboxConsumer
 from requirement_agent.api.dependencies import requirement_analysis_task
+from requirement_agent.api.auth import has_scope, required_scope, resolve_role
 from requirement_agent.api.router import router
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,57 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+    # 鉴权（B1）：**定义在最前面 = 最内层**，这样 401/403 也会被日志中间件记到、
+    # 也会带上安全响应头。豁免路径见 `api/auth.py` 的 EXEMPT_*。
+    @app.middleware("http")
+    async def enforce_api_auth(request: Request, call_next):
+        scope = required_scope(request.method, request.url.path)
+        if scope is None:  # 豁免：飞书 webhook / 探活 / 静态资源 / OpenAPI 文档
+            return await call_next(request)
+
+        # ⚠️ **复用外层日志中间件生成的 request_id**，不要自己再生成一个 ——
+        # 否则 401 响应体里的 id 与 `X-Request-ID` 响应头（以及两条日志）会对不上，
+        # 那个 id 就失去了「串起整条链路」的意义。实测被测试抓到过。
+        request_id = getattr(request.state, "request_id", None) or uuid4().hex[:8]
+        role = resolve_role(request.headers.get("Authorization"))
+
+        if role is None:
+            # 401 = 没带凭证 / 凭证无效 / **服务端根本没配 token**（默认拒绝）
+            logger.warning(
+                "event=auth_unauthorized method=%s path=%s request_id=%s",
+                request.method, request.url.path, request_id,
+            )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "缺少或无效的 API token（Authorization: Bearer <token>）",
+                    "request_id": request_id,
+                    "required_scope": scope,
+                },
+                headers={"X-Request-ID": request_id, "WWW-Authenticate": "Bearer"},
+            )
+
+        if not has_scope(role, scope):
+            # 403 = 身份有效但权限不够。**与 401 分开**：前者该换 token，后者该换角色。
+            logger.warning(
+                "event=auth_forbidden method=%s path=%s role=%s scope=%s request_id=%s",
+                request.method, request.url.path, role, scope, request_id,
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": f"角色 {role} 没有 {scope} 权限",
+                    "request_id": request_id,
+                    "required_scope": scope,
+                    "role": role,
+                },
+                headers={"X-Request-ID": request_id},
+            )
+
+        # 供下游使用（如按角色决定 actor_id）；本批次不改现有 actor 语义
+        request.state.auth_role = role
+        return await call_next(request)
+
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
         response = await call_next(request)
@@ -101,6 +153,8 @@ def create_app() -> FastAPI:
     async def log_requests(request: Request, call_next):
         # 沿用入站 X-Request-ID（便于与网关/前端串联），没有则生成一个
         request_id = request.headers.get("X-Request-ID") or uuid4().hex[:8]
+        # 放进 state 供内层中间件（鉴权）复用 —— 整个请求只应有一个 request_id
+        request.state.request_id = request_id
         started_at = time.perf_counter()
         try:
             response = await call_next(request)

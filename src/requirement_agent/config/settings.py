@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.engine import URL
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +26,13 @@ class Settings(BaseSettings):
     minio_secret_key: SecretStr = Field(default=SecretStr(""), alias="MINIO_SECRET_KEY")
     minio_bucket: str = Field(default="requirement-attachments", alias="MINIO_BUCKET")
 
+    # —— 鉴权（B1）——
+    # `API_AUTH_TOKENS` 是**主配置**：JSON `{"token": "role"}`，角色取值见 `api/auth.py`。
+    # 每个调用方拿自己的 token，**角色由服务端解析、不可伪造**（这是选它而不是
+    # 「单 token + 角色请求头」的原因：后者拿到 token 就能自称 admin）。
+    api_auth_tokens: dict[str, str] = Field(default_factory=dict, alias="API_AUTH_TOKENS")
+    # `API_AUTH_TOKEN` 保留为**兼容入口**：配置了它就等同于一个 `admin` token。
+    # 这样既有的部署（和全部既有测试）不用改就能继续工作。
     api_auth_token: SecretStr = Field(default=SecretStr(""), alias="API_AUTH_TOKEN")
     api_actor_id: str = Field(default="api-user", alias="API_ACTOR_ID")
     # 注：`TOOL_ACTOR_ID`（tool_actor_id）随 `src/requirement_agent/tools/` 一并删除（2026-09-16）——
@@ -166,6 +175,27 @@ class Settings(BaseSettings):
         ]
         if missing:
             raise RuntimeError(f"Missing database configuration: {', '.join(missing)}")
+
+    @field_validator("api_auth_tokens", mode="before")
+    @classmethod
+    def _parse_tokens(cls, value: object) -> object:
+        """把 `API_AUTH_TOKENS` 从 JSON 字符串解析成 dict。
+
+        写成 JSON 而不是 `token:role,token:role` 这种自定义分隔符，是因为
+        token 里可能出现任何字符 —— 自定义格式迟早要被某个含分隔符的 token 咬到。
+        """
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"API_AUTH_TOKENS 不是合法 JSON：{exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("API_AUTH_TOKENS 必须是 JSON 对象：{\"token\": \"role\"}")
+        return {str(k): str(v) for k, v in parsed.items()}
 
     def require_api_auth(self) -> None:
         if not self.api_auth_token.get_secret_value().strip():

@@ -30,6 +30,7 @@
 | **列表一律 `{"items": [...]}`** | 不是裸数组 |
 | 时间 | ISO 8601 带时区（`as_display_iso`），可直接 `new Date()` |
 | 错误 | 404 = 不存在；409 = 状态冲突（detail 是中文说明）；422 = 参数不合法 |
+| **鉴权** | **B1 起所有受保护端点都要 `Authorization: Bearer <token>`**（见 §1.2）；401 与 403 含义不同 |
 | 日期筛选的 `to` | 前端要补 `T23:59:59`，否则当天数据会被排除 |
 
 ### 1.1 雪花 ID 一律是字符串（2026-09-16 统一）
@@ -89,6 +90,70 @@
 > ⚠️ **只有 `confirmed` / `active` 是「人工确认过」的。** `proposed` /
 > `pending_confirmation` 是 AI 提议，展示时必须标出来 —— 否则人会把模型猜的
 > 当成已确认的（项目此前反复踩过「假数据冒充模型输出」）。
+
+---
+
+### 1.2 鉴权与授权（2026-09-17 · B1 新增）
+
+**所有受保护端点都要带 `Authorization: Bearer <token>`** —— 不带就是 **401**。
+
+#### 六个权限档次与三个角色
+
+| 档次 | 覆盖的端点 |
+|---|---|
+| `read` | **全部 GET** |
+| `analyze` | `/agent/*`、`/conversations/*`、`/memory*` |
+| `submit` | `/requirements/submit`、`/requirements/ingest` |
+| `review` | `/reviews/submit`、能力/条件/标题/关系的**裁决**端点 |
+| `revert` | `/requirements/{key}/revert` |
+| `ops` | `/ops/*`、`/documents/{id}/reindex` |
+
+| 角色 | 权限 | 用途 |
+|---|---|---|
+| `admin` | 全部六项 | 运维 / 全权 |
+| `reviewer` | read + analyze + submit + **review** | 审核人：能裁决，**不能回滚** |
+| `system_worker` | read + analyze + **ops** | 后台任务：能运维，**不能裁决** |
+
+> ⚠️ **`review` 与 `revert` 是分开的两档。** 回滚是 append-only 的强破坏操作
+> （产出一个内容退回的新版本），只给 `admin`；审核人能裁决但回不了滚。
+
+#### 401 与 403 的区别（前端提示不一样）
+
+| 状态 | 含义 | 前端该做什么 |
+|---|---|---|
+| **401** | 没带 token / token 无效 / **服务端一个 token 都没配** | 提示「登录失效或未配置」，换 token |
+| **403** | 身份有效，但**角色不够** | 提示「权限不足」，**不是重新登录** |
+
+出参统一为：
+
+```json
+{"detail": "角色 reviewer 没有 revert 权限", "request_id": "…", "required_scope": "revert", "role": "reviewer"}
+```
+
+- `request_id` 与响应头 `X-Request-ID` **同一个值**（可对服务端日志）
+- `required_scope` 让你自查「缺哪一档权限」
+- 401 响应带 `WWW-Authenticate: Bearer`
+
+#### 豁免（不需要 token）
+
+| 路径 | 为什么 |
+|---|---|
+| `/api/v1/channels/feishu/webhook` | 走飞书自身的签名 + Verification Token + AES 校验；**飞书不会带本系统的 token** |
+| `/api/v1/health*`、`/health` | 探活（前端每 30 秒轮询，鉴权会让它变成噪声） |
+| `/static/*`、`/ui`、`/docs`、`/redoc`、`/openapi.json` | 页面与接口文档本身要能打开 |
+
+#### 配置
+
+```bash
+# 推荐：多 token → 角色
+API_AUTH_TOKENS={"tok-admin-xxx":"admin","tok-review-xxx":"reviewer"}
+
+# 兼容：旧的单 token，等同于一个 admin token
+API_AUTH_TOKEN=...
+```
+
+> ⚠️ **一个 token 都不配 = 全部受保护端点 401**（**默认拒绝**，不是默认放行）。
+> 安全功能的默认值必须是拒绝 —— 否则一次忘记配置就等于没有鉴权。
 
 ---
 
