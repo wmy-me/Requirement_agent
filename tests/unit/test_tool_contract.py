@@ -42,6 +42,9 @@ EXPECTED_TOOLS = {
     "search_by_constraint",
     "search_features",
     "trace_requirement_sources",
+    # B2 第二批（只加确定性的两个）
+    "match_capabilities",
+    "preview_merge_impact",
 }
 
 WRITE_PREFIXES = ("save", "create", "update", "delete", "commit", "insert", "upsert", "sync")

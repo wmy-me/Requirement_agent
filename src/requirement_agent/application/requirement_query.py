@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from requirement_agent.application.capability_match_service import CapabilityMatchService
 from requirement_agent.application.retrieval_service import RetrievalService
 from requirement_agent.infrastructure.db.repositories import (
     CapabilityRepository,
@@ -91,6 +92,7 @@ class RequirementQueryService:
         feature_capability_repo: FeatureCapabilityRepository | None = None,
         capability_repo: CapabilityRepository | None = None,
         source_repo: RequirementSourceRepository | None = None,
+        match_service: CapabilityMatchService | None = None,
     ) -> None:
         self.retrieval_service = retrieval_service or RetrievalService()
         self.master_repo = master_repo or RequirementMasterRepository()
@@ -100,6 +102,7 @@ class RequirementQueryService:
         self.feature_capability_repo = feature_capability_repo or FeatureCapabilityRepository()
         self.capability_repo = capability_repo or CapabilityRepository()
         self.source_repo = source_repo or RequirementSourceRepository()
+        self.match_service = match_service or CapabilityMatchService()
 
     # ── 检索 ──────────────────────────────────────────────────────────────
 
@@ -526,6 +529,29 @@ class RequirementQueryService:
                 ],
             }
         )
+
+
+
+    # ── 预演类（都是纯读，不写任何东西）──────────────────────────────────
+
+    def match_capabilities(self, source_id: int) -> QueryOutcome:
+        """拿一条来源的抽取候选，对**当前**能力词表重匹配。**纯预演。**
+
+        ⚠️ **`persist=False` 是关键**：`CapabilityMatchService.match` 的默认参数是
+        `persist=True`，会**真的往库里写能力提案**。这一层是只读的，漏传就等于
+        在「查询」的名义下写库。
+
+        与 `get_capabilities` 的区别：那个看**当初落库的**关联（可能建于旧词表），
+        这个用**现在的**词表重匹配 —— 词表更新后才看得出差异。
+        """
+        detail = self.source_repo.get_detail(source_id)
+        if detail is None:
+            return QueryOutcome.miss({"source_id": source_id})
+        extracted = (detail.get("metadata") or {}).get("extracted")
+        if not isinstance(extracted, dict) or not extracted.get("capabilities"):
+            return QueryOutcome.miss({"source_id": source_id})
+        matched = self.match_service.match(extracted, persist=False)
+        return QueryOutcome.hit({"source_id": source_id, **matched})
 
 
 

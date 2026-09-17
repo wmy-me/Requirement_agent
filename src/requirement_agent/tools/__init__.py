@@ -37,6 +37,8 @@ from requirement_agent.tools.get_requirement_features import GetRequirementFeatu
 from requirement_agent.tools.get_requirement_risks import GetRequirementRisksTool
 from requirement_agent.tools.get_requirement_versions import GetRequirementVersionsTool
 from requirement_agent.tools.list_requirement_relations import ListRequirementRelationsTool
+from requirement_agent.tools.match_capabilities import MatchCapabilitiesTool
+from requirement_agent.tools.preview_merge_impact import PreviewMergeImpactTool
 from requirement_agent.tools.list_requirement_sources import ListRequirementSourcesTool
 from requirement_agent.tools.list_requirements import ListRequirementsTool
 from requirement_agent.tools.registry import (
@@ -77,6 +79,8 @@ __all__ = [
     "ListRequirementRelationsTool",
     "ListRequirementSourcesTool",
     "ListRequirementsTool",
+    "MatchCapabilitiesTool",
+    "PreviewMergeImpactTool",
     "SearchByCapabilityTool",
     "SearchByConstraintTool",
     "SearchFeaturesTool",

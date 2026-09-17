@@ -26,6 +26,14 @@ from requirement_agent.tools import ToolStatus, create
 SAMPLE_KEY = "REQ-000015"
 
 
+def _a_pending_source_id() -> str:
+    """取一条真实待审来源的编号（预览/重匹配类工具需要它）。"""
+    from requirement_agent.infrastructure.db.repositories import RequirementSourceRepository
+
+    rows = RequirementSourceRepository().list_by_status("pending_review", limit=1)
+    return str(rows[0]["source_id"]) if rows else "1"
+
+
 def _probe_params(tool_name: str) -> dict:
     """给「每个工具都要能真跑一次」用的最小合法参数。"""
     if tool_name in ("search_requirements", "search_features"):
@@ -38,6 +46,10 @@ def _probe_params(tool_name: str) -> dict:
         return {"constraint": "按门店"}
     if tool_name == "compare_requirement_versions":
         return {"requirement_key": SAMPLE_KEY, "from_version": 1, "to_version": 3}
+    if tool_name == "preview_merge_impact":
+        return {"source_id": _a_pending_source_id(), "target_requirement_key": SAMPLE_KEY}
+    if tool_name == "match_capabilities":
+        return {"source_id": _a_pending_source_id()}
     return {"requirement_key": SAMPLE_KEY}
 
 
@@ -249,6 +261,7 @@ def test_error_call_is_audited_at_warning(caplog) -> None:
     "list_requirement_relations", "list_requirement_sources",
     "search_by_capability", "search_by_constraint", "search_features",
     "trace_requirement_sources",
+    "match_capabilities", "preview_merge_impact",
 ])
 def test_every_tool_is_actually_callable(tool_name: str) -> None:
     """**这条是防「静默腐烂」的总闸。**
@@ -375,3 +388,105 @@ def test_search_by_constraint_finds_the_requirement() -> None:
 def test_search_by_constraint_unknown_is_empty() -> None:
     result = _run("search_by_constraint", constraint="zzz不存在的条件zzz")
     assert result.status is ToolStatus.EMPTY
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# B2 第二批：两个「预演」工具
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_match_capabilities_returns_real_match() -> None:
+    """拿真实来源的抽取候选，对当前词表重匹配。"""
+    result = _run("match_capabilities", source_id=_a_pending_source_id())
+    assert result.status in {ToolStatus.SUCCESS, ToolStatus.EMPTY}
+    if result.status is ToolStatus.SUCCESS:
+        assert result.result["capabilities"]
+        assert "business_object" in result.result
+
+
+def test_match_capabilities_unknown_source_is_empty() -> None:
+    result = _run("match_capabilities", source_id="999999999")
+    assert result.status is ToolStatus.EMPTY
+
+
+def test_match_capabilities_writes_nothing() -> None:
+    """**这条是这个工具存在的意义所在。**
+
+    `CapabilityMatchService.match` 的默认参数是 `persist=True` —— 它会**真的往库里
+    写能力提案**（`capability` 行 + `feature_capability` 关联）。做成只读工具必须显式
+    传 `persist=False`，否则就是「在查询的名义下写库」。
+
+    这里直接数一下调用前后的行数。
+    """
+    from sqlalchemy import text
+
+    from requirement_agent.infrastructure.db.session import SessionLocal
+
+    def counts() -> tuple[int, int]:
+        with SessionLocal() as session:
+            caps = session.execute(text("SELECT count(*) FROM capability")).scalar_one()
+            links = session.execute(text("SELECT count(*) FROM feature_capability")).scalar_one()
+        return int(caps), int(links)
+
+    before = counts()
+    _run("match_capabilities", source_id=_a_pending_source_id())
+    assert counts() == before, "预演工具写了库 —— persist=False 没传"
+
+
+def test_preview_merge_impact_union_shows_no_deletion() -> None:
+    result = _run("preview_merge_impact", source_id=_a_pending_source_id(),
+                  target_requirement_key=SAMPLE_KEY, merge_mode="union")
+    assert result.status in {ToolStatus.SUCCESS, ToolStatus.EMPTY}
+    if result.status is ToolStatus.SUCCESS:
+        assert result.result["summary"]["delete"] == 0
+
+
+def test_preview_merge_impact_replace_warns_about_deletion() -> None:
+    """**`replace` 的删除清单只能在这里看到** —— 必须带 warnings。"""
+    result = _run("preview_merge_impact", source_id=_a_pending_source_id(),
+                  target_requirement_key=SAMPLE_KEY, merge_mode="replace")
+    if result.status is not ToolStatus.SUCCESS:
+        pytest.skip("样本来源已不在待审，跳过")
+    summary = result.result["summary"]
+    if summary["delete"]:
+        assert any("失去" in w for w in result.result["warnings"]), "replace 删除必须给出告警"
+
+
+def test_preview_merge_impact_unknown_source_is_empty() -> None:
+    result = _run("preview_merge_impact", source_id="999999999",
+                  target_requirement_key=SAMPLE_KEY)
+    assert result.status is ToolStatus.EMPTY
+
+
+def test_preview_merge_impact_unknown_target_is_empty() -> None:
+    result = _run("preview_merge_impact", source_id=_a_pending_source_id(),
+                  target_requirement_key="REQ-999999")
+    assert result.status is ToolStatus.EMPTY
+
+
+def test_preview_merge_impact_writes_nothing() -> None:
+    """**「预览不撒谎」的另一半：预览也不落库。** 项目里有测试钉着「预览与落库逐条一致」，
+    这里补的是「预览本身一行不写」。"""
+    from sqlalchemy import text
+
+    from requirement_agent.infrastructure.db.session import SessionLocal
+
+    def counts() -> tuple[int, int, int]:
+        with SessionLocal() as session:
+            v = session.execute(text("SELECT count(*) FROM requirement_version")).scalar_one()
+            f = session.execute(text("SELECT count(*) FROM requirement_feature")).scalar_one()
+            m = session.execute(text("SELECT count(*) FROM requirement_master")).scalar_one()
+        return int(v), int(f), int(m)
+
+    before = counts()
+    _run("preview_merge_impact", source_id=_a_pending_source_id(),
+         target_requirement_key=SAMPLE_KEY, merge_mode="replace")
+    assert counts() == before, "预览写了库"
+
+
+def test_preview_merge_impact_rejects_bad_mode() -> None:
+    """`merge_mode` 只接受 union / replace —— 别的值在 schema 层就被拒。"""
+    result = _run("preview_merge_impact", source_id=_a_pending_source_id(),
+                  target_requirement_key=SAMPLE_KEY, merge_mode="explode")
+    assert result.status is ToolStatus.ERROR
+    assert "merge_mode" in (result.message or "")
