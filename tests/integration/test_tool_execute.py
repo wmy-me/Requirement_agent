@@ -68,8 +68,17 @@ def test_search_requirements_returns_candidates() -> None:
     assert result.status is ToolStatus.SUCCESS
     assert isinstance(result.result, list) and result.result
     first = result.result[0]
-    assert set(first) == {"requirement_key", "requirement_name", "similarity"}
+    assert set(first) == {
+        "requirement_key",
+        "requirement_name",
+        "similarity",          # 融合分：只用于排序与展示
+        "vector_similarity",   # 余弦：判定必须用这个
+    }
     assert first["requirement_key"].startswith("REQ-")
+    # **余弦必须真的透出来** —— 判定层拿不到它就只能退回比融合分，
+    # 而融合分的量纲随查询变化（见 application/requirement_query.py 的说明）。
+    # 这里不断言它非空：纯关键词命中的候选没有余弦，那是合法的 `None`。
+    assert first["vector_similarity"] is None or 0.0 <= first["vector_similarity"] <= 1.0
 
 
 def test_get_requirement_detail_returns_the_row() -> None:

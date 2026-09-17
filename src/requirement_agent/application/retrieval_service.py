@@ -83,6 +83,11 @@ class RetrievalService:
                     "requirement_name": title,
                     "summary": summary,
                     "score": round(min(score, 1.0), 2),
+                    # 关键词命中**没有余弦**；若这一条同时也被向量召回，下面合并时补上。
+                    # 判定必须作用在余弦上（见 `domain/similarity_scale.py`）——
+                    # 关键词分是「命中几个 token 乘以权重再加和」，量纲随查询变化，
+                    # 拿它比相似度阈值是范畴错误。所以这里显式给 None 而不是拿它顶替。
+                    "vector_similarity": None,
                     "business_domain": self._first_value(item.get("business_domains"), "general"),
                     "status": item["status"],
                     "match_type": "keyword",
@@ -106,6 +111,7 @@ class RetrievalService:
                     "requirement_name": row.get("title", "相关需求"),
                     "summary": row.get("summary", ""),
                     "score": vector_score,
+                    "vector_similarity": vector_score,
                     "business_domain": row.get("business_domain", "general"),
                     "status": row.get("status", "active"),
                     "match_type": "vector",
@@ -117,10 +123,17 @@ class RetrievalService:
                     "feature_count": row.get("feature_count", 0),
                     "matched_features": [],
                 })
-            elif vector_score > float(existing.get("score", 0.0)):
-                # 语义命中比关键词命中更相关时，用向量分覆盖并标记来源，让真实语义排序生效
-                existing["score"] = vector_score
-                existing["match_type"] = "vector"
+            else:
+                # ⚠️ **余弦必须无条件落上**，不能只在它「赢了」关键词分时才记。
+                # 此前 `match_type`/`score` 只在向量分更高时才被覆盖，于是「关键词分更高、
+                # 但确实有向量命中」的候选看起来和「纯关键词命中」一模一样 ——
+                # 判定层据此会把它当 `unverifiable` 丢掉，而它其实有可用的余弦。
+                # 那正是「漏掉真重复」的经典路径。
+                existing["vector_similarity"] = vector_score
+                if vector_score > float(existing.get("score", 0.0)):
+                    # 语义命中比关键词命中更相关时，用向量分覆盖并标记来源，让真实语义排序生效
+                    existing["score"] = vector_score
+                    existing["match_type"] = "vector"
 
         ranked = sorted(
             candidates,
@@ -159,11 +172,15 @@ class RetrievalService:
         results = self.vector_repo.search(vector, limit=limit, filters=filters)
         normalized: list[dict[str, object]] = []
         for row in results:
+            cosine = float(row.get("score", 0.0))
             normalized.append({
                 "requirement_key": row.get("requirement_key", ""),
                 "title": row.get("title", "相关需求"),
                 "summary": row.get("summary", ""),
-                "score": float(row.get("score", 0.0)),
+                "score": cosine,
+                # 纯向量召回这一路 `score` 就是余弦，两个字段同值；存在的意义是
+                # 让消费方**不必先判断这一条走的是哪条路**才能拿到余弦（见 search() 的合并）。
+                "vector_similarity": cosine,
                 "business_domain": row.get("business_domain", "general"),
                 "status": row.get("status", "active"),
                 "source_types": row.get("source_types", []),

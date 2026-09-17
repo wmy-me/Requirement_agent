@@ -82,20 +82,24 @@ class SimilarityCalibration:
     noise_ceiling: float
     """无关文本对余弦的 **P95**。候选闸门 —— 超过它才值得往上看一眼。"""
 
-    model: str
+    # 以下三个是**溯源信息**，运行时用不到（判定只看 baseline / noise_ceiling）。
+    # 它们是给「这份基线是谁量的、什么时候量的、量的时候语料长什么样」留的证据，
+    # 所以有默认值 —— 从 settings 构造运行期标尺时不必编造。
+    model: str = ""
     """测量时使用的 `EMBEDDING_MODEL`。基线只对该模型有效。"""
 
-    measured_at: str
+    measured_at: str = ""
     """测量时间（ISO 8601）。"""
 
-    corpus_sha256: str
+    corpus_sha256: str = ""
     """语料文件的 sha256。语料改了但没重测，据此可以检出。"""
 
-    separability: float
+    separability: float | None = None
     """`P05(真重复) − noise_ceiling` —— **诊断量，可以为负**。
 
     ≤ 0 意味着「该模型下余弦单独不可分」：真重复的下界还没够到无关的上界。
-    这时**不得**只靠余弦下重复结论，必须走灰区转人工。当前实测就是这个情况。
+    这时**不得**只靠余弦下重复结论，必须走灰区转人工。
+    `None` 表示没带这个信息（运行期标尺不关心它，要看它请读校准报告）。
     """
 
 
@@ -130,8 +134,18 @@ class SimilarityGates:
     校准报告里带 `SIMILARITY_CALIBRATION_MODEL`，批 2 会拿它与当前模型比对并告警。
     """
 
-    duplicate_relevance: float = 0.42
-    """= `relevance(max 无关对)` —— 比语料里见过的**任何一个**无关对都近。"""
+    duplicate_relevance: float = 0.31
+    """**三个 relevance 闸门刻意取同一个数**（= `relevance(P95 无关)`，即噪声上界）。
+
+    实测 relevance **分不开级别** —— 真相关的余弦可以低于无关的（红区 P95 0.9496
+    > 真重复 P05 0.8948），给它三个不同的值只会假装它做了分级。
+    级别的区分**全部由 contrast 承担**。
+
+    校准报告里另有一个 `relevance(max 无关对) = 0.42`（比任何无关对都近）。
+    实测它在这份语料上是**冗余**的：红区落差的最大值 0.1330 已经低于
+    `duplicate_contrast` 0.1385，所以那道额外的 relevance 门槛从不生效。
+    这里不引入 —— 用不到的第二道保险会让人误以为它在挡什么。
+    """
 
     duplicate_contrast: float = 0.1385
     """= `P10(落差 │ 真重复)` —— 即「90% 的真重复能达到这个落差」。
@@ -142,11 +156,7 @@ class SimilarityGates:
     """
 
     related_relevance: float = 0.31
-    """= `relevance(P95 无关)` —— 与 `candidate` 同值。
-
-    刻意与 candidate 相同：实测 relevance **分不开级别**（真相关的余弦可以低于无关的），
-    级别区分全部交给 contrast。这里不假装它能在 related 与 candidate 之间划出区别。
-    """
+    """同 `duplicate_relevance` —— 见那条的说明。"""
 
     related_contrast: float = 0.0747
     """= `P95(落差 │ 无关)` —— 「比无关查询能有的落差还突出」。"""
@@ -154,6 +164,28 @@ class SimilarityGates:
     candidate_relevance: float = 0.31
     """`candidate` **只看 relevance**：它的用途是「值得展示给人看」，
     不是自动下判，不需要突出度佐证。"""
+
+    def with_candidate_relevance_scaled(self, factor: float) -> SimilarityGates:
+        """按分析模式缩放**展示闸门**。判定闸门（relevance 与 contrast）一律不动。
+
+        ## 为什么只缩放 `candidate_relevance`
+
+        第一版实现缩放了三个 relevance，结果是 `broad` 会在 relevance 处于
+        `[floor×0.4, floor]` 这段区间时**真的多判几个重复** —— 那与「模式只管展示宽严」
+        的说法自相矛盾，而且方向危险：用户调宽模式想要的是「多给我看几条」，
+        不是「多替我判几个重复」。
+
+        极端的 `strict` 与 `broad` 都只允许影响**展示**。判定靠的是校准出来的
+        闸门，它不该被一个随手改的模式参数推动。这条在
+        `tests/unit/test_analysis_mode.py` 里有测试钉着。
+        """
+        return SimilarityGates(
+            duplicate_relevance=self.duplicate_relevance,
+            duplicate_contrast=self.duplicate_contrast,
+            related_relevance=self.related_relevance,
+            related_contrast=self.related_contrast,
+            candidate_relevance=self.candidate_relevance * factor,
+        )
 
 
 DEFAULT_GATES = SimilarityGates()

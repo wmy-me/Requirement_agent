@@ -6,6 +6,12 @@ from sqlalchemy.engine import URL
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from requirement_agent.domain.similarity_scale import (
+    SimilarityCalibration,
+    SimilarityGates,
+    relevance,
+)
+
 
 class Settings(BaseSettings):
     """Environment settings for the requirement management service."""
@@ -83,6 +89,32 @@ class Settings(BaseSettings):
     embedding_api_key: SecretStr = Field(default=SecretStr(""), alias="EMBEDDING_API_KEY")
     # 必须与向量列维度一致：三张表经 006 迁移后均为 vector(4096)。
     embedding_dimension: int = Field(default=4096, alias="EMBEDDING_DIMENSION")
+
+    # —— 相似度判定标尺（B4 批 2）——
+    # ⚠️ **这几个数不是拍的**，出自 `scripts/calibrate_similarity.py` 的实跑报告
+    # （`docs/baseline/similarity_calibration_<model>_<date>.json`）。
+    # 它们只对 `SIMILARITY_CALIBRATION_MODEL` 那个 embedding 模型有效 ——
+    # 换模型后必须重跑校准，`similarity_calibration_is_stale()` 会告诉你该不该重测。
+    #
+    # 判定是**两把锁**：relevance（全局距离，由 baseline 换算）**且**
+    # contrast（本次查询内的突出度）。为什么必须是两把，见 `domain/similarity_scale.py`。
+    similarity_baseline: float = Field(default=0.7273, ge=0.0, lt=1.0, alias="SIMILARITY_BASELINE")
+    similarity_noise_ceiling: float = Field(
+        default=0.8120, ge=0.0, le=1.0, alias="SIMILARITY_NOISE_CEILING"
+    )
+    similarity_contrast_duplicate: float = Field(
+        default=0.1385, ge=0.0, alias="SIMILARITY_CONTRAST_DUPLICATE"
+    )
+    similarity_contrast_related: float = Field(
+        default=0.0747, ge=0.0, alias="SIMILARITY_CONTRAST_RELATED"
+    )
+    similarity_calibration_model: str = Field(
+        default="Doubao-embedding", alias="SIMILARITY_CALIBRATION_MODEL"
+    )
+    similarity_calibration_source: str = Field(
+        default="docs/baseline/similarity_calibration_Doubao-embedding_20260917.json",
+        alias="SIMILARITY_CALIBRATION_SOURCE",
+    )
 
     # 后台 outbox 消费循环：由 API 进程持续认领 embedding 同步 / 文档分片事件
     outbox_consumer_enabled: bool = Field(default=True, alias="OUTBOX_CONSUMER_ENABLED")
@@ -210,6 +242,49 @@ class Settings(BaseSettings):
     def require_api_auth(self) -> None:
         if not self.api_auth_token.get_secret_value().strip():
             raise RuntimeError("API_AUTH_TOKEN must be configured for protected API operations")
+
+    # ── 相似度标尺（B4 批 2）────────────────────────────────────────────
+    # 适配器放在 settings 而不是领域层：领域层要能脱离配置单测（见
+    # `domain/similarity_scale.py` 的模块 docstring），所以由这里做「配置 → 标尺」的换算。
+
+    def similarity_calibration(self) -> SimilarityCalibration:
+        """运行期标尺。判定只看 `baseline` 与 `noise_ceiling`，其余是溯源信息。"""
+        return SimilarityCalibration(
+            baseline=self.similarity_baseline,
+            noise_ceiling=self.similarity_noise_ceiling,
+            model=self.similarity_calibration_model,
+            measured_at="",
+            corpus_sha256="",
+            separability=None,
+        )
+
+    def similarity_gates(self) -> SimilarityGates:
+        """基准闸门（strict）。
+
+        三个 relevance 闸门**都由 `noise_ceiling` 换算**、取同一个值 ——
+        实测 relevance 分不开级别（真相关的余弦可以低于无关的），给它三个数只是假装。
+        级别区分全部由 contrast 承担。按模式缩放走 `SimilarityGates.with_relevance_scaled()`。
+        """
+        floor = relevance(
+            self.similarity_noise_ceiling, self.similarity_calibration()
+        )
+        return SimilarityGates(
+            duplicate_relevance=floor,
+            duplicate_contrast=self.similarity_contrast_duplicate,
+            related_relevance=floor,
+            related_contrast=self.similarity_contrast_related,
+            candidate_relevance=floor,
+        )
+
+    def similarity_calibration_is_stale(self) -> bool:
+        """当前 embedding 模型与「阈值是在哪个模型上量的」是否对不上。
+
+        换模型后最容易踩、也最容易被忽略的一脚：阈值看起来还在，判定却已经失准，
+        而且**不会报任何错**。调用方据此打醒目告警并在结果里标记。
+        """
+        current = self.embedding_model.strip().lower()
+        measured = self.similarity_calibration_model.strip().lower()
+        return bool(measured) and current != measured
 
 
 settings = Settings()

@@ -2,9 +2,13 @@
 
 关系由分析结果翻译而来，三条规则缺一不可：
 1. 对应布尔量为真（duplicate/related/conflict）；
-2. **该候选自己的相似度**过阈值——整份分析的布尔量是「至少有一个候选命中」，
+2. **该候选自己的判定级别**够——整份分析的布尔量是「至少有一个候选命中」，
    不能据此把每个候选都标上关系；
 3. 候选的 requirement_key 必须查得到已存在的 REQ（检索候选里混着尚未成为正式需求的条目）。
+
+> ⚠️ 第 2 条在 B4 从「比相似度阈值」改成「读 `level`」。级别是按两把锁在分析阶段
+> 算出来的，其中 contrast 是**查询级**属性 —— 在这里拿单条候选重新比一个静态阈值，
+> 算出来的结论会与当初的判定（以及审核页显示的标签）不一致。
 """
 
 from requirement_agent.workflows.commit_nodes import _analysis_relations
@@ -32,8 +36,15 @@ def _analysis(**overrides) -> dict:
     return data
 
 
-def _candidate(key: str, similarity: float, reason: str = "理由") -> dict:
-    return {"requirement_key": key, "similarity": similarity, "reason": reason}
+def _candidate(key: str, similarity: float, level: str = "duplicate", reason: str = "理由") -> dict:
+    """造一条分析候选。
+
+    ⚠️ **B4 起关系边由 `level` 决定，不再由 `similarity` 比阈值。**
+    级别是分析阶段按两把锁算好的（含查询级的 contrast），这里显式给出来，
+    而不是塞一个数字让下游再判一次 —— 后者会与审核页显示的级别打架。
+    `similarity` 仍然保留：它现在是真实余弦，会原样写进关系行。
+    """
+    return {"requirement_key": key, "similarity": similarity, "level": level, "reason": reason}
 
 
 def _run(analysis: dict, keys: tuple[str, ...] = ("REQ-000001", "REQ-000002")) -> list[dict]:
@@ -49,7 +60,7 @@ def test_independent_analysis_produces_no_relations() -> None:
     assert _run(analysis) == []
 
 
-def test_duplicate_above_threshold_becomes_duplicates_of() -> None:
+def test_duplicate_level_becomes_duplicates_of() -> None:
     analysis = _analysis(duplicate=True, candidates=[_candidate("REQ-000001", 0.92)])
 
     relations = _run(analysis)
@@ -62,8 +73,8 @@ def test_duplicate_above_threshold_becomes_duplicates_of() -> None:
     assert relations[0]["reason"] == "理由"
 
 
-def test_related_above_threshold_becomes_related() -> None:
-    analysis = _analysis(related=True, candidates=[_candidate("REQ-000002", 0.78)])
+def test_related_level_becomes_related() -> None:
+    analysis = _analysis(related=True, candidates=[_candidate("REQ-000002", 0.78, level="related")])
 
     relations = _run(analysis)
 
@@ -74,7 +85,7 @@ def test_weak_candidate_is_skipped() -> None:
     """related=True 是「至少有一个命中」，不能让 0.60 的弱候选也变成「关联」。"""
     analysis = _analysis(
         related=True,
-        candidates=[_candidate("REQ-000001", 0.60), _candidate("REQ-000002", 0.78)],
+        candidates=[_candidate("REQ-000001", 0.60, level="candidate"), _candidate("REQ-000002", 0.78, level="related")],
     )
 
     relations = _run(analysis)
@@ -84,7 +95,7 @@ def test_weak_candidate_is_skipped() -> None:
 
 def test_candidate_without_existing_requirement_is_skipped() -> None:
     """检索候选可能是还没成为正式需求的来源——写进去就是悬空关系。"""
-    analysis = _analysis(related=True, candidates=[_candidate("REQ-999999", 0.90)])
+    analysis = _analysis(related=True, candidates=[_candidate("REQ-999999", 0.90, level="related")])
 
     assert _run(analysis) == []
 
@@ -111,14 +122,22 @@ def test_conflict_is_recorded_independently() -> None:
 
 def test_conflict_survives_low_similarity() -> None:
     """冲突不看相似度：低相似的候选也可以是冲突。"""
-    analysis = _analysis(conflict=True, candidates=[_candidate("REQ-000001", 0.10)])
+    analysis = _analysis(conflict=True, candidates=[_candidate("REQ-000001", 0.10, level="none")])
 
     assert [r["relation_type"] for r in _run(analysis)] == ["conflict"]
 
 
-def test_non_numeric_similarity_is_treated_as_zero() -> None:
-    """模型偶尔给出 "高" 这类非数值——按 0 处理而不是抛异常。"""
-    analysis = _analysis(related=True, candidates=[{"requirement_key": "REQ-000001", "similarity": "高"}])
+def test_candidate_missing_level_produces_no_relation() -> None:
+    """**旧数据兼容**：B4 之前落库的分析结果里没有 `level` 字段。
+
+    那种候选一律不产生关系边 —— 我们无从知道当初算出的级别是什么，
+    而在这里重新拿 `similarity` 判一次正是本批次要消灭的做法。
+    宁可少写几条边（人工仍可在审核页确认），也不要写错。
+    """
+    analysis = _analysis(
+        duplicate=True, related=True,
+        candidates=[{"requirement_key": "REQ-000001", "similarity": 0.95}],
+    )
 
     assert _run(analysis) == []
 
@@ -174,13 +193,13 @@ def test_merge_without_duplicate_flag_confirms_nothing() -> None:
     assert _merge(analysis, "REQ-000001") == []
 
 
-def test_merge_ignores_candidates_below_duplicate_threshold() -> None:
-    """只有过 duplicate 阈值的候选才被确认 —— 弱候选不该借合并混进 confirmed。"""
+def test_merge_ignores_candidates_below_duplicate_level() -> None:
+    """只有级别为 duplicate 的候选才被确认 —— 弱候选不该借合并混进 confirmed。"""
     analysis = _analysis(
         duplicate=True,
         candidates=[
             _candidate("REQ-000001", 0.95),  # 目标自己，过线
-            _candidate("REQ-000002", 0.61),  # 远低于 duplicate 阈值
+            _candidate("REQ-000002", 0.61, level="related"),  # 级别不够，不能借合并混进 confirmed
         ],
     )
 

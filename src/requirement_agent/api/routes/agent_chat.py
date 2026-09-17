@@ -19,7 +19,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
-from requirement_agent.agents.analyze_agent import score_label, thresholds_for
+from requirement_agent.agents.analyze_agent import score_label
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
@@ -120,14 +120,11 @@ def _fallback_narrative(pipeline: dict[str, object]) -> str:
     if summary:
         parts.append(f"{summary}。")
 
-    def _similarity(item: dict[str, object]) -> float:
-        try:
-            return float(item.get("similarity") or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    duplicates = [c for c in candidates if _similarity(c) >= 0.7]
-    related = [c for c in candidates if 0.45 <= _similarity(c) < 0.7]
+    # ⚠️ **按判定级别分档，不再按相似度分档。** 这里原本硬编码 0.7 / 0.45，与后端
+    # `analyze_agent` 里那套校准阈值是**两份独立的事实源** —— 后端一改，这段旁白就
+    # 开始撒谎（说「高度相似」而判定其实是 related）。级别是判定本身算出来的，读它不会跑偏。
+    duplicates = [c for c in candidates if c.get("level") == "duplicate"]
+    related = [c for c in candidates if c.get("level") == "related"]
     if analysis.get("duplicate") and duplicates:
         keys = "、".join(str(c.get("requirement_key") or "") for c in duplicates[:3])
         parts.append(f"⚠️ 我发现 {len(duplicates)} 条高度相似的存量需求（{keys}），建议先核对是否重复。")
@@ -413,12 +410,14 @@ async def _stream_chat_pipeline(
             )
             analysis_payload = analysis.model_dump(mode="python")
             pipeline["analysis"] = analysis_payload
-            thresholds = thresholds_for(analysis_mode)
+            # 标签由**判定级别**映射，不再拿 similarity 比阈值 ——
+            # 两把锁下同一个相似度在不同查询里可能判成不同级别（取决于该批候选的落差），
+            # 按相似度反推标签必然与判定打架。
             pipeline["analysis"]["candidates"] = [
                 {
                     **candidate,
                     "evidence": candidate.get("evidence") or [],
-                    "score_label": score_label(float(candidate.get("similarity") or 0), thresholds),
+                    "score_label": score_label(str(candidate.get("level") or "")),
                 }
                 for candidate in pipeline["analysis"].get("candidates") or []
             ]

@@ -48,7 +48,11 @@ class SearchRequirementsTool(BaseTool):
             "properties": {
                 "requirement_key": {"type": "string"},
                 "requirement_name": {"type": ["string", "null"]},
+                # 融合分：只用于排序与展示，**不是相似度**
                 "similarity": {"type": ["number", "null"]},
+                # 余弦；纯关键词命中的候选为 null。判定由后端按两把锁做，
+                # 不要拿这个数自己下「是否重复」的结论。
+                "vector_similarity": {"type": ["number", "null"]},
             },
         },
     }

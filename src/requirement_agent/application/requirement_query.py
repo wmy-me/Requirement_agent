@@ -119,7 +119,12 @@ class RequirementQueryService:
             {
                 "requirement_key": row.get("requirement_key"),
                 "requirement_name": row.get("requirement_name") or row.get("title"),
+                # ⚠️ `similarity` 是**融合分**（关键词多因子加和与余弦取大者），只用于排序与展示。
+                # 判定**必须**用下面的 `vector_similarity` —— 融合分的量纲随查询词数、
+                # 短语长度变化，拿它比相似度阈值是范畴错误（见 `domain/similarity_scale.py`）。
+                # 纯关键词命中的候选没有余弦，这里是 `None`，判定层会据此标 `unverifiable`。
                 "similarity": row.get("score") or row.get("similarity"),
+                "vector_similarity": row.get("vector_similarity"),
             }
             for row in rows
         ]

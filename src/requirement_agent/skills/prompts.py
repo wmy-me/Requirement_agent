@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 # Prompt 版本标记：任何 prompt 变更都递增，便于追溯与后续灰度。
-PROMPT_VERSION = "2026.09.15"
+PROMPT_VERSION = "2026.09.17"
 
 
 # —— 系统提示词（三个 Skill 共用，原先就与内联版本一致）——
@@ -114,7 +114,13 @@ def build_analyze_user_prompt(*, extracted_json: Any, history: Any) -> str:
     return (
         "请分析当前需求与历史需求的关系，并判断是否存在重复、关联、冲突或独立情况。\n"
         "返回 JSON，字段包括：duplicate、related、conflict、independent、reasoning、candidates。\n"
-        "candidates 中每项必须有 requirement_key、title、similarity、reason。\n"
+        "candidates 中每项必须有 requirement_key、title、reason（选哪几条、为什么）。\n"
+        "⚠️ **不要返回 similarity**：你拿不到真实的相似度，后端会自己填。\n"
+        "  此前要求你返回它，结果只能把输入里的检索分数照抄一遍（逐位相同），\n"
+        "  却让下游把它当成了「模型的独立判断」。\n"
+        "⚠️ 判断重复**不能只看历史需求里已给出的分数**。同一个分数在不同批次里含义不同，\n"
+        "  而且「导出 Excel 报表」与「导出员工数据」这类**同能力但业务对象不同**的需求，\n"
+        "  字面与语义都极像 —— 它们不构成重复。business_domain 与业务对象是主要判据。\n"
         "- suggestion：**该新建需求主线，还是追加到已有主线**，形如\n"
         '  {"action": "create_new" 或 "append_to", "target_requirement_key": "REQ-xxxxx" 或 null,\n'
         '   "confidence": 0.0~1.0, "reason": "…"}\n'

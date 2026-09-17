@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from requirement_agent.agents.analyze_agent import thresholds_for
 from requirement_agent.domain.requirement_titles import derive_title_candidates
 from requirement_agent.domain.requirement import AuditEvent, RequirementMaster, RequirementReview, RequirementVersion
 from requirement_agent.workflows.canonical import canonical_requirement, canonical_title
@@ -31,15 +30,16 @@ def _analysis_relations(
     三条规则：
     1. **只在对应布尔量为真时才写**：`duplicate` → `duplicates_of`、`related` → `related`、
        `conflict` → `conflict`。分析判为独立时不产生任何关系。
-    2. **按该候选自己的相似度过阈值**：整份分析的布尔量是「至少有一个候选命中」，
-       不能据此把每个候选都标上关系——否则一个 0.62 的弱候选也会被写成「关联」。
+    2. **按该候选自己的判定级别过闸**：整份分析的布尔量是「至少有一个候选命中」，
+       不能据此把每个候选都标上关系——否则一个弱候选也会被写成「关联」。
     3. **候选的 requirement_key 必须查得到对应 REQ**：检索候选里混着尚未成为正式需求
        （还在待审）的条目，写进去就是悬空关系。
 
-    阈值取 strict（默认模式）——`analysis_mode` 目前不随分析结果落库，无从还原，
-    取默认值是保守且可解释的选择。
+    ⚠️ **B4 起这里读候选的 `level`，不再自己拿 `similarity` 比阈值。** 级别由两把锁
+    （relevance + contrast）在分析时算出，其中 contrast 是**查询级**属性 —— 单个候选
+    在这里重新比一个静态阈值，算出来的结论与当初的判定可以不一致，也会与审核页显示
+    的级别打架。级别随候选一起落库（`metadata["analysis"]["candidates"]`），这里只是读它。
     """
-    thresholds = thresholds_for(None)
     relations: list[dict[str, object]] = []
     for candidate in analysis.get("candidates") or []:
         target_key = str(candidate.get("requirement_key") or "").strip()
@@ -53,10 +53,12 @@ def _analysis_relations(
         except (TypeError, ValueError):
             similarity = 0.0
 
+        # 级别是分析阶段按两把锁算好的（含查询级的 contrast），这里只读不重算。
+        level = str(candidate.get("level") or "")
         relation_type: str | None = None
-        if analysis.get("duplicate") and similarity >= thresholds["duplicate"]:
+        if analysis.get("duplicate") and level == "duplicate":
             relation_type = "duplicates_of"
-        elif analysis.get("related") and similarity >= thresholds["related"]:
+        elif analysis.get("related") and level == "related":
             relation_type = "related"
         if relation_type is not None:
             relations.append(
@@ -196,19 +198,20 @@ def _merge_confirmations(
     """
     if not analysis.get("duplicate"):
         return []
-    threshold = thresholds_for(None)["duplicate"]
 
     def duplicates() -> list[dict[str, Any]]:
+        """级别为 `duplicate` 的候选 —— 与 `_analysis_relations` 同一判据。"""
         found: list[dict[str, Any]] = []
         for candidate in analysis.get("candidates") or []:
             if not isinstance(candidate, dict):
+                continue
+            if str(candidate.get("level") or "") != "duplicate":
                 continue
             try:
                 similarity = float(candidate.get("similarity") or 0.0)
             except (TypeError, ValueError):
                 similarity = 0.0
-            if similarity >= threshold:
-                found.append({**candidate, "similarity": similarity})
+            found.append({**candidate, "similarity": similarity})
         return found
 
     duplicate_candidates = duplicates()

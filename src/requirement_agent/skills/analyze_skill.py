@@ -11,6 +11,7 @@ from requirement_agent.skills.prompts import ANALYZE_SYSTEM_PROMPT, build_analyz
 if TYPE_CHECKING:
     from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
     from requirement_agent.agents.extract_agent import ExtractedRequirement
+    from requirement_agent.domain.similarity_scale import SimilarityCalibration, SimilarityGates
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +28,30 @@ class AnalyzeSkill(BaseSkill):
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
         *,
-        duplicate_threshold: float = 0.80,
-        related_threshold: float = 0.72,
+        gates: SimilarityGates | None = None,
+        cal: SimilarityCalibration | None = None,
     ) -> AnalysisResult:
         """分析当前需求与历史需求的关系，并尽量返回一致的布尔结论。
 
-        `duplicate_threshold` / `related_threshold` 由 AnalyzeAgent 按 analysis_mode 下发；
-        这里的默认值与 strict 模式保持一致（校准依据见 `analyze_agent.ANALYSIS_MODE_THRESHOLDS`）。
+        `gates` / `cal` 由 AnalyzeAgent 按 analysis_mode 下发（校准依据见
+        `agents/analyze_agent.py` 顶部与 `domain/similarity_scale.py`）。
         """
-        from requirement_agent.agents.analyze_agent import AnalyzeAgent, AnalysisResult, CandidateMatch
+        from requirement_agent.agents.analyze_agent import (
+            AnalyzeAgent,
+            AnalysisResult,
+            CandidateMatch,
+            booleans_from_levels,
+            calibration,
+            cosine_of,
+            gates_for,
+        )
+        from requirement_agent.domain.similarity_scale import verdict
+
+        gates = gates or gates_for(None)
+        cal = cal or calibration()
 
         fallback = AnalyzeAgent._heuristic_analyze(
-            extracted,
-            historical_requirements,
-            duplicate_threshold=duplicate_threshold,
-            related_threshold=related_threshold,
+            extracted, historical_requirements, gates=gates, cal=cal
         )
         if not self.provider.is_configured():
             return fallback
@@ -53,46 +63,61 @@ class AnalyzeSkill(BaseSkill):
         )
 
         try:
-            from requirement_agent.agents.analyze_agent import AnalysisResult, CandidateMatch
-
             payload = self._generate_json(prompt, system_prompt)
 
-            # 统一 similarity 到 [0,1]，避免模型返回百分数或脏值污染后续判定。
+            # 模型给的是「哪几条相关 + 为什么」；**相似度不采信模型**，由后端从检索结果里
+            # 取真实余弦填入。提示词里已经不再索要 `similarity` —— 那是在要求模型返回一个
+            # 它算不出来的数，实测它只能把检索分数原样回显（0.7313209960078035 逐位相同）。
+            #
+            # 副作用值得记一笔：**模型再也无法伪造相似度**。它若编一个不存在的
+            # requirement_key，后端查不到余弦，那条候选就是 `unverifiable`，
+            # 不会因为模型报了个 0.99 就升级成重复。
+            history = list(historical_requirements or [])
+            by_key = {str(item.get("requirement_key") or ""): item for item in history}
+            cosines = [value for value in (cosine_of(item) for item in history) if value is not None]
+
             normalized_candidates: list[CandidateMatch] = []
-            max_similarity = 0.0
             for item in payload.get("candidates") or []:
-                try:
-                    similarity = float(item.get("similarity") or 0.0)
-                except (TypeError, ValueError):
-                    similarity = 0.0
-                similarity = max(0.0, min(1.0, similarity))
-                max_similarity = max(max_similarity, similarity)
+                key = str(item.get("requirement_key") or "REQ-UNKNOWN")
+                source = by_key.get(key) or {}
+                cos = cosine_of(source)
+                judged = verdict(cos, cosines, cal, gates)
                 normalized_candidates.append(
                     CandidateMatch(
-                        requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
-                        title=str(item.get("title") or "历史需求"),
-                        similarity=similarity,
-                        reason=str(item.get("reason") or "相似"),
+                        requirement_key=key,
+                        title=str(
+                            item.get("title")
+                            or source.get("requirement_name")
+                            or "历史需求"
+                        ),
+                        similarity=cos if cos is not None else 0.0,
+                        similarity_source="vector" if cos is not None else "keyword_only",
+                        level=judged.level,
+                        reason=str(item.get("reason") or judged.reason),
                         evidence=[str(v) for v in item.get("evidence") or []],
                     )
                 )
 
-            # 用候选证据反向约束布尔结论，避免 duplicate=true 但无有效证据的幻觉。
-            duplicate = bool(payload.get("duplicate"))
-            related = bool(payload.get("related"))
-            conflict = bool(payload.get("conflict"))
-            # duplicate=true 但没有达到重复阈值的候选佐证 → 降为 false（防假阳性）
-            if duplicate and max_similarity < duplicate_threshold:
-                duplicate = False
-                related = related or max_similarity >= related_threshold
-            # 这里**刻意没有**任何「达到阈值就补判」的分支（duplicate 与 related 都没有）。
-            # 那类规则的前提是 similarity 为模型的独立判断；实测它只是把检索分数原样回显
-            # （0.7313209960078035 逐位相同），于是规则等价于「向量分数高就直接下判」，
-            # 会推翻模型结论并产出「独立」配「关联=是」这类矛盾卡片。
+            # ── 布尔量：**有候选证据时，级别说了算** ──
             #
-            # 实测教训：本 embedding 模型在**语义无关**的中文业务文本上也能给到 0.79，
-            # 所以绝对阈值本身就不可靠，拿它覆盖模型判断更是雪上加霜。
-            # 漏报的代价远小于自相矛盾：宁可为空，不可打架。
+            # `duplicate` / `related` 一律由候选级别推出，**不再采信模型对这两个字段的
+            # 自报值**。两条规则合起来就是这个意思：
+            #
+            #   降级（模型说有、证据没有）—— 模型爱在只有 0.75 的候选上判 duplicate，
+            #       而那条候选的级别可能只是 `candidate`。这个方向一直都在做。
+            #   升级（证据有、模型说没有）—— **B4 才敢做这个方向。** 此前不升级的理由是
+            #       「`similarity` 只是模型回显检索分，补判等价于『向量分高就直接下判』」；
+            #       而级别现在是后端用真实余弦 + 落差算出来的，**那个理由不再成立**。
+            #       决策依据：`duplicate=true` 在本系统里**不做任何自动动作**，
+            #       只把 `next_action` 置为 `manual_review`，最终仍由人裁决 ——
+            #       所以「够级别就标记出来给人看」比「藏起来」更符合审核人的利益。
+            #       实跑走查里真的发生过：候选 `level=duplicate` 而结论是「独立」，
+            #       审核人看到的是两张对不上的卡片。
+            #
+            # 模型仍然负责它擅长的那半件事：**选哪几条、为什么**（candidates 与 reason）。
+            # 与启发式路径共用 `booleans_from_levels`，两条路不可能再漂移。
+            duplicate, related = booleans_from_levels(normalized_candidates)
+            conflict = bool(payload.get("conflict"))
             independent = not (duplicate or related or conflict)
 
             result = AnalysisResult(

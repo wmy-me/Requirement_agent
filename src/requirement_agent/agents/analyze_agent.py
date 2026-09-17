@@ -4,50 +4,114 @@ from __future__ import annotations
 
 import re
 
+from collections.abc import Iterable, Mapping
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from requirement_agent.agents.extract_agent import ExtractedRequirement
+from requirement_agent.config.settings import settings
+from requirement_agent.domain.similarity_scale import (
+    SimilarityCalibration,
+    SimilarityGates,
+    VerdictLevel,
+    verdict,
+)
 from requirement_agent.skills.analyze_skill import AnalyzeSkill
 
 
-# 分析模式 → 阈值映射。
+# 判定标尺（B4）。**数值出自实跑校准，不是拍的** —— 见
+# `scripts/calibrate_similarity.py` 与 `docs/baseline/similarity_calibration_*.json`。
 #
-# **阈值是校准出来的，不是拍的。** 用当前 embedding 模型（Doubao-embedding）实测：
-#   - 同一文档内部分片之间（语义同源）：0.7994 ~ 0.9207
-#   - **语义无关**的文档分片 × 历史需求：平均 0.6778，最高 0.7374
-#   - 12 个语义无关组合里有 4 个 ≥ 0.70
-# 也就是说旧值 0.70 的 duplicate 阈值**落在无关内容的分布内部**，必然产生假阳性
-# （实测把「习惯打卡小程序」判成了与「后台报表导出」重复）。
-# 因此把重复阈值抬到无关分布之上；相关阈值同步抬高，否则「related」会吞掉一切。
+# 这里曾经写着一组绝对余弦阈值（重复 0.80 / 关联 0.72 / 候选 0.60），依据是注释里
+# 一段**无法复现**的实测。2026-09-17 用 52 对构造语料重测，结论是那组分不开：
 #
-# ⚠️ 样本只有 2 条需求，且「真重复」的上界是用同文档分片近似的（真实重复需求可能略低）。
-# 数据量上来后应重跑校准，别把这里的数字当永久真理。
-ANALYSIS_MODE_THRESHOLDS: dict[str, dict[str, float]] = {
-    "strict": {"duplicate": 0.80, "related": 0.72, "candidate": 0.60},
-    "balanced": {"duplicate": 0.75, "related": 0.68, "candidate": 0.58},
-    "broad": {"duplicate": 0.70, "related": 0.64, "candidate": 0.55},
+#   真重复 P05 = 0.8948      无关 P95 = 0.8120      → 这两类**分得开**
+#   同能力异对象 P95 = 0.9496 > 真重复 P05 0.8948   → 这两类**完全重叠**
+#
+# 旧阈值 0.80 的实际表现：真重复 12/12 判中，但「导出 Excel 报表 / 导出员工数据」
+# 这类同能力异对象 **10 对全部被误判成重复**。只看向量救不了 —— 它们的余弦就是更高。
+#
+# 真正能分开的是**落差**（同一 query 内 top1 与其余候选的间距）：真重复 0.110~0.229、
+# 无关 0.027~0.131、红区 0.021~0.133。所以判定改成两把锁，见 `domain/similarity_scale.py`。
+
+# 分析模式 → **展示闸门**（`candidate_relevance`）的缩放系数。
+#
+# ⚠️ **判定闸门绝不随模式缩放。** `broad` 的用途是「宁可多给人看几条」，
+# 不是「宁可多判几个重复」。第一版实现缩放了三个 relevance，于是 broad 会在
+# relevance 处于中间带时真的多判重复 —— 与这句说明自相矛盾，且方向危险。
+# 现在模式只动 `candidate_relevance`；重复/关联的闸门恒定。
+# `tests/unit/test_analysis_mode.py` 里有测试钉着这条。
+ANALYSIS_MODE_DISPLAY_FACTOR: dict[str, float] = {
+    "strict": 1.0,
+    "balanced": 0.7,
+    "broad": 0.4,
+}
+
+# 级别 → 展示标签。**按级别映射，不按相似度分档** —— 两把锁下同一个相似度在不同查询里
+# 可能判成不同级别（取决于该批候选的落差），拿相似度反推标签必然与判定打架，
+# 那正是 F 批修过的「展示与判定不一致」。
+_LEVEL_LABELS: dict[str, str] = {
+    "duplicate": "高",
+    "related": "中",
+    "candidate": "低",
+    "none": "低",
+    "unverifiable": "—",  # 没有余弦，不给「高/中/低」这种会被当成相似度的标签
 }
 
 
-def thresholds_for(analysis_mode: str | None) -> dict[str, float]:
-    """按分析模式取阈值；未知/缺省模式回退 strict（保持历史默认行为）。"""
-    key = (analysis_mode or "strict").strip().lower()
-    return ANALYSIS_MODE_THRESHOLDS.get(key, ANALYSIS_MODE_THRESHOLDS["strict"])
+def calibration() -> SimilarityCalibration:
+    """当前生效的相似度标尺。数值来自 settings（出自校准报告）。"""
+    return settings.similarity_calibration()
 
 
-def score_label(similarity: float, thresholds: dict[str, float]) -> str:
-    """把相似度映射为展示用的「高/中/低」标签。
+def gates_for(analysis_mode: str | None) -> SimilarityGates:
+    """按分析模式取判定闸门；未知/缺省模式回退 strict（保持历史默认行为）。
 
-    用当前分析模式的阈值而非硬编码值，避免展示与判定不一致：
-    例如 broad 模式下 0.55 已是「重复」，标签却仍显示「中」。
+    模式**只**缩放展示闸门；判定闸门恒定。理由见上面 `ANALYSIS_MODE_DISPLAY_FACTOR`。
     """
-    if similarity >= thresholds["duplicate"]:
-        return "高"
-    if similarity >= thresholds["related"]:
-        return "中"
-    return "低"
+    key = (analysis_mode or "strict").strip().lower()
+    factor = ANALYSIS_MODE_DISPLAY_FACTOR.get(key, ANALYSIS_MODE_DISPLAY_FACTOR["strict"])
+    return settings.similarity_gates().with_candidate_relevance_scaled(factor)
+
+
+def score_label(level: str) -> str:
+    """把判定级别映射为展示用的「高/中/低 / —」。
+
+    未知级别返回 `"—"` 而不是默认「低」：把不认识的东西显示成「低相似度」
+    会让它看起来像「评估过了，结论是不像」。
+    """
+    return _LEVEL_LABELS.get(str(level), "—")
+
+
+def booleans_from_levels(candidates: Iterable[object]) -> tuple[bool, bool]:
+    """由候选级别推出 `(duplicate, related)`。
+
+    **LLM 路径与启发式路径共用这一个表达式** —— 两条路各写一遍是 B4 之前那个烂摊子的
+    根源（同一个「相似度阈值」在两条路上指的是两个不同的数）。共用一个函数，
+    它们不可能再漂移。
+
+    语义：`duplicate` 级别不蕴含 `related`（一条近重复的候选不会同时被记成「关联」）,
+    这样两条路的行为逐字一致。
+    """
+    levels = [str(getattr(item, "level", "") or "") for item in candidates]
+    return ("duplicate" in levels), ("related" in levels)
+
+
+def cosine_of(candidate: Mapping[str, object]) -> float | None:
+    """从检索候选里取**余弦**；纯关键词命中的候选返回 `None`。
+
+    ⚠️ 刻意不退回 `similarity`：那是**融合分**（关键词多因子加和与余弦取大者），
+    量纲随查询词数与短语长度变化，拿它比相似度阈值是范畴错误。
+    没有余弦就诚实地说「判不了」（`unverifiable`），而不是拿一个不同量纲的数充数。
+    """
+    raw = candidate.get("vector_similarity")
+    if raw is None:
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 class CandidateMatch(BaseModel):
@@ -56,6 +120,25 @@ class CandidateMatch(BaseModel):
     requirement_key: str
     title: str
     similarity: float
+    """**余弦**，由后端填入。
+
+    ⚠️ 它以前装的是「模型自报的相似度」，而那是个幻觉：提示词要求模型返回一个它
+    **算不出来**的数，模型只能把检索分数原样回显（`skills/analyze_skill.py` 记着实测
+    `0.7313209960078035` 逐位相同）。后果是落库的 `requirement_relation.similarity`
+    一直标着「模型判断」，实际是检索分。B4 起一律由后端填真实余弦，模型不再被要求
+    返回它；没有余弦的候选（纯关键词命中）填 `0.0` 并把 `similarity_source` 标出来。
+    """
+
+    similarity_source: Literal["vector", "keyword_only"] = "vector"
+    """余弦的来源。`keyword_only` = 这条只命中了关键词、没有向量分数。"""
+
+    level: VerdictLevel = "candidate"
+    """两把锁给出的判定级别。
+
+    **下游一律读它，不要自己拿 `similarity` 去比阈值** —— 级别取决于整批候选的落差，
+    是查询级属性，单个候选自己算不出来。
+    """
+
     reason: str
     evidence: list[str] = Field(default_factory=list)
 
@@ -115,20 +198,14 @@ class AnalyzeAgent:
 
         `analysis_mode`（strict/balanced/broad）控制判定阈值；缺省 strict = 历史默认。
         """
-        thresholds = thresholds_for(analysis_mode)
+        gates = gates_for(analysis_mode)
+        cal = calibration()
         if not self.skill.provider.is_configured():
             return self._heuristic_analyze(
-                extracted,
-                historical_requirements,
-                duplicate_threshold=thresholds["duplicate"],
-                related_threshold=thresholds["related"],
-                candidate_threshold=thresholds["candidate"],
+                extracted, historical_requirements, gates=gates, cal=cal
             )
         return self.skill.analyze(
-            extracted,
-            historical_requirements,
-            duplicate_threshold=thresholds["duplicate"],
-            related_threshold=thresholds["related"],
+            extracted, historical_requirements, gates=gates, cal=cal
         )
 
     @staticmethod
@@ -136,38 +213,51 @@ class AnalyzeAgent:
         extracted: ExtractedRequirement,
         historical_requirements: list[dict[str, object]] | None = None,
         *,
-        duplicate_threshold: float = 0.80,
-        related_threshold: float = 0.72,
-        candidate_threshold: float = 0.60,
+        gates: SimilarityGates | None = None,
+        cal: SimilarityCalibration | None = None,
     ) -> AnalysisResult:
-        """本地证据规则。
+        """本地证据规则（LLM 不可用时）。
 
-        只把达到阈值的候选放入分析结果，避免“检索命中”被误读成“业务相关”。
+        **判定用两把锁，与 LLM 路径同一套**：每个候选过一个 `verdict()`，级别取决于
+        它自己的余弦**和**整批候选的落差。把达到「值得展示」级别的候选放进结果，
+        避免「检索命中」被误读成「业务相关」。
+
+        ⚠️ 与旧版的区别：旧版拿 `_score_similarity()` 那个**第三代分数**（标签/领域/
+        关键词加和）比阈值，于是同一个「相似度阈值」在启发式路径与 LLM 路径上
+        指的是两个不同的数。现在两条路都只认余弦。
         """
-        candidates: list[CandidateMatch] = []
+        gates = gates or gates_for(None)
+        cal = cal or calibration()
         historical = historical_requirements or []
 
+        # 落差是**查询级**属性：先收齐整批余弦，每个候选再用同一个落差值配自己的 relevance。
+        cosines = [value for value in (cosine_of(item) for item in historical) if value is not None]
+
+        candidates: list[CandidateMatch] = []
         for item in historical:
             title = str(item.get("requirement_name") or item.get("title") or "")
             summary = str(item.get("final_requirement") or item.get("summary") or "")
-            score, evidence = AnalyzeAgent()._score_similarity(extracted, title, summary)
-            if score >= candidate_threshold:
-                reason = "业务语义相近，存在重合功能面"
-                if score >= duplicate_threshold:
-                    reason = "高度相似，可能为重复需求"
-                candidates.append(
-                    CandidateMatch(
-                        requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
-                        title=title or "历史需求",
-                        similarity=round(score, 2),
-                        reason=reason,
-                        evidence=evidence,
-                    )
+            cos = cosine_of(item)
+            judged = verdict(cos, cosines, cal, gates)
+            if judged.level == "none":
+                # 距离落在噪声区间内，连展示都不必 —— 展示它只会让人以为「评估过了」。
+                continue
+            # `_score_similarity` 的**分数不再参与判定**，只用它生成的证据文本 ——
+            # 那是给审核人看的「为什么这条被认为相关」，与判定是两回事。
+            _, evidence = AnalyzeAgent()._score_similarity(extracted, title, summary)
+            candidates.append(
+                CandidateMatch(
+                    requirement_key=str(item.get("requirement_key") or "REQ-UNKNOWN"),
+                    title=title or "历史需求",
+                    similarity=cos if cos is not None else 0.0,
+                    similarity_source="vector" if cos is not None else "keyword_only",
+                    level=judged.level,
+                    reason=judged.reason,
+                    evidence=evidence,
                 )
+            )
 
-        # 达到重复阈值 → 重复倾向；关联阈值~重复阈值之间 → 需要人工确认的关联信号。
-        duplicate = any(candidate.similarity >= duplicate_threshold for candidate in candidates)
-        related = any(related_threshold <= candidate.similarity < duplicate_threshold for candidate in candidates)
+        duplicate, related = booleans_from_levels(candidates)
         conflict = "权限" in " ".join(extracted.tags) and any("权限" in str(item.get("requirement_name") or "") for item in historical)
         independent = not duplicate and not related and not conflict
 
