@@ -469,13 +469,25 @@ async def _stream_chat_pipeline(
             "artifacts": pipeline,
         }
         history.append(assistant_message)
-        chat_repo.append_assistant_message(
+        # ⚠️ 收下返回值。此前这里把 `assistant_message_id` 写成了 `user_message["id"]`
+        # —— 字段名说的是 assistant，值是**用户那条消息**的 id，而本函数的返回值被丢弃。
+        # 目前 meta 的这两个键没有读者（见 current-state 的死字段清单），所以没造成可见故障；
+        # 但它是 B2.1「按 run 反查产物」要直接依赖的关联，留着错值会是个陷阱。
+        assistant_row = chat_repo.append_assistant_message(
             conversation_id=session_id,
             content=assistant_content,
             artifacts=pipeline,
             run_id=run_id,
         )
-        chat_repo.update_run(run_id=run_id, status="completed", stage="done", meta={"conversation_id": session_id, "assistant_message_id": user_message["id"]})
+        chat_repo.update_run(
+            run_id=run_id,
+            status="completed",
+            stage="done",
+            meta={
+                "conversation_id": session_id,
+                "assistant_message_id": assistant_row["id"],
+            },
+        )
         yield _sse("done", {"run_id": run_id})
     except asyncio.CancelledError:
         chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")

@@ -211,3 +211,51 @@ def test_run_status_check_rejects_paused() -> None:
                 )
         finally:
             session.rollback()
+
+
+# ── run.meta 的关联必须是真的（2026-09-17）────────────────────────────────
+
+
+def test_run_meta_points_at_the_assistant_message(monkeypatch) -> None:
+    """回归：`meta["assistant_message_id"]` 里装的曾经是**用户消息**的 id。
+
+    `agent_chat.py:478` 当时写成 `user_message["id"]`，而 `append_assistant_message`
+    的返回值被整个丢弃 —— 字段名说的是 assistant，值是用户那条。
+
+    目前 `meta` 的这两个键没有读者，所以没造成可见故障；但 B2.1 的「按 run 反查产物」
+    要直接依赖这条关联，留着错值会是个陷阱。
+    """
+    holder = _make_checked_run()
+    conv, run = holder["conv"], holder["run"]
+    run_id = str(run["run_id"])
+    try:
+        monkeypatch.setattr(agent_chat, "extract_agent", BoomAgent("extract"))
+        monkeypatch.setattr(agent_chat, "analyze_agent", BoomAgent("analyze"))
+        monkeypatch.setattr(agent_chat, "risk_agent", BoomAgent("risk"))
+        monkeypatch.setattr(agent_chat, "retrieval_service", BoomRetrieval())
+        monkeypatch.setattr(agent_chat, "LLMProvider", lambda: FakeStreamProvider())
+        monkeypatch.setattr(agent_chat.memory_context_builder, "build_context", lambda *a, **k: None)
+
+        asyncio.run(_collect(agent_chat._stream_resumed_run(run)))
+
+        final = chat_repo.get_run(run_id)
+        assistant_row = chat_repo.get_assistant_message_for_run(run_id)
+        assert assistant_row is not None, "跑完必须留下一条 assistant 消息"
+
+        assert str(final["meta"]["assistant_message_id"]) == str(assistant_row["id"]), (
+            "meta.assistant_message_id 必须指向本次 run 的 **assistant** 消息"
+        )
+    finally:
+        from sqlalchemy import text
+
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM agent_run WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv}
+            )
+            session.execute(
+                text("DELETE FROM agent_message WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv}
+            )
+            session.execute(
+                text("DELETE FROM agent_conversation WHERE id = CAST(:c AS UUID)"), {"c": conv}
+            )
+            session.commit()
