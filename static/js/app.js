@@ -114,6 +114,11 @@ const TOKEN_KEY = 'requirement_agent_token';
 let tokenPrompted = false;
 
 function getToken() {
+  // ① 服务端启动时注入的（`/static/js/ui-config.js`，由 api/app.py 从 .env 生成）
+  //    —— **正常路径走这个，没人需要填**。
+  // ② localStorage：手工覆盖用（`raSetToken`）。
+  // 两者都没有才会走 ③ 弹框，那只在服务端没生成配置文件时才发生。
+  if (window.RA_UI_TOKEN) return String(window.RA_UI_TOKEN);
   try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
 }
 

@@ -12,6 +12,8 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+import json
+
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -74,6 +76,40 @@ async def lifespan(app: FastAPI):
             thread.join(timeout=settings.outbox_poll_interval + 1)
 
 
+UI_CONFIG_PATH = STATIC_DIR / "js" / "ui-config.js"
+
+
+def _write_ui_config() -> None:
+    """把前端要用的 token 写成 `static/js/ui-config.js`，并在启动时刷新它。
+
+    **为什么要有这一步。** 内部工作台是**一套共享的服务**：大家看同一个需求池、
+    用同一套模型，没有「每个用户一个身份」这回事。让每个人去填 token 是把
+    服务入口凭证当成了个人凭证 —— 纯摩擦，没有任何防护收益。
+
+    所以由服务端在启动时把它写进前端能读到的文件，页面自动带上，没人需要填。
+
+    三条设计取舍：
+
+    1. **写文件而不是写进 `app.js`**：`app.js` 是代码、进 git；这份是**部署产物**，
+       已在 `.gitignore` 里。换 token 只需要改 `.env` 重启，不用改代码、不会把
+       密钥写进 git 历史（写进去就删不干净了）。
+    2. **哪个 token 可配**（`UI_EXPOSED_TOKEN`）：留给「想让页面只拿到受限凭证」的
+       场合 —— 在 `API_AUTH_TOKENS` 里为前端配一个 `reviewer`，admin 留在服务端。
+       不配则回退到 `API_AUTH_TOKEN`（与改造前行为一致）。
+    3. **写不了不报错，但要说出来**：只读文件系统或权限问题时服务该照常起，
+       前端会退回「首次 401 弹输入框」那条路。
+    """
+    try:
+        UI_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        UI_CONFIG_PATH.write_text(
+            "/* 启动时由 api/app.py 自动生成；已在 .gitignore 里，请勿提交。 */\n"
+            f"window.RA_UI_TOKEN = {json.dumps(settings.frontend_token())};\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("event=ui_config_write_failed path=%s error=%s", UI_CONFIG_PATH, exc)
+
+
 def create_app() -> FastAPI:
     """构造统一 FastAPI 应用（工厂函数）。"""
     app = FastAPI(
@@ -82,6 +118,8 @@ def create_app() -> FastAPI:
         description="渠道接入、查询和审批的 API 服务入口。",
         lifespan=lifespan,
     )
+    # 前端 token 配置：**在挂载 /static 之前写**，否则第一次请求可能读不到文件。
+    _write_ui_config()
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

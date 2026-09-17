@@ -22,5 +22,8 @@ db_data.sql
 # 缓存按 sha256(文本)+模型 存放，重跑校准命中即不调 API；删掉只是下次多花点调用。
 storage/
 
+# 前端 token 配置：启动时由 api/app.py 从 .env 生成（**部署产物，不是代码**）
+static/js/ui-config.js
+
 # LibreOffice 打开文档时留下的锁文件
 docs/.~lock.*

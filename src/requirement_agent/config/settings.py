@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # 这样既有的部署（和全部既有测试）不用改就能继续工作。
     api_auth_token: SecretStr = Field(default=SecretStr(""), alias="API_AUTH_TOKEN")
     api_actor_id: str = Field(default="api-user", alias="API_ACTOR_ID")
+    # 会**发给前端页面**的那个 token（见 api/app.py 的 `_write_ui_config`）。
+    #
+    # 留空时按顺序回退：`API_AUTH_TOKEN` → `API_AUTH_TOKENS` 里的第一个。
+    # 单独设它的用途是：**想让前端只拿到一个权限更小的 token** 时，
+    # 在 `API_AUTH_TOKENS` 里为前端配一个 `reviewer`（能看/能提交/能裁决，
+    # **不能回滚、不能运维**），这里指过去 —— admin token 就只留在服务端。
+    ui_exposed_token: SecretStr = Field(default=SecretStr(""), alias="UI_EXPOSED_TOKEN")
     # 注：`TOOL_ACTOR_ID`（tool_actor_id）随 `src/requirement_agent/tools/` 一并删除（2026-09-16）——
     # 它是那批内部方法的唯一消费者。若将来重新对外暴露工具面，再按需恢复。
 
@@ -302,6 +309,20 @@ class Settings(BaseSettings):
                 'MODEL_ROUTES 必须是 JSON 对象：{"<task_type>": {"provider":…, "model":…}}'
             )
         return parsed
+
+    def frontend_token(self) -> str:
+        """发给前端页面的 token。回退顺序见 `ui_exposed_token` 的说明。"""
+        explicit = self.ui_exposed_token.get_secret_value().strip()
+        if explicit:
+            return explicit
+        legacy = self.api_auth_token.get_secret_value().strip()
+        if legacy:
+            return legacy
+        # 多 token 配置：取第一个（dict 保持插入序，即 .env 里写的顺序）
+        for token in self.api_auth_tokens:
+            if str(token).strip():
+                return str(token).strip()
+        return ""
 
     def require_api_auth(self) -> None:
         if not self.api_auth_token.get_secret_value().strip():

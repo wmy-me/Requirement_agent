@@ -157,22 +157,36 @@ API_AUTH_TOKEN=...
 
 #### 前端（`/ui`）怎么带 token（2026-09-17）
 
-`/ui` 与 `/static/*` 是**豁免路径**，页面能打开，但页面发出的 API 请求都要带 token ——
-此前前端从不带头，于是列表全空、控制台一片 401。
-
-现在 token 存在 `localStorage['requirement_agent_token']`，`apiJson()` 与三处 SSE/续跑的
-裸 `fetch()` 统一通过 `authHeaders()` 带上。设置方式：
+**服务端在启动时把 token 写进 `/static/js/ui-config.js`，页面自动带上 —— 使用者不需要填。**
 
 ```js
-raSetToken('你的 token')   // 控制台里执行，设完自动刷新
-raClearToken()             // 清除
+// static/js/ui-config.js —— 启动时由 api/app.py 从 .env 生成，已在 .gitignore
+window.RA_UI_TOKEN = "…";
 ```
 
-第一次遇到 401 会弹一次输入框（**每次加载页面只问一次** —— 首屏并发几个请求，
-不设闸会弹一串）。token 无效时会把旧的清掉并提示，不会一直卡着让人以为配好了。
+`app.js` 的 `authHeaders()` 读它，`apiJson()`（31 个调用点）与三处 SSE / 续跑的
+裸 `fetch()` 统一带上。读取顺序：**注入的配置 → `localStorage`（手工覆盖）→ 弹框**；
+正常情况下永远走第一条。
 
-> ⚠️ **不要改成「把 token 注入页面」**：`/ui` 是豁免路径，谁都能打开 ——
-> 注入等于把 admin 凭证发给所有人，B1 就白做了。
+为什么是「写文件」而不是写进 `app.js`：`app.js` 是代码、进 git；这份是**部署产物**。
+换 token 只需改 `.env` 重启，**不会把密钥写进 git 历史**（写进去就删不干净了）。
+
+##### 想让前端只拿到受限凭证
+
+配 `UI_EXPOSED_TOKEN` 指向 `API_AUTH_TOKENS` 里的某个 token 即可。
+建议给前端配一个 `reviewer`：
+
+```bash
+API_AUTH_TOKENS={"<管理员 token>":"admin","<前端 token>":"reviewer"}
+UI_EXPOSED_TOKEN=<前端 token>
+```
+
+`reviewer` 能看 / 能提交 / 能裁决，**不能回滚、不能运维** —— 前端功能不受影响
+（审核页照常用），但写在页面里的那个凭证即使被别处拿到，也动不了
+`/requirements/{key}/revert` 与 `/ops/*`。不配则回退到 `API_AUTH_TOKEN`。
+
+> ⚠️ **这份配置是发给所有能打开页面的人的**（`/static/*` 是豁免路径）。
+> 所以别把 admin token 放进 `UI_EXPOSED_TOKEN` —— 除非这台服务本来就只对可信网络开放。
 
 ---
 
