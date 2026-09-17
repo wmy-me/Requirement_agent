@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from typing import Any
+
 from sqlalchemy.engine import URL
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -89,6 +91,20 @@ class Settings(BaseSettings):
     embedding_api_key: SecretStr = Field(default=SecretStr(""), alias="EMBEDDING_API_KEY")
     # 必须与向量列维度一致：三张表经 006 迁移后均为 vector(4096)。
     embedding_dimension: int = Field(default=4096, alias="EMBEDDING_DIMENSION")
+
+    # —— 任务级模型路由（B3.1）——
+    # JSON：`{"<task_type>": {"provider": "...", "model": "...", "fallbacks": [...]}}`
+    # task_type 取值见 `infrastructure/llm/model_registry.TASK_TYPES`
+    # （extract / analyze / risk / narrative / embedding / vision）。例：
+    #
+    #   MODEL_ROUTES={"risk": {"provider": "deepseek", "model": "deepseek-reasoner"},
+    #                 "analyze": {"provider": "deepseek", "model": "deepseek-chat",
+    #                             "fallbacks": [{"provider": "openai", "model": "gpt-4o-mini"}]}}
+    #
+    # ⚠️ **默认空** —— 此时所有任务都解析到全局 `LLM_PROVIDER` + `*_MODEL`，
+    # 行为与 B3.1 之前逐字节一致。这是「不改变现有业务流程」的保证，
+    # 也是这一批能独立提交、独立回滚的前提。
+    model_routes: dict[str, Any] = Field(default_factory=dict, alias="MODEL_ROUTES")
 
     # —— 相似度判定标尺（B4 批 2）——
     # ⚠️ **这几个数不是拍的**，出自 `scripts/calibrate_similarity.py` 的实跑报告
@@ -262,6 +278,30 @@ class Settings(BaseSettings):
         if not isinstance(parsed, dict):
             raise ValueError("API_AUTH_TOKENS 必须是 JSON 对象：{\"token\": \"role\"}")
         return {str(k): str(v) for k, v in parsed.items()}
+
+    @field_validator("model_routes", mode="before")
+    @classmethod
+    def _parse_model_routes(cls, value: object) -> object:
+        """`MODEL_ROUTES` 是手写 JSON，写错一个键名是常事。
+
+        **语法错误抛（起不来比静默用错模型好）**；但「某条路由的 provider 名拼错」
+        不抛 —— 那种由 `ModelRegistry.unrecognized()` 报出来，走全局配置兜底。
+        两者的区别是「整份配置读不了」与「其中一条没生效」，代价完全不同。
+        """
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"MODEL_ROUTES 不是合法 JSON：{exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                'MODEL_ROUTES 必须是 JSON 对象：{"<task_type>": {"provider":…, "model":…}}'
+            )
+        return parsed
 
     def require_api_auth(self) -> None:
         if not self.api_auth_token.get_secret_value().strip():

@@ -11,6 +11,7 @@ from requirement_agent.agents.extract_agent import ExtractAgent
 from requirement_agent.agents.risk_agent import RiskAgent
 from requirement_agent.application.capability_match_service import CapabilityMatchService
 from requirement_agent.application.run_tracking import RunTracking
+from requirement_agent.infrastructure.llm.invocation import bind_run_id
 from requirement_agent.domain.requirement import RequirementSource
 from requirement_agent.infrastructure.db.repositories import (
     RequirementMasterRepository,
@@ -146,12 +147,16 @@ class RequirementService:
 
         # —— Agent 编排统一走 LangGraph 分析图（抽取→检索→冲突分析→风险→决策）——
         try:
-            result = run_analysis(
-                source_id=saved_source.id,
-                source_text=standardized_text,
-                source_type=saved_source.source_type,
-                requester_name=saved_source.requester_name,
-            )
+            # 把这次分析调的所有模型关联到 run（B3.1）—— provider 记调用时读它。
+            # 用 ContextVar 而不是往每个函数签名里加参数：那要改整条调用链，
+            # 而这是纯观测信息。见 `infrastructure/llm/invocation.py`。
+            with bind_run_id(run_id):
+                result = run_analysis(
+                    source_id=saved_source.id,
+                    source_text=standardized_text,
+                    source_type=saved_source.source_type,
+                    requester_name=saved_source.requester_name,
+                )
         except Exception as exc:
             # **失败要能定位到节点** —— 节点名由 `event_nodes.NodeFailure` 带出来
             # （异常路径上 state 通道会丢，所以只能随异常传递）。

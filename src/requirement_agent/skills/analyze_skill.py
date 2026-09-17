@@ -23,6 +23,8 @@ class AnalyzeSkill(BaseSkill):
     同时会用本地证据阈值对模型输出做二次校验，压制假阳性。
     """
 
+    task_type = "analyze"
+
     def analyze(
         self,
         extracted: ExtractedRequirement,

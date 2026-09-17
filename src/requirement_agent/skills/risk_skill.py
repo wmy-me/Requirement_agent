@@ -34,6 +34,8 @@ class RiskSkill(BaseSkill):
     模型返回异常时直接回退到启发式结果，不阻塞审核决策。
     """
 
+    task_type = "risk"
+
     def assess(self, extracted: object) -> object:
         """评估风险并把 confidence 约束在前端可展示的安全区间。"""
         from requirement_agent.agents.extract_agent import ExtractedRequirement

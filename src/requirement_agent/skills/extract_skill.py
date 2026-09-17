@@ -119,6 +119,8 @@ class ExtractSkill(BaseSkill):
     是否调用它、以及失败后的回退策略，由 ExtractAgent 决定。
     """
 
+    task_type = "extract"
+
     def extract(
         self,
         raw_text: str,

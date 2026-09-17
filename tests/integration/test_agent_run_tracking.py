@@ -359,3 +359,54 @@ def test_run_event_shapes_to_a_plain_dict() -> None:
         "node": "extract",
         "payload": {},
     }
+
+
+# ── 上下文传播：工具内部也要能读到 run 绑定（B3.1）─────────────────────────
+
+
+def test_tool_worker_thread_inherits_contextvars() -> None:
+    """**工具的工作线程必须继承 contextvars。**
+
+    实测撞到的 bug：`BaseTool._execute_with_timeout` 把 `execute` 跑在一个
+    **原生 `threading.Thread`** 里，而原生线程**不复制 contextvars
+    （`anyio.to_thread.run_in_threadpool` 会，原生线程不会）。
+
+    后果不是「少记一条日志」，而是**任何依赖 ContextVar 的横切机制在工具内静默失效**：
+    B3.1 实测里，检索工具内部的 embedding 调用记下的 `run_id` 是 NULL，
+    而同一次分析里图节点直接调的 extract/analyze/risk 都有值 —— 因为只有前者穿了工具层。
+    """
+    import contextvars
+
+    from requirement_agent.tools.base import BaseTool, ToolInput, ToolResult
+
+    probe: contextvars.ContextVar[str] = contextvars.ContextVar("probe", default="<未传播>")
+
+    class _ProbeInput(ToolInput):
+        pass
+
+    # ⚠️ **刻意不加 `@register`**：注册是全局的，会污染工具名录，
+    # 而 `test_tool_contract.py` 有三条断言名录必须与约定完全一致
+    # （实测加了之后那三条立刻红）。`run()` 是实例方法，不需要注册也能用。
+    class _ProbeTool(BaseTool):
+        """只用来验证上下文传播；不注册，所以名录不受影响。"""
+
+        name = "context_probe"
+        description = "测试用：读一个 ContextVar"
+        input_model = _ProbeInput
+        output_schema: dict = {"type": "object", "properties": {"seen": {"type": "string"}}}
+        allowed_consumers = ("analysis",)
+
+        def execute(self, params) -> ToolResult:
+            # 这里跑在工作线程里 —— 断言它看得见主线程设的值
+            return ToolResult.success({"seen": probe.get()})
+
+    token = probe.set("主线程设的值")
+    try:
+        seen = _ProbeTool().run({}).result["seen"]
+    finally:
+        probe.reset(token)
+
+    assert seen == "主线程设的值", (
+        "工具的工作线程丢掉了 contextvars —— 检查 `_execute_with_timeout` 是否用了 "
+        "`contextvars.copy_context()`。退回原样会让工具内的一切横切机制静默失效。"
+    )

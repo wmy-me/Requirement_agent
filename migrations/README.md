@@ -30,6 +30,7 @@ for f in migrations/0*.sql; do psql -d requirement_agent -f "$f"; done
 | `019_document_version_chain.sql` | 文档版本链（`document_stream`） |
 | `020_outbox_retry_backoff.sql` | outbox 增加 `next_attempt_at`（失败退避） |
 | `021_agent_run_tracking.sql` | **运行追踪**：`agent_run` 补列 + 补 `run_id` 唯一约束；新增 `agent_run_event`（带序号的事件流）与 `tool_invocation` |
+| `022_model_invocation.sql` | **模型调用记录**：`model_invocation`（provider/model/task_type/tokens/延迟/降级级别；embedding 的维度与版本单独记） |
 
 > **编号规则（事实惯例，2026-09-17 补记）**：只追加、不改旧文件。
 > 需要改已有对象（约束、索引）时，在新迁移里 `DROP ... IF EXISTS` 再建，

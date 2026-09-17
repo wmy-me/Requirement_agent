@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -245,7 +246,19 @@ class BaseTool(ABC):
             except BaseException as exc:  # noqa: BLE001 —— 原样带回主线程再分类
                 box["error"] = exc
 
-        worker = threading.Thread(target=_work, name=f"tool-{self.name}", daemon=True)
+        # ⚠️ **必须把上下文复制进工作线程。** 原生 `threading.Thread` **不会**带走
+        # contextvars（`anyio.to_thread.run_in_threadpool` 会，原生线程不会）。
+        #
+        # 不复制的话，凡是在工具内部发生的调用都丢掉当前上下文 —— 实测撞到的是
+        # B3.1 的运行关联：检索工具内部的 embedding 调用记下的 `run_id` 是 NULL，
+        # 而同一次分析里图节点直接调的 extract/analyze/risk 都有值。
+        # 更一般地说：**任何依赖 ContextVar 的横切机制在工具内都会失效**。
+        #
+        # 只读传播（父 → 子）。工具在子线程里新设的上下文不会回流 —— 我们只需要读。
+        context = contextvars.copy_context()
+        worker = threading.Thread(
+            target=context.run, args=(_work,), name=f"tool-{self.name}", daemon=True
+        )
         worker.start()
         worker.join(self.timeout_seconds)
         if worker.is_alive():

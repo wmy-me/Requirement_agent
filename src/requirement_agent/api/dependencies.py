@@ -51,6 +51,7 @@ retrieval_service = RetrievalService()
 review_service = ReviewService()
 #: 运行追踪（B2.1）。无状态，共享一个实例即可。
 run_tracking = RunTracking()
+
 revert_service = RevertService()
 
 # —— Repository ——

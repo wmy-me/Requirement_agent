@@ -19,12 +19,23 @@ from typing import Any, NamedTuple
 import httpx
 
 from requirement_agent.config.settings import settings
+from requirement_agent.infrastructure.llm.invocation import (
+    current_prompt_version,
+    current_run_id,
+    record_invocation,
+)
+from requirement_agent.infrastructure.llm.model_registry import ModelSpec
 
 logger = logging.getLogger(__name__)
 
 # 值得重试的状态码：限流与各类临时性服务端故障。
 # 401/403/404/422 等属于请求本身的问题，重试没有意义，立即抛出。
 _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+# `_observe` 的 `op` → task_type 的兜底映射。只在构造 provider 时**没给** task_type
+# 时用得上（比如无参构造的老调用点）。给了 task_type 的一律以它为准 ——
+# 那才是权威来源（同一个 `op="chat"` 可以是 extract 也可以是 risk）。
+_OP_TO_TASK = {"chat": "unknown_chat", "stream": "unknown_stream", "embed": "embedding"}
 
 
 class _CallResult(NamedTuple):
@@ -61,17 +72,55 @@ def _elapsed_ms(started_at: float) -> float:
 class LLMProvider:
     """对兼容 OpenAI 协议的 chat 与 embedding API 的轻量封装。"""
 
-    def __init__(self) -> None:
-        self.provider_name = settings.llm_provider
-        self.api_key = settings.active_llm_api_key
-        self.base_url = settings.active_llm_base_url.rstrip("/")
-        self.model = settings.active_llm_model
+    def __init__(self, *, spec: ModelSpec | None = None, task_type: str = "") -> None:
+        """`spec` 给定时按它选网关与模型；不给时**逐字节沿用 B3.1 之前的行为**
+        （全局 `LLM_PROVIDER` + `active_llm_*`）。
+
+        为什么保留无参构造：全仓 6 处调用点与 19 条 provider 测试都用 `LLMProvider()`。
+        路由是**增量能力**，不该强迫每一处都改 —— 只有明确知道自己属于哪个
+        task_type 的调用点（技能层）才需要传 spec。
+        """
+        self.spec = spec
+        self.task_type = task_type
+        if spec is None:
+            self.provider_name = settings.llm_provider
+            self.api_key = settings.active_llm_api_key
+            self.base_url = settings.active_llm_base_url.rstrip("/")
+            self.model = settings.active_llm_model
+        else:
+            self.provider_name = spec.provider
+            self.api_key = self._api_key_for(spec.provider)
+            self.base_url = self._base_url_for(spec.provider).rstrip("/")
+            self.model = spec.model
+        # 降级信息（B3.1b 会真正使用；B3.1a 先占好位，让记录的形状一次到位，
+        # 免得 B3.1b 再改一次表的写入）。level 0 = 主模型。
+        self.fallback_level = 0
+        self.fallback_from: str | None = None
         self.embedding_model = settings.embedding_model
         self.temperature = settings.llm_temperature
         self.timeout = settings.llm_timeout_seconds
         self.stream_read_timeout = settings.llm_stream_read_timeout_seconds
         self.max_retries = settings.llm_max_retries
         self.retry_backoff = settings.llm_retry_backoff_seconds
+
+    @staticmethod
+    def _api_key_for(provider: str) -> str:
+        """按 provider 名取密钥。**不认识的名字返回空串**（而不是抛）——
+        于是 `is_configured()` 为 False，调用方走既有的「未配置 → 启发式」分支。
+        拼错 provider 名的表现与「没配模型」一致，而不是崩溃。"""
+        if provider == "deepseek":
+            return settings.deepseek_api_key.get_secret_value()
+        if provider == "openai":
+            return settings.openai_api_key.get_secret_value()
+        return ""
+
+    @staticmethod
+    def _base_url_for(provider: str) -> str:
+        if provider == "deepseek":
+            return settings.deepseek_base_url
+        if provider == "openai":
+            return settings.openai_base_url
+        return ""
 
     def is_configured(self) -> bool:
         """当前激活 provider（openai/deepseek）是否具备 key 与 base_url。"""
@@ -141,8 +190,14 @@ class LLMProvider:
         attempts: int,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        error: BaseException | None = None,
+        embedding_dimension: int | None = None,
     ) -> None:
-        """记录一次 LLM 调用的计量并打一行 key=value 日志。"""
+        """记录一次 LLM 调用的计量：进程内计数 + 日志 + **可落库的调用记录**。
+
+        ⚠️ 这里是**所有** LLM 调用的唯一收口点（7 个调用点全经过它），所以
+        「记一次调用」只需要挂在这里一处 —— 散到每个调用点去记迟早漏一个。
+        """
         with _STATS_LOCK:
             _LLM_CALL_STATS["calls_total"] += 1
             _LLM_CALL_STATS["duration_ms_total"] += duration_ms
@@ -153,16 +208,41 @@ class LLMProvider:
                 _LLM_CALL_STATS["failures_total"] += 1
         log = logger.info if outcome == "ok" else logger.warning
         log(
-            "event=llm_call op=%s provider=%s model=%s outcome=%s attempts=%d "
+            "event=llm_call op=%s provider=%s model=%s task_type=%s outcome=%s attempts=%d "
             "duration_ms=%.1f prompt_tokens=%d completion_tokens=%d",
             op,
             self.provider_name,
             model,
+            self.task_type or "-",
             outcome,
             attempts,
             duration_ms,
             prompt_tokens,
             completion_tokens,
+        )
+        record_invocation(
+            {
+                "run_id": current_run_id(),
+                "task_type": self.task_type or _OP_TO_TASK.get(op, op),
+                "provider": self.provider_name,
+                "model": model,
+                "prompt_version": current_prompt_version(),
+                "input_tokens": prompt_tokens or None,
+                "output_tokens": completion_tokens or None,
+                "latency_ms": int(duration_ms),
+                "status": outcome,
+                # 错误分类在这里只到「有错/没」，细类留到 B3.1b 的错误分类
+                "error_code": type(error).__name__ if error is not None else None,
+                "fallback_level": self.fallback_level,
+                "fallback_used": self.fallback_level > 0,
+                "fallback_from": self.fallback_from,
+                "embedding_dimension": embedding_dimension,
+                # embedding 的「版本」= 模型名 + 维度：同名模型在不同部署上维度可能不同，
+                # 而判断「有没有把新旧向量混在一起」必须靠这两者的组合。
+                "embedding_version": (
+                    f"{model}:{embedding_dimension}" if embedding_dimension else None
+                ),
+            }
         )
 
     @staticmethod
@@ -200,6 +280,7 @@ class LLMProvider:
                         outcome="error",
                         duration_ms=_elapsed_ms(started_at),
                         attempts=attempts,
+                        error=exc,
                     )
                     raise
                 last_error = exc
@@ -214,6 +295,7 @@ class LLMProvider:
             outcome="error",
             duration_ms=_elapsed_ms(started_at),
             attempts=attempts,
+            error=last_error,
         )
         raise last_error
 
@@ -327,6 +409,7 @@ class LLMProvider:
                         outcome="error",
                         duration_ms=_elapsed_ms(started_at),
                         attempts=attempts,
+                        error=exc,
                     )
                     raise
                 last_error = exc
@@ -342,6 +425,7 @@ class LLMProvider:
             outcome="error",
             duration_ms=_elapsed_ms(started_at),
             attempts=attempts,
+            error=last_error,
         )
         raise last_error
 
@@ -372,6 +456,11 @@ class LLMProvider:
         )
         body = result.response.json()
         prompt_tokens, _ = self._usage_tokens(body)
+        # ⚠️ **先解析向量再记账**：维度是判断「换模型后有没有把新旧向量混在一起」的
+        # 唯一依据，必须记下来。顺带，响应畸形时不再记一条「成功」——
+        # 那次调用确实没成功。
+        values = body["data"][0]["embedding"]
+        vector = [float(value) for value in values]
         self._observe(
             op="embed",
             model=self.embedding_model,
@@ -379,6 +468,6 @@ class LLMProvider:
             duration_ms=result.duration_ms,
             attempts=result.attempts,
             prompt_tokens=prompt_tokens,
+            embedding_dimension=len(vector),
         )
-        values = body["data"][0]["embedding"]
-        return [float(value) for value in values]
+        return vector

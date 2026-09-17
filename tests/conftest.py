@@ -19,4 +19,28 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 os.environ.setdefault("API_AUTH_TOKEN", "test-api-token")
+
+
+@pytest.fixture(autouse=True)
+def _disable_model_invocation_recording():
+    """**整个测试套件默认关闭模型调用记录。**
+
+    B3.1 起 `LLMProvider._observe` 会把每次调用写进 `model_invocation` 表，
+    且默认是**自动开启**的（惰性装配，见 `infrastructure/llm/invocation.py`）。
+
+    这在一个到处打真实库、真实 embedding 网关的测试套件里意味着：跑一轮全量测试
+    就往开发库写十几行遥测 —— 实测一轮留下 17 行 `run_id` 为 NULL 的孤儿
+    （来自那些直接调检索/抽取、没有绑定 run 的测试）。
+    它们既不参与断言，又会随时间堆积，让人以为「系统在跑分析」。
+
+    要验记录的测试**自己显式打开**（`set_recorder(收集函数)`），
+    这样「哪些测试会写库」是看得见的。
+    """
+    from requirement_agent.infrastructure.llm.invocation import set_recorder
+
+    set_recorder(None)
+    yield
+    set_recorder(None)
