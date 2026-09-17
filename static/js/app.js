@@ -96,30 +96,21 @@ function scrollBottom() {
   msgs.scrollTop = msgs.scrollHeight;
 }
 
-/* ── 鉴权（B1 起服务端**默认拒绝**）────────────────────────────────────
+/* ── 鉴权（B1 起服务端要求 Bearer token）──────────────────────────────
  *
- * 服务端从 B1 起要求 `Authorization: Bearer <token>`，**没配 token 就是全部 401**
- * （默认拒绝，不是默认放行 —— 见 `api/auth.py`）。前端此前从不带头，
- * 于是所有列表页都空着、控制台一片 401。
+ * token 由**服务端在返回页面时直接注入**（`window.RA_UI_TOKEN`，见 api/app.py 的
+ * `ui_page`）—— 使用者的动作是零：打开页面就用，不需要填任何东西。
  *
- * token 存在 `localStorage`，由使用者粘贴一次：
- *   · 控制台里 `raSetToken('你的 token')` 设置
- *   · `raClearToken()` 清除
- * 第一次遇到 401 时也会弹一次输入框（每次加载页面只弹一次，避免并发请求弹一串）。
- *
- * ⚠️ **不把 token 写进页面或代码里**：`/ui` 与 `/static` 是**豁免路径**，
- * 谁都能打开 —— 注入 token 等于把 admin 凭证发给所有人，B1 就白做了。
+ * ⚠️ **这里刻意没有「输入 token」的弹窗。** 这是公司内网共用的一套工作台，
+ * token 是**服务入口凭证**而不是个人凭证；弹框问每个人要 token 既是纯摩擦，
+ * 也解决不了任何真实问题。真出问题（页面里没有 token = 服务端没注入）时，
+ * 应当**报错让人去查服务端**，而不是让人自己想办法凑一个。
  */
-const TOKEN_KEY = 'requirement_agent_token';
-let tokenPrompted = false;
-
 function getToken() {
-  // ① 服务端启动时注入的（`/static/js/ui-config.js`，由 api/app.py 从 .env 生成）
-  //    —— **正常路径走这个，没人需要填**。
-  // ② localStorage：手工覆盖用（`raSetToken`）。
-  // 两者都没有才会走 ③ 弹框，那只在服务端没生成配置文件时才发生。
+  // 只认服务端注入的那一个。`localStorage` 是留给排障时手工覆盖的逃生口
+  // （控制台执行 `raSetToken('…')`），不参与正常路径。
   if (window.RA_UI_TOKEN) return String(window.RA_UI_TOKEN);
-  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  try { return localStorage.getItem('requirement_agent_token') || ''; } catch (e) { return ''; }
 }
 
 function authHeaders(extra) {
@@ -129,43 +120,19 @@ function authHeaders(extra) {
   return headers;
 }
 
-/** 弹一次输入框要 token。**每次加载页面只问一次** —— 首屏会并发发好几个请求，
- *  不设闸的话会弹出一串同样的框。返回设置好的 token（用户取消则返回空串）。 */
-function askForToken() {
-  if (tokenPrompted) return getToken();
-  tokenPrompted = true;
-  const entered = window.prompt(
-    '需要 API token（服务端已开启鉴权）。\n'
-    + '粘贴 .env 里 API_AUTH_TOKEN / API_AUTH_TOKENS 中对应的那个：',
-    getToken()
-  );
-  if (entered && entered.trim()) {
-    try { localStorage.setItem(TOKEN_KEY, entered.trim()); } catch (e) { /* 隐私模式下会失败 */ }
-    return entered.trim();
-  }
-  return '';
-}
-
-window.raSetToken = (t) => { try { localStorage.setItem(TOKEN_KEY, String(t).trim()); } catch (e) {} location.reload(); };
-window.raClearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} location.reload(); };
+window.raSetToken = (t) => { try { localStorage.setItem('requirement_agent_token', String(t).trim()); } catch (e) {} location.reload(); };
+window.raClearToken = () => { try { localStorage.removeItem('requirement_agent_token'); } catch (e) {} location.reload(); };
 
 async function apiJson(url, options) {
   const opts = Object.assign({}, options || {}, {
     headers: authHeaders((options || {}).headers),
   });
-  let resp = await fetch(url, opts);
+  const resp = await fetch(url, opts);
 
-  // 401 = 没带 / 带错 token。提示一次，拿到就用**同样的请求**重试一次。
-  // 重试只做一次：再来一次还是 401 说明 token 本身不对，那时把旧的清掉，
-  // 免得它一直卡在那里让人以为「已经配好了」。
+  // 401 = 服务端没放行。**不再提示用户填 token**（见文件头说明）——
+  // 正常路径下 token 由服务端注入，走到这里说明是**部署问题**，直接说清楚。
   if (resp.status === 401) {
-    if (askForToken()) {
-      resp = await fetch(url, Object.assign({}, opts, { headers: authHeaders((options || {}).headers) }));
-    }
-    if (resp.status === 401) {
-      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
-      throw new Error('API token 无效或已失效 —— 用 raSetToken(\'…\') 重新设置');
-    }
+    throw new Error('未通过鉴权 —— 页面里没有拿到 API token。这是服务端配置问题（检查 .env 的 API_AUTH_TOKEN），不是你需要填的。');
   }
 
   if (!resp.ok) {
@@ -635,11 +602,8 @@ async function runChat(text, files) {
         busy.conversationBusy = true;
         throw busy;
       }
-      // 401 = 没带 token。这里**不自动重试**（重试要把整条消息重发一遍，
-      // 而用户可能已经等了几秒），只提示一次并给出可操作的下一步。
       if (resp.status === 401) {
-        askForToken();
-        throw new Error('需要 API token 才能发起对话 —— 已弹出输入框；也可在控制台执行 raSetToken(…)。');
+        throw new Error('未通过鉴权 —— 页面里没有拿到 API token，请检查服务端 .env 的 API_AUTH_TOKEN 配置。');
       }
       let detail = resp.statusText;
       try {
@@ -795,11 +759,8 @@ async function resumeRun(runId) {
       signal: stream.controller.signal,
     });
     if (!resp.ok) {
-      // 401 = 没带 token。这里**不自动重试**（重试要把整条消息重发一遍，
-      // 而用户可能已经等了几秒），只提示一次并给出可操作的下一步。
       if (resp.status === 401) {
-        askForToken();
-        throw new Error('需要 API token 才能发起对话 —— 已弹出输入框；也可在控制台执行 raSetToken(…)。');
+        throw new Error('未通过鉴权 —— 页面里没有拿到 API token，请检查服务端 .env 的 API_AUTH_TOKEN 配置。');
       }
       let detail = resp.statusText;
       try {

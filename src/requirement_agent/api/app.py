@@ -17,7 +17,7 @@ import json
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from requirement_agent.config.settings import settings
@@ -76,40 +76,6 @@ async def lifespan(app: FastAPI):
             thread.join(timeout=settings.outbox_poll_interval + 1)
 
 
-UI_CONFIG_PATH = STATIC_DIR / "js" / "ui-config.js"
-
-
-def _write_ui_config() -> None:
-    """把前端要用的 token 写成 `static/js/ui-config.js`，并在启动时刷新它。
-
-    **为什么要有这一步。** 内部工作台是**一套共享的服务**：大家看同一个需求池、
-    用同一套模型，没有「每个用户一个身份」这回事。让每个人去填 token 是把
-    服务入口凭证当成了个人凭证 —— 纯摩擦，没有任何防护收益。
-
-    所以由服务端在启动时把它写进前端能读到的文件，页面自动带上，没人需要填。
-
-    三条设计取舍：
-
-    1. **写文件而不是写进 `app.js`**：`app.js` 是代码、进 git；这份是**部署产物**，
-       已在 `.gitignore` 里。换 token 只需要改 `.env` 重启，不用改代码、不会把
-       密钥写进 git 历史（写进去就删不干净了）。
-    2. **哪个 token 可配**（`UI_EXPOSED_TOKEN`）：留给「想让页面只拿到受限凭证」的
-       场合 —— 在 `API_AUTH_TOKENS` 里为前端配一个 `reviewer`，admin 留在服务端。
-       不配则回退到 `API_AUTH_TOKEN`（与改造前行为一致）。
-    3. **写不了不报错，但要说出来**：只读文件系统或权限问题时服务该照常起，
-       前端会退回「首次 401 弹输入框」那条路。
-    """
-    try:
-        UI_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        UI_CONFIG_PATH.write_text(
-            "/* 启动时由 api/app.py 自动生成；已在 .gitignore 里，请勿提交。 */\n"
-            f"window.RA_UI_TOKEN = {json.dumps(settings.frontend_token())};\n",
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        logger.warning("event=ui_config_write_failed path=%s error=%s", UI_CONFIG_PATH, exc)
-
-
 def create_app() -> FastAPI:
     """构造统一 FastAPI 应用（工厂函数）。"""
     app = FastAPI(
@@ -118,8 +84,6 @@ def create_app() -> FastAPI:
         description="渠道接入、查询和审批的 API 服务入口。",
         lifespan=lifespan,
     )
-    # 前端 token 配置：**在挂载 /static 之前写**，否则第一次请求可能读不到文件。
-    _write_ui_config()
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -231,8 +195,38 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/ui", include_in_schema=False)
-    async def ui_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    async def ui_page() -> HTMLResponse:
+        """返回工作台页面，**并把 API token 直接注入 HTML**。
+
+        ## 为什么是注入而不是让前端自己拿
+
+        这是**公司内部共用的一套工作台**：大家看同一个需求池、用同一套模型，
+        没有「每个用户一个身份」这回事。token 是**服务入口凭证**，不是个人凭证 ——
+        让每个人去填纯是摩擦，没有任何防护收益。
+
+        ## 为什么注入进 HTML，而不是发一个 `ui-config.js`
+
+        第一版是生成一个独立 JS 文件、页面用 `<script src>` 引它。**那多了一次请求，
+        也就多了一个会失败的地方**（漏加载 / 404 / 顺序不对 → 前端拿不到 token →
+        弹输入框）。注入进 HTML 是**一次响应里同时拿到页面和 token**，
+        没有第二个请求、没有加载顺序、没有中间态。
+
+        注入点由 `index.html` 里的 `<!-- RA_UI_TOKEN_INJECT -->` 占位符标记；
+        占位符没了就退回到「插在 `</head>` 之前」，并打一条 warning
+        —— 静默不注入会让所有人看到 401 而不知道原因。
+        """
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        snippet = (
+            "<script>/* 服务端注入，勿手改 */"
+            f"window.RA_UI_TOKEN = {json.dumps(settings.frontend_token())};</script>"
+        )
+        marker = "<!-- RA_UI_TOKEN_INJECT -->"
+        if marker in html:
+            html = html.replace(marker, snippet)
+        else:
+            logger.warning("event=ui_token_marker_missing path=%s", STATIC_DIR / "index.html")
+            html = html.replace("</head>", snippet + "</head>", 1)
+        return HTMLResponse(html)
 
     return app
 

@@ -152,8 +152,9 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
-    <!-- 启动时由服务端生成（.gitignore 已忽略）：把 API token 注入页面，用户无需自己填 -->
-    <script src="/static/js/ui-config.js"></script>
-    <script src="/static/js/app.js?v=20260917-3"></script>
+    <!-- 服务端在返回本页时把 API token 注入在这里（见 api/app.py 的 ui_page）——
+         一次响应同时拿到页面与 token，前端不需要自己填、也没有额外的请求会失败 -->
+    <!-- RA_UI_TOKEN_INJECT -->
+    <script src="/static/js/app.js?v=20260917-4"></script>
   </body>
 </html>
