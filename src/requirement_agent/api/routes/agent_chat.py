@@ -804,25 +804,6 @@ async def resume_agent_run(run_id: str) -> StreamingResponse:
     )
 
 
-@router.post("/api/v1/agent/runs/{run_id}/pause")
-async def pause_agent_run(run_id: str) -> dict[str, object]:
-    """暂停一次进行中的运行（置为 paused，仍占并发位）。
-
-    注意：paused 在唯一索引的活跃集合里，暂停期间该对话发新消息会被 409 拦 ——
-    这正是「一个对话一次只答一个问题」的延续；要继续就点「继续」。
-    """
-    run = chat_repo.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
-    if run["status"] != "running":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"run is {run['status']}, only running can be paused",
-        )
-    chat_repo.update_run(run_id=run_id, status="paused", stage=run["stage"] or "queued")
-    return {"status": "paused", "run_id": run_id}
-
-
 @router.get("/api/v1/agent/runs/{run_id}")
 async def get_agent_run(run_id: str) -> dict[str, object]:
     """按 run_id 查询单次 Agent 运行记录；不存在返回 404。"""

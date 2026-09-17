@@ -156,7 +156,7 @@ class Settings(BaseSettings):
         default=600.0, ge=0.0, alias="OUTBOX_RETRY_MAX_BACKOFF_SECONDS"
     )
 
-    # 对话运行被判为「僵尸」的静默阈值（秒）：超过它的 running / paused run 会被判为 failed。
+    # 对话运行被判为「僵尸」的静默阈值（秒）：超过它的 running run 会被判为 failed。
     # 同一对话只允许一个活跃运行（migrations/012），而进程中断留下的 run 不会自己收尾 ——
     # 没有这个阈值，一次崩溃就把该对话永久堵死。取 30 分钟，远大于任何正常分析耗时
     # （4 个 LLM 步骤 × 60s 超时 × 重试次数），避免误杀正在跑的分析。

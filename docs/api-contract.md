@@ -592,7 +592,12 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 
 **其余对话端点**（契约此前未列，前端在用）：`POST /api/v1/agent/chat`（非流式）、
 `POST /api/v1/agent/chat/stream-with-files`（多文件）、`GET /api/v1/agent/chat/{sid}`、
-`POST /api/v1/agent/runs/{id}/pause`、`GET /api/v1/agent/runs/{id}`。见 §10-T3。
+`GET /api/v1/agent/runs/{id}`。见 §10-T3。
+
+> ⚠️ **`POST /api/v1/agent/runs/{id}/pause` 已于 2026-09-17 删除。** 它从来没跑通过：
+> 它写 `status='paused'`，而 `agent_run` 的 CHECK 约束只有
+> `running/completed/failed/cancelled`（**从库里读出来的，不是只读迁移文件推的**）。
+> 实测写 `paused` 抛 `CheckViolation`。前端用的是 `resume` 不是 pause，所以删除无影响。
 
 ---
 
@@ -753,7 +758,7 @@ Body：`{source_id, decision("approved"|"rejected"|"returned"), target_requireme
 | 来源回放 | `GET /api/v1/sources/{source_id}/trace` |
 | 审查 | `GET /api/v1/reviews/{source_id}/detail`（后端有，**前端没调**） |
 | 提交 | `POST /api/v1/requirements/submit`、`POST /api/v1/requirements/ingest`（multipart） |
-| 对话 | `POST /api/v1/agent/chat`、`/chat/stream-with-files`、`GET /chat/{sid}`、`POST /runs/{id}/pause`、`GET /runs/{id}` |
+| 对话 | `POST /api/v1/agent/chat`、`/chat/stream-with-files`、`GET /chat/{sid}`、`GET /runs/{id}`（`POST /runs/{id}/pause` 已于 2026-09-17 删除，见 §6） |
 | 运维 | `POST /ops/outbox/dead-letters/{id}/retry`、`/discard` |
 | 渠道 | `POST /api/v1/channels/feishu/webhook`（**唯一无鉴权端点**，见 current-state §四） |
 
