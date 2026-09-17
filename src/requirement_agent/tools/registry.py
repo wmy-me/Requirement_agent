@@ -25,6 +25,7 @@ __all__ = [
     "FORBIDDEN_NAMES",
     "TOOLS",
     "create",
+    "get_class",
     "descriptors",
     "for_consumer",
     "llm_schemas",
@@ -50,6 +51,49 @@ FORBIDDEN_NAMES: frozenset[str] = frozenset(
         "execute_sql", "run_repository_method", "call_service", "generic_database_tool",
     }
 )
+
+
+_LOADED = False
+
+
+def _ensure_loaded() -> None:
+    """把工具模块 import 进来（`@register` 在 import 时执行）。
+
+    **为什么是懒加载而不是在 `tools/__init__.py` 里直接 import。**
+
+    导入一个包里的**子模块**会先执行那个包的 `__init__`。工作流（`workflows/agents_nodes`）
+    要经 `tools.invoker` 调工具，于是会触发 `tools/__init__`；如果它在那里一口气 import
+    全部工具，就会连带把 `preview_merge_impact → application.review_service →
+    workflows.commit_nodes` 拉进来 —— 而 `workflows` 此时正处在**半初始化**状态，
+    循环导入当场炸（实测踩到，13 个测试文件收集失败）。
+
+    改成懒加载后，`tools/__init__` 只导出契约与注册表，import 它不再牵连业务模块；
+    真正的注册发生在**第一次问「有哪些工具」**的时候。
+    """
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    import importlib
+    import pkgutil
+
+    import requirement_agent.tools as package
+
+    # **扫目录，不维护手写清单** —— 手写清单是个会过期的第二事实源：
+    # 第一版我凭印象列了两条早已不存在的模块名（`find_streams_by_capability` /
+    # `get_capabilities`，那是**上一版**工具包的），一调用就 ModuleNotFoundError。
+    # 排除本包的支撑模块（契约 / 注册表 / 调用入口），其余都是工具。
+    support = {"base", "registry", "invoker", "__init__"}
+    for info in pkgutil.iter_modules(package.__path__):
+        if info.name in support:
+            continue
+        importlib.import_module(f"requirement_agent.tools.{info.name}")
+
+
+def get_class(name: str) -> type[BaseTool] | None:
+    """按名字取工具**类**（不是实例）—— 调用方需要看 `allowed_consumers` 等类属性时用。"""
+    _ensure_loaded()
+    return TOOLS.get(name)
 
 
 def register(cls: type[BaseTool]) -> type[BaseTool]:
@@ -82,11 +126,13 @@ def register(cls: type[BaseTool]) -> type[BaseTool]:
 
 def names() -> list[str]:
     """已注册的工具名（排序）。"""
+    _ensure_loaded()
     return sorted(TOOLS)
 
 
 def create(name: str) -> BaseTool | None:
     """按名字新建实例；不存在返回 None。"""
+    _ensure_loaded()
     cls = TOOLS.get(name)
     return cls() if cls is not None else None
 

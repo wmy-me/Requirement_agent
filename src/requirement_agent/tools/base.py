@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -200,7 +201,15 @@ class BaseTool(ABC):
             return result
 
         try:
-            result = self.execute(params)
+            result = self._execute_with_timeout(params)
+        except TimeoutError:
+            duration = _ms_since(started)
+            result = ToolResult.error(
+                f"工具 {self.name} 超过 {self.timeout_seconds}s 未返回，已放弃等待",
+                duration_ms=duration,
+            )
+            self._audit(raw, result)
+            return result
         except Exception as exc:  # noqa: BLE001 —— 见 docstring：故意兜住一切
             duration = _ms_since(started)
             result = ToolResult.error(f"{type(exc).__name__}: {exc}", duration_ms=duration)
@@ -215,6 +224,35 @@ class BaseTool(ABC):
         )
         self._audit(raw, final)
         return final
+
+    def _execute_with_timeout(self, params: Any) -> ToolResult:
+        """带超时地执行 `execute`。
+
+        **超时的语义是「不再等它」，不是「取消它」。** Python 杀不掉线程，
+        所以超时后那个调用仍在后台跑 —— 这是它唯一的诚实描述。
+        要真正取消，得靠下层（Postgres 的 `statement_timeout` / HTTP 客户端超时）。
+
+        为什么用**每次新建的守护线程**而不是共享线程池：共享池一旦被几个卡住的调用
+        占满，后续调用会**排在队里无限等** —— 那比没有超时还糟。每次新建的线程
+        随进程退出而消失，不会累积。当前工具全是本地库查询（毫秒级），
+        建线程的开销可以忽略。
+        """
+        box: dict[str, Any] = {}
+
+        def _work() -> None:
+            try:
+                box["result"] = self.execute(params)
+            except BaseException as exc:  # noqa: BLE001 —— 原样带回主线程再分类
+                box["error"] = exc
+
+        worker = threading.Thread(target=_work, name=f"tool-{self.name}", daemon=True)
+        worker.start()
+        worker.join(self.timeout_seconds)
+        if worker.is_alive():
+            raise TimeoutError(self.name)
+        if "error" in box:
+            raise box["error"]
+        return box["result"]
 
     # ── 审计 ──────────────────────────────────────────────────────────────
 

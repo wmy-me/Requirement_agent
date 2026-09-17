@@ -155,6 +155,13 @@ class RequirementService:
         metadata["capability_match"] = self.capability_matcher.match(
             extracted, source_id=saved_source.id
         )
+        # —— 工具调用留痕（B3）——
+        # 分析与落库**分处两个进程/两次调用**（分析在 outbox 任务里、落库在审核时），
+        # 所以「这次分析调了哪些工具、各花了多久」必须随 metadata 一起存下来，
+        # 否则事后只能靠日志时间戳猜。形状见 `tools/invoker.tool_call_record`。
+        tool_calls = list(result.get("tool_calls") or [])
+        if tool_calls:
+            metadata["tool_calls"] = tool_calls
         metadata["retrieval_filters"] = {
             "channel": saved_source.source_type,
             "department": metadata.get("department"),
