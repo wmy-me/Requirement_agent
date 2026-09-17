@@ -362,16 +362,21 @@ function buildArtifact(p) {
     : topCands.map((c) => ({
         requirement_key: c.requirement_key,
         title: c.requirement_name || c.title,
-        similarity: c.score,
+        // ⚠️ 取**余弦**不取 `score`。B4 批 3 起 `score` 是 RRF 名次分（量级 ~0.02），
+        // 拿它渲染百分比会显示「2%」。没有余弦就留 null，下面渲染成「—」。
+        similarity: c.vector_similarity == null ? null : Number(c.vector_similarity),
         reason: '检索命中（' + (c.match_type || '') + '）',
-        simSource: '检索分',
+        simSource: similaritySourceLabel(c),
       }));
   const c2 = card('相似 / 关联需求', '🔗', false);
   const b2 = c2.querySelector('.acard-body');
   if (cands.length) {
     b2.innerHTML = cands.map((c) => {
-      // 相似度非有限值时显示「—」而不是算出一个假的百分比
-      const sim = Number(c.similarity);
+      // 相似度为空/非有限时显示「—」而不是算出一个假的百分比。
+      // ⚠️ 必须先判 null/undefined 再 Number()：`Number(null)` 是 **0**，
+      // 于是「没有余弦」会被渲染成「0%」—— 那是「一模一样的不像」，不是「没数据」。
+      const hasSim = c.similarity !== null && c.similarity !== undefined && c.similarity !== '';
+      const sim = hasSim ? Number(c.similarity) : NaN;
       const pct = Number.isFinite(sim) ? `${Math.round(sim * 100)}%` : '—';
       const width = Number.isFinite(sim) ? Math.max(2, Math.round(sim * 100)) : 0;
       return `
@@ -909,7 +914,12 @@ const LEVEL_LABEL = {
 
 // 余弦的来源。关键词分与余弦是两个量纲，混着显示会让人以为「60% 关键词」等于「60% 相似」。
 function similaritySourceLabel(c) {
-  return c && c.similarity_source === 'keyword_only' ? '关键词命中' : '余弦';
+  if (!c) return '—';
+  if (c.similarity_source) {
+    return c.similarity_source === 'keyword_only' ? '关键词命中' : '余弦';
+  }
+  // 原始检索行没有 similarity_source 字段，按「有没有余弦」推断
+  return c.vector_similarity == null ? '关键词命中' : '余弦';
 }
 
 // 候选的相似度文案。没有余弦的候选**不显示百分比** —— 它那个数无从谈起。

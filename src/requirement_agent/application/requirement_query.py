@@ -119,11 +119,15 @@ class RequirementQueryService:
             {
                 "requirement_key": row.get("requirement_key"),
                 "requirement_name": row.get("requirement_name") or row.get("title"),
-                # ⚠️ `similarity` 是**融合分**（关键词多因子加和与余弦取大者），只用于排序与展示。
-                # 判定**必须**用下面的 `vector_similarity` —— 融合分的量纲随查询词数、
-                # 短语长度变化，拿它比相似度阈值是范畴错误（见 `domain/similarity_scale.py`）。
-                # 纯关键词命中的候选没有余弦，这里是 `None`，判定层会据此标 `unverifiable`。
-                "similarity": row.get("score") or row.get("similarity"),
+                # ⚠️ **只给余弦，不给排序分。**
+                #
+                # 这里原先叫 `similarity`，装的却是**融合分**（关键词手工加和与余弦取大者）。
+                # 一个叫 similarity 但不是相似度的数递给模型，只会让它拿它下结论 ——
+                # 和刚拆掉的「模型回显」是同一类问题，只是方向反过来。
+                #
+                # 排序分（`retrieval_score` / `score`）是**管道内部的东西**，模型不需要。
+                # 纯关键词命中的候选没有余弦，这里是 `None` —— 判定层据此标 `unverifiable`，
+                # 而不是拿一个量纲不同的数充数。见 `domain/similarity_scale.py`。
                 "vector_similarity": row.get("vector_similarity"),
             }
             for row in rows

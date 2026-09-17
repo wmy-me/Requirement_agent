@@ -115,6 +115,14 @@ class Settings(BaseSettings):
         default="docs/baseline/similarity_calibration_Doubao-embedding_20260917.json",
         alias="SIMILARITY_CALIBRATION_SOURCE",
     )
+    # 分析图里检索的候选条数。
+    # **不是「越大越好」**：它决定 contrast 统计的样本量，而 contrast 是中位数 ——
+    # 样本太少（原值 5）时中位数只用 3~4 个数，噪声很大，实测同一条真重复两次走查
+    # 会分别落到 related 与 duplicate。10 是 `RequirementQueryService.MAX_SEARCH_LIMIT`
+    # 允许的上限，再大就要动那个上限与向量召回的返回条数。
+    similarity_recall_limit: int = Field(
+        default=10, ge=1, le=20, alias="SIMILARITY_RECALL_LIMIT"
+    )
 
     # 后台 outbox 消费循环：由 API 进程持续认领 embedding 同步 / 文档分片事件
     outbox_consumer_enabled: bool = Field(default=True, alias="OUTBOX_CONSUMER_ENABLED")

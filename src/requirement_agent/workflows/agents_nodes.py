@@ -8,6 +8,7 @@ from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent, ExtractedRequirement
 from requirement_agent.agents.risk_agent import RiskAgent
 from requirement_agent.application.decision_rules import next_action_for
+from requirement_agent.config.settings import settings
 from requirement_agent.tools.invoker import (
     ToolInvocationError,
     invoke,
@@ -26,8 +27,6 @@ def extract_node(state: dict[str, Any]) -> dict[str, Any]:
     return {"extracted": extracted.model_dump(mode="python")}
 
 
-# 检索的候选条数。**写死是刻意的** —— 见 retrieve_node 的说明。
-_RETRIEVE_LIMIT = 5
 # 与 `tools/search_requirements.py` 的 schema 上限一致。
 # 实测待审来源的 query 都是 summary（42–58 字），不会触到它。
 _RETRIEVE_QUERY_MAX = 500
@@ -51,15 +50,19 @@ def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
     query = str(
         extracted.get("summary") or extracted.get("raw_text") or state.get("source_text") or ""
     )
-    params = {"query": query[:_RETRIEVE_QUERY_MAX], "limit": _RETRIEVE_LIMIT}
+    # 候选条数从配置读（默认 10，原先是写死的 5）。
+    # **不是「越大越好」**：它决定 contrast 统计的样本量，而 contrast 取的是中位数 ——
+    # 样本太少时中位数只用 3~4 个数、噪声很大，实测同一条真重复两次走查会分别落到
+    # related 与 duplicate。B3 时这里写死 5 是刻意的（那批只接线、不调检索策略）；
+    # B4 有了 contrast 之后，样本量成了正确性问题，故解耦到 `SIMILARITY_RECALL_LIMIT`。
+    limit = settings.similarity_recall_limit
+    params = {"query": query[:_RETRIEVE_QUERY_MAX], "limit": limit}
     result = invoke("search_requirements", params, consumer="analysis")
     record = tool_call_record("search_requirements", params, result)
 
     if not is_ok(result):
         raise ToolInvocationError("search_requirements", str(result.message or "未知错误"))
 
-    # 候选条数固定为 5：这是既有行为，工具 schema 也允许改动，但**本批次不改** ——
-    # B3 的目标是把工作流接上注册表，不是调检索策略。
     return {"candidates": result.result or [], "tool_calls": [record]}
 
 

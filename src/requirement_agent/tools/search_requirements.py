@@ -36,9 +36,11 @@ class SearchRequirementsTool(BaseTool):
 
     name = "search_requirements"
     description = (
-        "按语义检索历史需求，返回最相近的若干条（需求编号、名称、相似度）。"
+        "按语义检索历史需求，返回最相近的若干条（需求编号、名称、向量相似度）。"
         "想知道「有没有人提过类似的需求」时用它。"
-        "⚠️ 相似度高**不等于**重复 —— 是否判定重复由后端阈值决定，这里只给候选。"
+        "⚠️ `vector_similarity` 为 null 表示这条只命中了关键词、没有向量分数，"
+        "**不能**当作「相似度为 0」。"
+        "⚠️ 相似度高**不等于**重复 —— 是否判定重复由后端按两把锁决定，这里只给候选。"
     )
     input_model = SearchRequirementsInput
     output_schema: dict[str, Any] = {
@@ -48,10 +50,9 @@ class SearchRequirementsTool(BaseTool):
             "properties": {
                 "requirement_key": {"type": "string"},
                 "requirement_name": {"type": ["string", "null"]},
-                # 融合分：只用于排序与展示，**不是相似度**
-                "similarity": {"type": ["number", "null"]},
-                # 余弦；纯关键词命中的候选为 null。判定由后端按两把锁做，
-                # 不要拿这个数自己下「是否重复」的结论。
+                # 余弦；纯关键词命中的候选为 null。**只给这一个数** —— 排序分是管道内部
+                # 的东西，模型不需要，给了反而会被拿来下结论（见 requirement_query 的说明）。
+                # 是否重复由后端按两把锁判定，不要拿这个数自己下结论。
                 "vector_similarity": {"type": ["number", "null"]},
             },
         },

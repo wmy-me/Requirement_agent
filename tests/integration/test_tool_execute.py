@@ -68,16 +68,11 @@ def test_search_requirements_returns_candidates() -> None:
     assert result.status is ToolStatus.SUCCESS
     assert isinstance(result.result, list) and result.result
     first = result.result[0]
-    assert set(first) == {
-        "requirement_key",
-        "requirement_name",
-        "similarity",          # 融合分：只用于排序与展示
-        "vector_similarity",   # 余弦：判定必须用这个
-    }
+    # **只给余弦，不给排序分。** 排序分（`retrieval_score`/`score`）是管道内部的东西，
+    # 递给模型只会让它拿一个「叫 similarity 却不是相似度」的数下结论。
+    assert set(first) == {"requirement_key", "requirement_name", "vector_similarity"}
     assert first["requirement_key"].startswith("REQ-")
-    # **余弦必须真的透出来** —— 判定层拿不到它就只能退回比融合分，
-    # 而融合分的量纲随查询变化（见 application/requirement_query.py 的说明）。
-    # 这里不断言它非空：纯关键词命中的候选没有余弦，那是合法的 `None`。
+    # 不断言非空：纯关键词命中的候选没有余弦，那是合法的 `None`
     assert first["vector_similarity"] is None or 0.0 <= first["vector_similarity"] <= 1.0
 
 
@@ -141,18 +136,26 @@ def test_missing_requirement_is_empty_not_error() -> None:
 def test_search_is_recall_first_so_it_rarely_returns_empty() -> None:
     """**实测出来的一条重要性质：检索是「召回优先」的，几乎不会有空结果。**
 
-    连「zzz完全不存在的业务场景zzz」这种乱码查询，也能拿到 0.77 的相似度 ——
-    因为 `RetrievalService` 是关键词 + 向量的混合检索，命中基础分就返回。
+    连「zzz完全不存在的业务场景zzz」这种乱码查询也能拿到候选，而且余弦在 **0.7 上下**。
 
-    ⚠️ **所以模型不能把「有结果」当成「有相似需求」**：`similarity` 只是候选排序，
-    是否构成重复由后端阈值判（strict 模式 duplicate ≥ 0.80）。
-    这条测试把这个性质**记下来**，免得有人以为「查得到 = 有重复」。
+    ⚠️ **那个 0.7 不是「还行」，它就是噪声基线。** B4 批 1 校准出无关中文业务文本的
+    余弦中位是 **0.7273**（`SIMILARITY_BASELINE`）—— 也就是说「随便什么中文业务文本
+    两两相比」本来就有 0.7 左右，这个模型的余弦空间是**压缩**的。
+
+    这正是第一版绝对阈值（duplicate ≥ 0.80）失败的原因：0.80 只比噪声中心高 0.07，
+    实测有 2/7 的无关文本对直接越线。判定因此改成了 relevance + contrast 两把锁。
+
+    ⚠️ **所以模型不能把「有结果」当成「有相似需求」。** 这条测试把这个性质记下来，
+    免得有人以为「查得到 = 有重复」。
     """
     result = _run("search_requirements", query="zzz完全不存在的业务场景zzz")
     # 这不是在断言「应该为空」—— 恰恰相反，是在记录「它不会为空」
     assert result.status in {ToolStatus.SUCCESS, ToolStatus.EMPTY}
     if result.status is ToolStatus.SUCCESS:
-        assert all("similarity" in row for row in result.result)
+        assert all("vector_similarity" in row for row in result.result)
+        cosines = [r["vector_similarity"] for r in result.result if r["vector_similarity"] is not None]
+        if cosines:
+            assert max(cosines) > 0.6, "乱码查询也会拿到贴近噪声基线的候选 —— 这就是召回优先"
 
 
 def test_empty_list_is_empty_not_error() -> None:
