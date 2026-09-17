@@ -37,7 +37,7 @@
 > 每版显示 `change_type` 色点、前驱、**以及真实的来源链**（`/trace` 的 `sources[]`，
 > 此前从没被渲染过）。详见方案 §3.3(a)。
 
-**测试基线**：`pytest -q` → **561 passed, 2 skipped**。
+**测试基线**：`pytest -q` → **571 passed, 2 skipped**。
 > 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ 311（能力模型六批）→ 393（G 批）→ 412（T1/T2 与 F 批）→ 434（工具层批次 1）→ 412（批次 1 回退后）→ 466（按四层重建的批 1）→ 505（批 2）→ **535**（B1 鉴权）。
 > 每次加批次都会涨，**以最新一次实测为准**。
 
@@ -213,7 +213,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | 1 | **飞书渠道代码已就绪，但未与真实飞书应用联调** | 端点 `POST /api/v1/channels/feishu/webhook`（`api/routes/channels.py`）；协议实现见 `infrastructure/channels/feishu_client.py`。**未验证项**：解密/签名按官方文档实现但无官方测试向量，单测是自洽回环；URL 校验、加密回调、签名头是否与真实飞书一致，需要配一个测试应用实测。 |
 | 1b | **`source_type` 对外枚举未放宽** | `api/schemas/agent.py:15,53` 与 `api/schemas/requirements.py:20` 仍为 `web/email/meeting/manual`。渠道入库走 service 不经该校验，所以**功能上不阻塞**；但若要让 `feishu` 能经 `/requirements/submit` 等端点提交，需放宽（属对外契约变更，需授权）。 |
 | 2 | **E2E 测试为空**（**部分缓解**） | `tests/` 下只有 `unit/` 与 `integration/`，原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有进 pytest 的前端测试**。2026-09-16 起有了一条替代路径：无头 Chrome + CDP 驱动页面自己的函数、读回 DOM 并截图（F 批首次使用，见 §五）。**但它还是一次性脚本、没固化**（→ §二 B9）。 |
-| 3 | **worker 未部署** | `workers/tasks.py` 提供了独立的 FastAPI 入口（`python -m requirement_agent.workers`，:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/requirement-analysis/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。**注意有两个 `worker` 包**：`infrastructure/worker/`（任务实现 + outbox，被引用的那个）与 `workers/`（仅 HTTP 入口薄壳 + `__main__.py`）。 |
+| 3 | **worker 未部署**（B5 起**可独立运行**：`python -m requirement_agent.workers` 自带消费循环 + `/health`/`/stats`；生产编排仍未配） | `workers/tasks.py` 提供了独立的 FastAPI 入口（`python -m requirement_agent.workers`，:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/requirement-analysis/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。**注意有两个 `worker` 包**：`infrastructure/worker/`（任务实现 + outbox，被引用的那个）与 `workers/`（仅 HTTP 入口薄壳 + `__main__.py`）。 |
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
 | 7 | **需求库筛选下拉的候选项来自当前结果集** | 无 facets 接口，选项由返回行聚合而来；只在「无筛选」时刷新，避免一筛选项就只剩当前命中值。代价：**首次加载前**（或结果为空时）下拉是空的。要彻底解决需加一个 distinct 值接口。 |

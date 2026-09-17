@@ -117,7 +117,11 @@ class OutboxRepository:
                         SELECT id
                         FROM outbox_event
                         WHERE (
-                            status = 'pending'
+                            -- pending：还要看退避有没有到点（NULL = 新事件，立即可领）
+                            (status = 'pending'
+                             AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
+                            -- processing：僵尸回收**不看**退避 —— 那是「消费者崩了」，
+                            -- 不是「失败了要等一会」，卡住它只会让事件更晚被处理
                             OR (status = 'processing' AND locked_at < :stale_cutoff)
                         )
                         {event_filter}
@@ -141,6 +145,23 @@ class OutboxRepository:
             ).mappings().all()
             session.commit()
         return [self._from_row(row) for row in rows]
+
+    @staticmethod
+    def _backoff_seconds(retry_count: int) -> float:
+        """第 n 次失败后的退避秒数：`base * 2^(n-1)`，上限 `max`。
+
+        `retry_count` 从 1 起（`mark_failed` 里已经 +1 过）。
+        两次都可配（`OUTBOX_RETRY_BACKOFF_SECONDS` / `..._MAX_BACKOFF_SECONDS`）。
+        """
+        base = max(0.0, float(settings.outbox_retry_backoff_seconds))
+        ceiling = max(0.0, float(settings.outbox_retry_max_backoff_seconds))
+        exponent = max(0, retry_count - 1)
+        # 指数别算爆：2**1000 会溢出，先按上限截断
+        if base == 0 or ceiling == 0:
+            return 0.0
+        if exponent > 20 or base * (2 ** exponent) > ceiling:
+            return ceiling
+        return base * (2 ** exponent)
 
     def list_pending(self, limit: int = 20) -> list[OutboxEvent]:
         """返回待处理（status='pending'）事件，按创建时间升序。
@@ -205,7 +226,13 @@ class OutboxRepository:
         max_retries: int = 3,
         session: Session | None = None,
     ) -> OutboxEvent:
-        """事件执行失败：retry_count+1；未达上限回 pending 以重试，达到上限转 dead_letter。"""
+        """事件执行失败：retry_count+1；未达上限回 pending 等退避后再试，达到上限转 dead_letter。
+
+        **退避是 B5 加的。** 此前失败是立刻回 pending，下一个轮询周期（默认 5s）就重试，
+        于是 3 次重试全挤在 ~15 秒里 —— 对「远端 LLM 超时」这类瞬时故障几乎等于不重试
+        （三次都落在同一次抖动里，然后进死信，而它再等半分钟就能成功）。
+        现在按 `base * 2^(n-1)` 退避，上限 `outbox_retry_max_backoff_seconds`。
+        """
         owns_session = session is None
         session = session or SessionLocal()
         try:
@@ -219,6 +246,12 @@ class OutboxRepository:
                         retry_count = :retry_count,
                         last_error = :last_error,
                         locked_at = NULL,
+                        -- 退避：回 pending 时设一个最早可重试时间。
+                        -- 进死信（终态）时清空 —— 它已经不会再被领了，留个时间只会让人误解。
+                        next_attempt_at = CASE
+                            WHEN :status = 'pending' THEN NOW() + make_interval(secs => :backoff_seconds)
+                            ELSE NULL
+                        END,
                         updated_at = NOW()
                     WHERE id = :id
                     RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
@@ -230,6 +263,7 @@ class OutboxRepository:
                     "status": next_status,
                     "retry_count": next_retry_count,
                     "last_error": error[:2_000],
+                    "backoff_seconds": self._backoff_seconds(next_retry_count),
                 },
             ).mappings().one()
             if owns_session:

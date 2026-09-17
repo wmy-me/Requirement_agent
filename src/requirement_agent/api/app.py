@@ -65,7 +65,13 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         consumer.stop()
-        thread.join(timeout=settings.outbox_poll_interval + 1)
+        # ⚠️ **必须先判 `is_alive()`** —— `Thread.join()` 在**没启动过**的线程上会抛
+        # `RuntimeError: cannot join thread before it is started`。而
+        # `OUTBOX_CONSUMER_ENABLED=false` 时正是「不启动」，于是**关进程就报错**。
+        # 实测踩到；而这恰好是 B5 推荐的生产形态（API 侧关掉内嵌消费）。
+        # is_alive() 为假有两种情况——没启动过、或已经跑完——两种都不需要 join。
+        if thread.is_alive():
+            thread.join(timeout=settings.outbox_poll_interval + 1)
 
 
 def create_app() -> FastAPI:

@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     outbox_poll_interval: float = Field(default=5.0, alias="OUTBOX_POLL_INTERVAL_SECONDS")
     outbox_poll_batch: int = Field(default=50, alias="OUTBOX_POLL_BATCH")
     outbox_stale_timeout_seconds: int = Field(default=300, alias="OUTBOX_STALE_TIMEOUT_SECONDS")
+    # —— 失败重试的退避（B5）——
+    # 此前失败是**立刻**回 pending，于是 3 次重试全挤在 ~15 秒内（默认轮询 5s × 3），
+    # 对「远端 LLM 超时」这类瞬时故障几乎没有恢复窗口。
+    # 现在按 `base * 2^(retry_count-1)` 退避，上限 `max`。
+    outbox_retry_backoff_seconds: float = Field(
+        default=30.0, ge=0.0, alias="OUTBOX_RETRY_BACKOFF_SECONDS"
+    )
+    outbox_retry_max_backoff_seconds: float = Field(
+        default=600.0, ge=0.0, alias="OUTBOX_RETRY_MAX_BACKOFF_SECONDS"
+    )
 
     # 对话运行被判为「僵尸」的静默阈值（秒）：超过它的 running / paused run 会被判为 failed。
     # 同一对话只允许一个活跃运行（migrations/012），而进程中断留下的 run 不会自己收尾 ——
