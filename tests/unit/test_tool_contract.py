@@ -27,11 +27,21 @@ from requirement_agent.tools.registry import FORBIDDEN_NAMES, register
 # 本批次登记在册的工具。**刻意与本文件重复**：让「名录与实现对不上」变成一条失败的
 # 测试，而不是一个安静的缺失。
 EXPECTED_TOOLS = {
+    # 批 1
     "search_requirements",
     "get_requirement_detail",
     "get_requirement_features",
     "get_requirement_versions",
     "list_requirements",
+    # 批 2
+    "compare_requirement_versions",
+    "get_requirement_risks",
+    "list_requirement_relations",
+    "list_requirement_sources",
+    "search_by_capability",
+    "search_by_constraint",
+    "search_features",
+    "trace_requirement_sources",
 }
 
 WRITE_PREFIXES = ("save", "create", "update", "delete", "commit", "insert", "upsert", "sync")

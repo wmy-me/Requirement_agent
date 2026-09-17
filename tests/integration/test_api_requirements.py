@@ -170,3 +170,36 @@ def test_list_requirements_unknown_filter_returns_empty() -> None:
     ).json()["items"]
 
     assert items == []
+
+
+def test_feature_search_endpoint_works_at_all() -> None:
+    """**回归**：`GET /requirements/features/search` 此前**每次调用都 500**。
+
+    仓储的 SQL 里漏了 `f.requirement_id` 这一列，而 `_row_to_feature` 会读它 ——
+    于是 `NoSuchColumnError` 在第一次调用就抛。
+
+    它一直没被发现，是因为唯一的单测（`test_retrieval_filters.py`）用的是**假仓储**
+    （自己实现了一个 `search_features`），**根本走不到那条 SQL**。
+
+    2026-09-16 写只读工具时实测暴露。这条测试只断言「端点能正常应答」——
+    不依赖具体数据，所以库里有没有匹配的功能都能跑。
+    """
+    response = client.get("/api/v1/requirements/features/search", params={"q": "功能"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "items" in body
+    for item in body["items"]:
+        # 形状来自 `_row_to_feature` + 三个 join 出来的字段
+        assert {"requirement_key", "requirement_name", "feature_key", "content"} <= set(item)
+
+
+def test_feature_search_endpoint_returns_matching_rows() -> None:
+    """有数据时也要真的能查出东西（不是「只要不 500 就算过」）。"""
+    response = client.get("/api/v1/requirements/features/search", params={"q": "导出"})
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    if not items:
+        pytest.skip("库里没有含「导出」的功能条目")
+    assert all("导出" in item["content"] for item in items)

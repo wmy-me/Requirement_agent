@@ -30,10 +30,14 @@ Query Service。** 工具里不该出现 `from ...db.repositories import ...` �
 from __future__ import annotations
 
 # 导入即注册（`@register` 在 import 时执行）
-from requirement_agent.tools.base import BaseTool, ToolResult, ToolStatus
+from requirement_agent.tools.base import BaseTool, ToolInput, ToolResult, ToolStatus
+from requirement_agent.tools.compare_requirement_versions import CompareRequirementVersionsTool
 from requirement_agent.tools.get_requirement_detail import GetRequirementDetailTool
 from requirement_agent.tools.get_requirement_features import GetRequirementFeaturesTool
+from requirement_agent.tools.get_requirement_risks import GetRequirementRisksTool
 from requirement_agent.tools.get_requirement_versions import GetRequirementVersionsTool
+from requirement_agent.tools.list_requirement_relations import ListRequirementRelationsTool
+from requirement_agent.tools.list_requirement_sources import ListRequirementSourcesTool
 from requirement_agent.tools.list_requirements import ListRequirementsTool
 from requirement_agent.tools.registry import (
     TOOLS,
@@ -44,11 +48,16 @@ from requirement_agent.tools.registry import (
     names,
     register,
 )
+from requirement_agent.tools.search_by_capability import SearchByCapabilityTool
+from requirement_agent.tools.search_by_constraint import SearchByConstraintTool
+from requirement_agent.tools.search_features import SearchFeaturesTool
 from requirement_agent.tools.search_requirements import SearchRequirementsTool
+from requirement_agent.tools.trace_requirement_sources import TraceRequirementSourcesTool
 
 __all__ = [
     # 契约
     "BaseTool",
+    "ToolInput",
     "ToolResult",
     "ToolStatus",
     # 注册表
@@ -60,9 +69,17 @@ __all__ = [
     "names",
     "register",
     # 工具（本名录即注册表清单，改动要同步 tests/unit/test_tool_contract.py）
+    "CompareRequirementVersionsTool",
     "GetRequirementDetailTool",
     "GetRequirementFeaturesTool",
+    "GetRequirementRisksTool",
     "GetRequirementVersionsTool",
+    "ListRequirementRelationsTool",
+    "ListRequirementSourcesTool",
     "ListRequirementsTool",
+    "SearchByCapabilityTool",
+    "SearchByConstraintTool",
+    "SearchFeaturesTool",
     "SearchRequirementsTool",
+    "TraceRequirementSourcesTool",
 ]

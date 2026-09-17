@@ -24,10 +24,12 @@ from typing import Any
 
 from requirement_agent.application.retrieval_service import RetrievalService
 from requirement_agent.infrastructure.db.repositories import (
+    CapabilityRepository,
     FeatureCapabilityRepository,
     RequirementFeatureRepository,
     RequirementMasterRepository,
     RequirementRelationRepository,
+    RequirementSourceRepository,
     RequirementVersionRepository,
 )
 
@@ -38,6 +40,11 @@ MAX_SEARCH_LIMIT = 10
 MAX_LIST_LIMIT = 20
 MAX_FEATURE_LIMIT = 50
 MAX_VERSION_LIMIT = 20
+MAX_RELATION_LIMIT = 30
+MAX_SOURCE_LIMIT = 20
+MAX_FEATURE_SEARCH_LIMIT = 20
+MAX_STREAM_LIMIT = 20
+MAX_CAPABILITY_CANDIDATES = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +89,8 @@ class RequirementQueryService:
         version_repo: RequirementVersionRepository | None = None,
         relation_repo: RequirementRelationRepository | None = None,
         feature_capability_repo: FeatureCapabilityRepository | None = None,
+        capability_repo: CapabilityRepository | None = None,
+        source_repo: RequirementSourceRepository | None = None,
     ) -> None:
         self.retrieval_service = retrieval_service or RetrievalService()
         self.master_repo = master_repo or RequirementMasterRepository()
@@ -89,6 +98,8 @@ class RequirementQueryService:
         self.version_repo = version_repo or RequirementVersionRepository()
         self.relation_repo = relation_repo or RequirementRelationRepository()
         self.feature_capability_repo = feature_capability_repo or FeatureCapabilityRepository()
+        self.capability_repo = capability_repo or CapabilityRepository()
+        self.source_repo = source_repo or RequirementSourceRepository()
 
     # ── 检索 ──────────────────────────────────────────────────────────────
 
@@ -230,6 +241,292 @@ class RequirementQueryService:
                 }
             )
         return result
+
+
+    # ── 关系 ──────────────────────────────────────────────────────────────
+
+    def list_relations(self, requirement_key: str, limit: int = 20) -> QueryOutcome:
+        """该需求的关系边（双向：它指向别人的 + 别人指向它的）。
+
+        ⚠️ `status='proposed'` 的是**模型的提议、还没经人工确认** —— 展示时必须标出来。
+        """
+        master = self.master_repo.get_by_key(requirement_key)
+        if master is None:
+            return QueryOutcome.miss({"requirement_key": requirement_key})
+        rows = self.relation_repo.list_for_requirement(requirement_key)
+        return QueryOutcome.hit(
+            {
+                "requirement_key": requirement_key,
+                "count": len(rows),
+                "truncated": len(rows) > limit,
+                "relations": [
+                    {
+                        "other_requirement_key": row.get("other_requirement_key"),
+                        "other_requirement_name": row.get("other_requirement_name"),
+                        "relation_type": row.get("relation_type"),
+                        "direction": row.get("direction"),
+                        "similarity": row.get("similarity"),
+                        "status": row.get("status"),
+                        "reason": row.get("reason"),
+                    }
+                    for row in rows[: _clamp(limit, MAX_RELATION_LIMIT)]
+                ],
+            }
+        )
+
+    # ── 溯源：这一版的来源链 ──────────────────────────────────────────────
+
+    def trace_sources(self, requirement_key: str, limit: int = 10) -> QueryOutcome:
+        """这条需求的每一版**从哪些来源来**（渠道、发起人、原文摘要）。
+
+        这是本系统里真实存在的跨实体关系（合并是「来源 → REQ」，见
+        `docs/流程_需求从提交到入库.md`）。回滚产生的版本**没有来源**，其 `sources` 为空。
+        """
+        trace = self.version_repo.trace_by_requirement_key(requirement_key)
+        if trace is None:
+            return QueryOutcome.miss({"requirement_key": requirement_key})
+        versions = (trace.get("versions") or [])[: _clamp(limit, MAX_VERSION_LIMIT)]
+        return QueryOutcome.hit(
+            {
+                "requirement_key": requirement_key,
+                "versions": [
+                    {
+                        "version_no": row.get("version_no"),
+                        "change_type": row.get("change_type"),
+                        "status": row.get("status"),
+                        "sources": [
+                            {
+                                "source_id": item.get("source_id"),
+                                "source_type": item.get("source_type"),
+                                "requester_name": item.get("requester_name"),
+                                "submitted_at": item.get("submitted_at"),
+                                # 原文只给摘要 —— 完整原文是给人看的，进上下文会淹掉判断
+                                "text_excerpt": str(item.get("original_text") or "")[:200],
+                            }
+                            for item in (row.get("sources") or [])
+                        ],
+                    }
+                    for row in versions
+                ],
+            }
+        )
+
+    # ── 待审来源 ──────────────────────────────────────────────────────────
+
+    def list_sources(self, status: str = "pending_review", limit: int = 10) -> list[dict[str, object]]:
+        """列出来源（默认待审）。
+
+        ⚠️ **只给编号、标题、渠道、时间 —— 不给正文与模型分析。**
+        待审材料是**给审核人做判断用的**，全量喂给模型等于让它替人看材料、替人下结论。
+        """
+        rows = self.source_repo.list_by_status(status or "pending_review", limit=_clamp(limit, MAX_SOURCE_LIMIT))
+        result = []
+        for row in rows:
+            metadata = row.get("metadata") or {}
+            extracted = metadata.get("extracted") or {}
+            title = str(extracted.get("requirement_title") or "").strip()
+            if not title:
+                first_line = str(row.get("original_text") or "").strip().splitlines()
+                title = first_line[0] if first_line else ""
+            result.append(
+                {
+                    "source_id": row.get("source_id"),
+                    "title": title[:80],
+                    "source_type": row.get("source_type"),
+                    "requester_name": row.get("requester_name"),
+                    "submitted_at": row.get("submitted_at"),
+                }
+            )
+        return result
+
+    # ── 风险 ──────────────────────────────────────────────────────────────
+
+    def get_risks(self, requirement_key: str, limit: int = 5) -> QueryOutcome:
+        """这条需求历史上被评过哪些风险。
+
+        风险**不在需求主表上**，而在每版的 `diff_payload.risk` 里（提交时由分析结果写入）——
+        所以「风险」天然是**按版本**的，这里按版本倒序给。
+        """
+        rows = self.version_repo.list_by_requirement_key(requirement_key)
+        if not rows:
+            master = self.master_repo.get_by_key(requirement_key)
+            if master is None:
+                return QueryOutcome.miss({"requirement_key": requirement_key})
+        risks = []
+        for row in rows[: _clamp(limit, MAX_VERSION_LIMIT)]:
+            risk = (row.get("diff_payload") or {}).get("risk") or {}
+            if not risk:
+                continue
+            risks.append(
+                {
+                    "version_no": row.get("version_no"),
+                    "quality_risk": risk.get("quality_risk"),
+                    "change_risk": risk.get("change_risk"),
+                    "technical_impact_risk": risk.get("technical_impact_risk"),
+                    "confidence": risk.get("confidence"),
+                    "source": risk.get("source"),
+                }
+            )
+        return QueryOutcome.hit({"requirement_key": requirement_key, "count": len(risks), "risks": risks})
+
+    # ── 两版对比 ──────────────────────────────────────────────────────────
+
+    def compare_versions(
+        self, requirement_key: str, from_version: int, to_version: int
+    ) -> QueryOutcome:
+        """两版之间的功能级增删改。
+
+        ⚠️ 与 `get_features` 同样的范围校验：版本号越界要**报错而不是给一份假数据**。
+        """
+        master = self.master_repo.get_by_key(requirement_key)
+        if master is None:
+            return QueryOutcome.miss({"requirement_key": requirement_key})
+        current = int(master.current_version or 0)
+        for label, value in (("from_version", from_version), ("to_version", to_version)):
+            if value < 1 or value > current:
+                raise ValueError(f"{label}={value} 越界：{requirement_key} 目前只到 V{current}")
+
+        diff = self.feature_repo.diff_by_requirement_key(
+            requirement_key, from_version=from_version, to_version=to_version
+        )
+        return QueryOutcome.hit(
+            {
+                "requirement_key": requirement_key,
+                "from_version": diff.get("from_version"),
+                "to_version": diff.get("to_version"),
+                "summary": {
+                    "added": len(diff.get("added") or []),
+                    "removed": len(diff.get("removed") or []),
+                    "modified": len(diff.get("modified") or []),
+                    "unchanged": diff.get("unchanged"),
+                },
+                "added": [
+                    {"feature_key": r.get("feature_key"), "content": r.get("content")}
+                    for r in (diff.get("added") or [])[:MAX_FEATURE_LIMIT]
+                ],
+                "modified": [
+                    {"feature_key": r.get("feature_key"), "before": r.get("before"), "after": r.get("after")}
+                    for r in (diff.get("modified") or [])[:MAX_FEATURE_LIMIT]
+                ],
+                "removed": [
+                    {"feature_key": r.get("feature_key"), "content": r.get("content")}
+                    for r in (diff.get("removed") or [])[:MAX_FEATURE_LIMIT]
+                ],
+            }
+        )
+
+    # ── 跨需求搜功能 ──────────────────────────────────────────────────────
+
+    def search_features(self, query: str, limit: int = 10) -> list[dict[str, object]]:
+        """按内容搜**功能条目**（跨需求）—— 精确到「哪条功能出现在哪条需求的哪一版」。
+
+        与 `search_requirements` 的区别：那个搜的是**需求**，这个搜的是**功能**。
+        问「哪些需求里有导出相关的能力」用它更准。
+        """
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return []
+        rows = self.retrieval_service.search_features(cleaned, limit=_clamp(limit, MAX_FEATURE_SEARCH_LIMIT))
+        return [
+            {
+                "requirement_key": row.get("requirement_key"),
+                "requirement_name": row.get("requirement_name"),
+                "feature_key": row.get("feature_key"),
+                "content": row.get("content"),
+                "module": row.get("module_name"),
+            }
+            for row in rows
+        ]
+
+    # ── 按能力反查 ────────────────────────────────────────────────────────
+
+    def search_by_capability(
+        self, capability: str, constraint: str | None = None, review_status: str | None = None, limit: int = 10
+    ) -> QueryOutcome:
+        """按**能力名**反查哪些需求主线用到它。
+
+        底层 `search_streams` 收的是能力 id，但调用方手里通常只有名字 —— 所以先解析。
+        **匹配到多个能力时返回候选让调用方说清楚，不替它挑** —— 挑错会把两条不相干的需求
+        混起来（「导出 Excel」与「导出 PDF」是两个能力）。
+
+        ⚠️ **不按 `status='active'` 过滤**：库里的能力大多还是 `pending_confirmation`
+        （AI 提议、未人工确认），按 active 筛等于什么都查不到（实测踩到过）。
+        状态随结果一起返回，由调用方自己判断。
+        """
+        cleaned = (capability or "").strip()
+        if not cleaned:
+            return QueryOutcome.miss({"capability": capability})
+        candidates = self.capability_repo.list(q=cleaned, limit=MAX_CAPABILITY_CANDIDATES)
+        if not candidates:
+            return QueryOutcome.miss({"capability": cleaned})
+        if len(candidates) > 1:
+            return QueryOutcome.miss(
+                {
+                    "need_disambiguation": True,
+                    "capability": cleaned,
+                    "candidates": [
+                        {
+                            "display_name": row.get("display_name"),
+                            "action": row.get("action"),
+                            "object": row.get("object"),
+                            "status": row.get("status"),
+                        }
+                        for row in candidates
+                    ],
+                }
+            )
+        chosen = candidates[0]
+        rows = self.feature_capability_repo.search_streams(
+            capability_id=int(chosen["id"]),
+            constraint_key=(constraint or "").strip() or None,
+            review_status=review_status,
+            limit=_clamp(limit, MAX_STREAM_LIMIT),
+        )
+        return QueryOutcome.hit(
+            {
+                "capability": chosen.get("display_name"),
+                "capability_status": chosen.get("status"),
+                "count": len(rows),
+                "streams": [
+                    {
+                        "requirement_key": row.get("requirement_key"),
+                        "requirement_name": row.get("requirement_name"),
+                        "current_version": row.get("current_version"),
+                        "review_status": row.get("review_status"),
+                    }
+                    for row in rows
+                ],
+            }
+        )
+
+    # ── 按条件反查 ────────────────────────────────────────────────────────
+
+    def search_by_constraint(self, constraint: str, limit: int = 10) -> QueryOutcome:
+        """按**限定条件**反查需求主线（「哪些需求要求按门店筛选」）。
+
+        与 `search_by_capability` 是两个独立的查询轴：条件活在**版本快照**里，
+        能力活在**功能关联**里，谁都不是谁的筛选条件（底层实现也不同）。
+        """
+        cleaned = (constraint or "").strip()
+        if not cleaned:
+            return QueryOutcome.miss({"constraint": constraint})
+        rows = self.version_repo.search_by_constraint(cleaned, limit=_clamp(limit, MAX_LIST_LIMIT))
+        return QueryOutcome.hit(
+            {
+                "constraint": cleaned,
+                "count": len(rows),
+                "streams": [
+                    {
+                        "requirement_key": row.get("requirement_key"),
+                        "requirement_name": row.get("requirement_name"),
+                        "constraint": row.get("constraint"),
+                        "constraint_key": row.get("constraint_key"),
+                    }
+                    for row in rows
+                ],
+            }
+        )
+
 
 
 def _clamp(value: int, upper: int) -> int:

@@ -50,13 +50,13 @@
 > ### ⚠️ 这个路径现在住着**另一个** `tools` 包，恢复不能照旧命令抄
 >
 > 2026-09-16 在**同一路径** `src/requirement_agent/tools/` 落地了**新的 Agent 工具层**
-> （`07edb20`，方案 `docs/方案_Agent工具层.md`）：`base.py` / `registry.py` / 10 个工具模块。
+> （方案 `docs/方案_Agent工具层.md`）：`base.py` / `registry.py` / 13 个只读工具模块。
 > 与被删掉的那个包（MCP 时代的 `health.py` / `requirements.py` / `reviews.py` / `_deps.py`）
 > **只共享路径，没有任何继承关系** —— 新包甚至就是因为它才被写出来的。
 >
 > 直接跑 `git checkout b8fc783^ -- src/requirement_agent/tools/` 会**用旧包的 `__init__.py`
-> 覆盖新包的名录**，于是 10 个新工具模块**不再被导入**、`@register` 不执行、
-> 注册表变空 —— `tests/unit/test_tool_registry.py` 会红（**响亮地失败，不是静默**）。
+> 覆盖新包的名录**，于是新工具模块**不再被导入**、`@register` 不执行、注册表变空 ——
+> `tests/unit/test_tool_contract.py` 会红（**响亮地失败，不是静默**）。
 >
 > **想看旧包的内容 —— 不要往工作区里 checkout**，用 `git show` 读单个文件：
 >

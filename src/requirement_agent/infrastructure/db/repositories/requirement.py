@@ -973,6 +973,61 @@ class RequirementVersionRepository:
             "constraint_snapshot": list(row["constraint_snapshot"] or []),
         }
 
+    def search_by_constraint(
+        self, query: str, *, limit: int = 20, session: Session | None = None
+    ) -> list[dict[str, object]]:
+        """按**限定条件**反查需求主线（只看各自的**当前版本**）。
+
+        与 `FeatureCapabilityRepository.search_streams` 的区别：那个**必须以能力为入口**
+        （`capability_id` 是必填），条件只是附加筛选；这里条件本身就是查询轴 ——
+        「哪些需求要求在按门店筛选」这类问题只能这样答。
+
+        条件存在 `requirement_version.constraint_snapshot` 这个 JSONB 数组里
+        （条件只活在版本快照上，`feature` 行上没有），所以按 `status='current'` 取当前版本，
+        再用 `jsonb_array_elements` 展开匹配 `raw` 或 `constraint_key`。
+
+        **只读**：只 SELECT，不开写事务。
+        """
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return []
+        owns_session = session is None
+        session = session or SessionLocal()
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT m.requirement_key, m.requirement_name, m.status, m.current_version,
+                           cst->>'raw' AS raw, cst->>'constraint_key' AS constraint_key,
+                           cst->>'matched' AS matched
+                    FROM requirement_version v
+                    JOIN requirement_master m ON m.id = v.requirement_id
+                    CROSS JOIN LATERAL jsonb_array_elements(v.constraint_snapshot) cst
+                    WHERE v.status = 'current'
+                      AND (COALESCE(cst->>'raw', '') ILIKE :q
+                           OR COALESCE(cst->>'constraint_key', '') ILIKE :q)
+                    ORDER BY m.requirement_key
+                    LIMIT :limit
+                    """
+                ),
+                {"q": f"%{cleaned}%", "limit": limit},
+            ).mappings().all()
+        finally:
+            if owns_session:
+                session.close()
+        return [
+            {
+                "requirement_key": row["requirement_key"],
+                "requirement_name": row["requirement_name"],
+                "status": row["status"],
+                "current_version": int(row["current_version"] or 0),
+                "constraint": row["raw"],
+                "constraint_key": row["constraint_key"],
+                "matched": str(row["matched"]).lower() == "true",
+            }
+            for row in rows
+        ]
+
     def supersede_current(
         self,
         *,

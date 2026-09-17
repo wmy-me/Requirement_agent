@@ -28,10 +28,16 @@ SAMPLE_KEY = "REQ-000015"
 
 def _probe_params(tool_name: str) -> dict:
     """给「每个工具都要能真跑一次」用的最小合法参数。"""
-    if tool_name == "search_requirements":
+    if tool_name in ("search_requirements", "search_features"):
         return {"query": "巡检"}
-    if tool_name == "list_requirements":
+    if tool_name in ("list_requirements", "list_requirement_sources"):
         return {"limit": 3}
+    if tool_name == "search_by_capability":
+        return {"capability": "导出 Excel 文件"}
+    if tool_name == "search_by_constraint":
+        return {"constraint": "按门店"}
+    if tool_name == "compare_requirement_versions":
+        return {"requirement_key": SAMPLE_KEY, "from_version": 1, "to_version": 3}
     return {"requirement_key": SAMPLE_KEY}
 
 
@@ -239,6 +245,10 @@ def test_error_call_is_audited_at_warning(caplog) -> None:
 @pytest.mark.parametrize("tool_name", [
     "search_requirements", "get_requirement_detail", "get_requirement_features",
     "get_requirement_versions", "list_requirements",
+    "compare_requirement_versions", "get_requirement_risks",
+    "list_requirement_relations", "list_requirement_sources",
+    "search_by_capability", "search_by_constraint", "search_features",
+    "trace_requirement_sources",
 ])
 def test_every_tool_is_actually_callable(tool_name: str) -> None:
     """**这条是防「静默腐烂」的总闸。**
@@ -252,3 +262,116 @@ def test_every_tool_is_actually_callable(tool_name: str) -> None:
     result = tool.run(kwargs)
     assert result.status is not ToolStatus.ERROR, f"{tool_name} 调用失败：{result.message}"
     assert result.duration_ms >= 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 批 2 的工具
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_list_requirement_relations_returns_edges() -> None:
+    result = _run("list_requirement_relations", requirement_key=SAMPLE_KEY)
+    assert result.status is ToolStatus.SUCCESS
+    row = result.result["relations"][0]
+    # 关系边必须带 status —— `proposed` 是模型提议、没经人工确认，展示时要标
+    assert "status" in row and "relation_type" in row
+
+
+def test_trace_requirement_sources_returns_the_chain() -> None:
+    """每一版从哪条来源来 —— 本系统**真实存在**的跨实体关系。"""
+    result = _run("trace_requirement_sources", requirement_key=SAMPLE_KEY)
+    assert result.status is ToolStatus.SUCCESS
+    versions = result.result["versions"]
+    with_sources = [v for v in versions if v["sources"]]
+    assert with_sources, "样本每一版都该有来源"
+    source = with_sources[0]["sources"][0]
+    assert set(source) == {"source_id", "source_type", "requester_name", "submitted_at", "text_excerpt"}
+    assert isinstance(source["source_id"], str), "雪花 ID 是字符串（契约 §1.1）"
+    assert len(source["text_excerpt"]) <= 200, "原文只给摘要，不给全文"
+
+
+def test_list_requirement_sources_gives_titles_not_bodies() -> None:
+    """**只给标题不给正文** —— 待审材料是给审核人做判断用的。"""
+    result = _run("list_requirement_sources", status="pending_review", limit=5)
+    assert result.status in {ToolStatus.SUCCESS, ToolStatus.EMPTY}
+    if result.status is ToolStatus.SUCCESS:
+        for row in result.result:
+            assert set(row) == {"source_id", "title", "source_type", "requester_name", "submitted_at"}
+            assert "original_text" not in row
+            assert "metadata" not in row, "分析结果与风险也在 metadata 里，同样不给"
+
+
+def test_get_requirement_risks_reads_from_versions() -> None:
+    """风险**按版本**存（在 `diff_payload.risk` 里），不是按需求存。"""
+    result = _run("get_requirement_risks", requirement_key=SAMPLE_KEY)
+    assert result.status is ToolStatus.SUCCESS
+    risk = result.result["risks"][0]
+    assert {"version_no", "quality_risk", "change_risk", "technical_impact_risk"} <= set(risk)
+
+
+def test_compare_requirement_versions_returns_a_real_diff() -> None:
+    """样本 v1→v3 是 4 条新增（v2 引入 1 + v3 引入 3）—— 与 `/diff` 的既有实测一致。"""
+    result = _run(
+        "compare_requirement_versions", requirement_key=SAMPLE_KEY, from_version=1, to_version=3
+    )
+    assert result.status is ToolStatus.SUCCESS
+    assert result.result["summary"]["added"] == 4
+    assert result.result["from_version"] == 1 and result.result["to_version"] == 3
+
+
+def test_compare_versions_out_of_range_is_error() -> None:
+    """与 `at_version` 同样的范围校验 —— **越界要报错，不给假数据**。"""
+    result = _run(
+        "compare_requirement_versions", requirement_key=SAMPLE_KEY, from_version=1, to_version=99
+    )
+    assert result.status is ToolStatus.ERROR
+
+
+def test_compare_same_version_reports_no_difference() -> None:
+    """同一版比同一版 → EMPTY（「没有差异」是正常答案）。"""
+    result = _run(
+        "compare_requirement_versions", requirement_key=SAMPLE_KEY, from_version=3, to_version=3
+    )
+    assert result.status is ToolStatus.EMPTY
+
+
+def test_search_features_finds_rows_across_requirements() -> None:
+    result = _run("search_features", query="导出", limit=5)
+    assert result.status in {ToolStatus.SUCCESS, ToolStatus.EMPTY}
+    if result.status is ToolStatus.SUCCESS:
+        assert all("requirement_key" in row and "content" in row for row in result.result)
+
+
+def test_search_by_capability_resolves_a_unique_name() -> None:
+    result = _run("search_by_capability", capability="导出 Excel 文件")
+    assert result.status is ToolStatus.SUCCESS
+    body = result.result
+    # **必须带出能力自身的状态** —— `pending_confirmation` 表示还没人工确认
+    assert "capability_status" in body
+    assert body["streams"]
+
+
+def test_search_by_capability_does_not_guess_when_ambiguous() -> None:
+    """**匹配到多个能力时不替调用方挑** —— 挑错会把两条不相干的需求混起来。"""
+    result = _run("search_by_capability", capability="创建")
+    assert result.status is ToolStatus.EMPTY
+    assert result.result and result.result.get("need_disambiguation") is True
+    assert len(result.result["candidates"]) >= 2
+    assert "请用更完整的名字重试" in (result.message or "")
+
+
+def test_search_by_capability_unknown_name_is_empty() -> None:
+    result = _run("search_by_capability", capability="zzz不存在的能力zzz")
+    assert result.status is ToolStatus.EMPTY
+
+
+def test_search_by_constraint_finds_the_requirement() -> None:
+    """按条件反查 —— 条件是独立的查询轴，不能从能力那侧问到。"""
+    result = _run("search_by_constraint", constraint="按门店")
+    assert result.status is ToolStatus.SUCCESS
+    assert result.result["streams"][0]["requirement_key"] == SAMPLE_KEY
+
+
+def test_search_by_constraint_unknown_is_empty() -> None:
+    result = _run("search_by_constraint", constraint="zzz不存在的条件zzz")
+    assert result.status is ToolStatus.EMPTY

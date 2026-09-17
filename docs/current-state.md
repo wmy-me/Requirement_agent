@@ -37,8 +37,8 @@
 > 每版显示 `change_type` 色点、前驱、**以及真实的来源链**（`/trace` 的 `sources[]`，
 > 此前从没被渲染过）。详见方案 §3.3(a)。
 
-**测试基线**：`pytest -q` → **466 passed, 2 skipped**。
-> 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ 311（能力模型六批）→ 393（G 批）→ 412（T1/T2 与 F 批）→ 434（工具层批次 1）→ 412（批次 1 回退后）→ **466**（按四层重建的批 1）。
+**测试基线**：`pytest -q` → **505 passed, 2 skipped**。
+> 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ 311（能力模型六批）→ 393（G 批）→ 412（T1/T2 与 F 批）→ 434（工具层批次 1）→ 412（批次 1 回退后）→ 466（按四层重建的批 1）→ **505**（批 2）。
 > 每次加批次都会涨，**以最新一次实测为准**。
 
 **当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
@@ -159,7 +159,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
   而四层设计要求只读工具封装 **Application Service / Query Service** —— **分层错了**。
   同时它「看起来被测着、实际没有」：11 条单测只覆盖注册表与 schema，
   **没有一个调用真实工具的 `execute`**（实测改坏底层方法名，22 条测试全绿而工具已坏）。
-  删除比修补干净。恢复：`git checkout 07edb20 -- src/requirement_agent/tools/ tests/unit/test_tool_registry.py`
+  删除比修补干净。**旧实现本身也随历史清理一并移除**（2026-09-16：那一对「加了又删」的净零 commit 被丢弃，原提交在本地标签 `backup/pre-clean` 里仍可查），设计记录保留在方案 §7
 
 **按四层重建的批次**（分析文档 §7）：
 
@@ -167,8 +167,8 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 |---|---|---|
 | **0** | 删零调用方的旧 `tools/` | ✅ **已完成**（2026-09-16） |
 | **1** | ✅ **已完成**（2026-09-16）：`application/requirement_query.py`（只读 QueryService）+ 工具契约 + **5 个样板工具** + 54 条测试（含 **23 条真实 `execute`**）。验证报告见分析文档 §8 | — |
-| **2** | 补齐其余只读工具（compare_versions / search_features / search_by_capability / search_by_constraint / list_sources / trace_sources / list_relations / get_risks），每个都要带真实 execute 测试 | ⬜ |
-| **3** | 给固定分析流程补只读查询（`retrieve` 节点带候选功能明细） | ⬜ |
+| **2** | ✅ **已完成**（2026-09-16）：补齐 8 个只读工具（共 13 个）+ QueryService 13 个查询 + 39 条测试。**顺带修掉 `/requirements/features/search` 每次 500 的 bug**，见分析文档 §9 | — |
+| **3** | 给固定分析流程补只读查询（`retrieve` 节点带候选功能明细）——**整条路线唯一尚未验证价值的一步** | ⬜ |
 | **4** | 裁决类写下沉到 Application Service（能力/关系/标题 6 处） | ⬜（取决于 §6.1） |
 | **5** | 再评估是否需要 L4（模型可调用 Adapter） | ⬜ |
 
@@ -223,6 +223,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
 > `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`、
 > **`src/requirement_agent/tools/` 整个包（2026-09-16 删除）**、
+> **`/requirements/features/search` 每次 500（2026-09-16 修复）**、
 > **雪花 ID 精度风险（2026-09-16 修复，原 6 条）**。
 >
 > 「雪花 ID」那条补两句：它原本记作「修法是序列化成字符串（契约变更，**需授权**）」，

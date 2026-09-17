@@ -976,6 +976,12 @@ class RequirementFeatureRepository:
         """feature 行级检索：按功能内容匹配，支持状态/输入人/版本号下限筛选。
 
         返回精确到“哪条功能在哪个 REQ 的哪个版本”，供功能溯源与表格明细使用。
+
+        ⚠️ **SELECT 必须带 `f.requirement_id`**：下面的 `_row_to_feature` 会读它。
+        漏掉这一列时，整个方法会在**第一次调用**就抛 `NoSuchColumnError` ——
+        而它此前接的端点 `GET /requirements/features/search` **每次都是 500**，
+        却因为唯一的单测用的是**假仓储**（自己实现了一个 `search_features`）
+        而一直没被发现。2026-09-16 写只读工具时实测暴露，已修。
         """
         owns_session = session is None
         session = session or SessionLocal()
@@ -1007,7 +1013,8 @@ class RequirementFeatureRepository:
         rows = session.execute(
             text(
                 """
-                SELECT f.id, f.feature_key, f.content, f.status, f.ordinal, f.origin_source_id,
+                SELECT f.id, f.requirement_id, f.feature_key, f.content, f.status, f.ordinal,
+                       f.origin_source_id,
                        f.origin_requirement_key, f.origin_version_no, f.removed_version_no, f.provenance,
                        f.module_key, f.module_name,
                        m.requirement_key, m.requirement_name, m.current_version, m.status AS requirement_status
