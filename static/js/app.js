@@ -353,11 +353,12 @@ function buildArtifact(p) {
   frag.appendChild(c1);
 
   // 2) similar / related
-  // 两个来源的百分比**含义不同**，必须标出来：分析候选是模型基于语义给的判断；
-  // 回退到检索结果时那个数是「关键词命中 +0.35、短语命中 +0.4」的手工加和，
+  // 两个来源的百分比**含义不同**，必须标出来：分析候选上的 `similarity` 现在是**余弦**；
+  // 回退到检索结果时那个 `score` 是「关键词命中 +0.35、短语命中 +0.4」的手工加和，
   // 既不是余弦也不是模型判断。此前两者渲染成一模一样的进度条，无法分辨。
+  // B4 起分析候选自带 `similarity_source`，用后端的口径而不是前端再猜一次。
   const cands = extCands.length
-    ? extCands.map((c) => ({ ...c, simSource: '模型判断' }))
+    ? extCands.map((c) => ({ ...c, simSource: similaritySourceLabel(c) }))
     : topCands.map((c) => ({
         requirement_key: c.requirement_key,
         title: c.requirement_name || c.title,
@@ -892,10 +893,37 @@ async function loadPendingReviews() {
 }
 function refreshPending() { loadPendingReviews(); }
 
-// 严格模式下的重复阈值（百分比），仅用于给相似度**标注口径**，不参与任何判定。
-// 判定在后端（src/requirement_agent/agents/analyze_agent.py 的 ANALYSIS_MODE_THRESHOLDS）。
-// 前端拿不到后端阈值，所以这里写死；改动后端阈值时要同步这里，否则标注会撒谎。
-const STRICT_DUPLICATE_THRESHOLD_PCT = 80;
+// 判定级别 → 中文标签。
+// ⚠️ 这里**不再复刻任何阈值**。此前前端写死了一个「严格模式重复阈值 80%」用来给相似度
+// 标注口径，那是同一份阈值的**第二份拷贝** —— 后端一改，前端标注就开始撒谎，
+// 而且不会有任何测试发现。B4 起后端把判定级别随候选一起下发（`level` 字段），
+// 前端只做映射，不再自己判断。两把锁（relevance + contrast）见
+// src/requirement_agent/domain/similarity_scale.py。
+const LEVEL_LABEL = {
+  duplicate: '重复',
+  related: '关联',
+  candidate: '待确认',
+  none: '—',
+  unverifiable: '字面命中',
+};
+
+// 余弦的来源。关键词分与余弦是两个量纲，混着显示会让人以为「60% 关键词」等于「60% 相似」。
+function similaritySourceLabel(c) {
+  return c && c.similarity_source === 'keyword_only' ? '关键词命中' : '余弦';
+}
+
+// 候选的相似度文案。没有余弦的候选**不显示百分比** —— 它那个数无从谈起。
+function similarityText(c) {
+  const label = LEVEL_LABEL[String(c.level || '')] || '';
+  if (c.similarity_source === 'keyword_only') {
+    return label ? `无相似度（${label}）` : '无相似度';
+  }
+  const sim = Number(c.similarity);
+  if (!Number.isFinite(sim) || sim <= 0) {
+    return label || '相似度未知';
+  }
+  return `相似度 ${Math.round(sim * 100)}%（${similaritySourceLabel(c)}${label ? ' · ' + label : ''}）`;
+}
 
 function currentMergeMode(box) {
   const el = box.querySelector('.merge-mode');
@@ -952,9 +980,7 @@ function renderMergeCandidates(box, item, analysis) {
     head.textContent = key;
     const sub = document.createElement('div');
     sub.className = 't-sub';
-    sub.textContent = typeof c.similarity === 'number'
-      ? `相似度 ${Math.round(c.similarity * 100)}%（严格模式重复阈值 ${STRICT_DUPLICATE_THRESHOLD_PCT}%）`
-      : '相似度未知';
+    sub.textContent = similarityText(c);
     li.appendChild(head);
     li.appendChild(sub);
     if (c.reason) {
