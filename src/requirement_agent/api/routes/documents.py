@@ -6,11 +6,37 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
-from requirement_agent.api.dependencies import document_chunk_task, document_repo
+from requirement_agent.api.dependencies import document_chunk_task, document_parser, document_repo, object_storage
 
 router = APIRouter()
+
+
+@router.post("/api/v1/documents/upload", status_code=status.HTTP_202_ACCEPTED)
+async def upload_document(file: UploadFile = File(...)) -> dict[str, object]:
+    """上传一个完整文档，内容校验和幂等，切片和向量化经 outbox 异步执行。"""
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
+    file_name = file.filename or "document.bin"
+    parsed = document_parser.parse(file_name, payload)
+    stored = object_storage.upload(file_name, payload)
+    document = document_repo.save(
+        file_name=file_name,
+        content_type=file.content_type or "application/octet-stream",
+        storage_uri=stored.uri,
+        checksum=stored.checksum,
+        size_bytes=stored.size,
+        original_text=parsed.raw_content,
+        extracted_text=parsed.content,
+        metadata={"input_mode": "document_upload", "pages": parsed.pages},
+    )
+    queued = bool(parsed.content) and not document_repo.has_chunks(int(document["id"]))
+    result = None
+    if queued:
+        result = document_chunk_task.enqueue(document_id=int(document["id"]), content=parsed.content)
+    return {"document": document, "status": "queued" if queued else "ready", "result": result}
 
 
 @router.get("/api/v1/documents")
@@ -48,6 +74,14 @@ async def get_document_chunks(
 ) -> dict[str, object]:
     """文档分块列表：按 id 返回分块数组 {"document_id", "items": [...]}。"""
     return {"document_id": document_id, "items": document_repo.get_chunks(document_id, limit=limit)}
+
+
+@router.get("/api/v1/documents/{document_id}/versions")
+async def get_document_versions(document_id: int) -> dict[str, object]:
+    versions = document_repo.list_versions(document_id)
+    if versions is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return {"document_id": str(document_id), "items": versions}
 
 
 @router.post("/api/v1/documents/{document_id}/reindex")

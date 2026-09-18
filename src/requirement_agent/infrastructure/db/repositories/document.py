@@ -57,18 +57,45 @@ class DocumentAssetRepository:
         if existing is not None:
             return existing
         with SessionLocal() as session:
+            # 主线身份由迁移 019 固化为 (file_name, content_type)。内容变化是新版本，
+            # 不是一条与历史无关的新资产；这一段必须与后面的资产插入同一事务完成。
+            stream = session.execute(
+                text(
+                    """
+                    INSERT INTO document_stream (id, file_name, content_type, current_version_no)
+                    VALUES (:id, :file_name, :content_type, 0)
+                    ON CONFLICT (file_name, content_type) DO UPDATE
+                        SET file_name = EXCLUDED.file_name
+                    RETURNING id, current_version_no
+                    """
+                ),
+                {"id": new_id(), "file_name": file_name, "content_type": content_type},
+            ).mappings().one()
+            next_version = int(stream["current_version_no"]) + 1
+            if next_version > 1:
+                session.execute(
+                    text(
+                        """UPDATE document_asset
+                           SET status = 'superseded', superseded_by_version_no = :next_version
+                           WHERE stream_id = :stream_id AND status = 'current'"""
+                    ),
+                    {"stream_id": stream["id"], "next_version": next_version},
+                )
             row = session.execute(
                 text(
                     """
                     INSERT INTO document_asset (
                         id, file_name, content_type, storage_uri, checksum, size_bytes,
-                        source_type, source_id, original_text, extracted_text, metadata
+                        source_type, source_id, original_text, extracted_text, metadata,
+                        stream_id, version_no, status
                     ) VALUES (
                         :id, :file_name, :content_type, :storage_uri, :checksum, :size_bytes,
-                        :source_type, :source_id, :original_text, :extracted_text, CAST(:metadata AS JSONB)
+                        :source_type, :source_id, :original_text, :extracted_text, CAST(:metadata AS JSONB),
+                        :stream_id, :version_no, 'current'
                     )
                     RETURNING id, file_name, content_type, storage_uri, checksum, size_bytes,
-                              source_type, source_id, original_text, extracted_text, metadata, created_at
+                              source_type, source_id, original_text, extracted_text, metadata,
+                              stream_id, version_no, status, superseded_by_version_no, created_at
                     """
                 ),
                 {
@@ -83,8 +110,14 @@ class DocumentAssetRepository:
                     "original_text": original_text or "",
                     "extracted_text": extracted_text or "",
                     "metadata": json.dumps(metadata or {}),
+                    "stream_id": stream["id"],
+                    "version_no": next_version,
                 },
             ).mappings().one()
+            session.execute(
+                text("UPDATE document_stream SET current_version_no = :version_no WHERE id = :stream_id"),
+                {"stream_id": stream["id"], "version_no": next_version},
+            )
             session.commit()
         return self._normalize_asset_row(row)
 
@@ -96,7 +129,8 @@ class DocumentAssetRepository:
             row = session.execute(
                 text(
                     "SELECT id, file_name, content_type, storage_uri, checksum, size_bytes, "
-                    "source_type, source_id, original_text, extracted_text, metadata, created_at "
+                    "source_type, source_id, original_text, extracted_text, metadata, stream_id, "
+                    "version_no, status, superseded_by_version_no, created_at "
                     "FROM document_asset WHERE checksum = :checksum ORDER BY created_at LIMIT 1"
                 ),
                 {"checksum": checksum},
@@ -123,7 +157,8 @@ class DocumentAssetRepository:
                 text(
                     """
                     SELECT id, file_name, content_type, storage_uri, checksum, size_bytes,
-                           source_type, source_id, original_text, extracted_text, metadata, created_at
+                           source_type, source_id, original_text, extracted_text, metadata, stream_id,
+                           version_no, status, superseded_by_version_no, created_at
                     FROM document_asset
                     ORDER BY created_at DESC
                     LIMIT :limit
@@ -140,7 +175,8 @@ class DocumentAssetRepository:
                 text(
                     """
                     SELECT id, file_name, content_type, storage_uri, checksum, size_bytes,
-                           source_type, source_id, original_text, extracted_text, metadata, created_at
+                           source_type, source_id, original_text, extracted_text, metadata, stream_id,
+                           version_no, status, superseded_by_version_no, created_at
                     FROM document_asset
                     WHERE id = :document_id
                     """
@@ -148,6 +184,25 @@ class DocumentAssetRepository:
                 {"document_id": document_id},
             ).mappings().first()
         return self._normalize_asset_row(row) if row else None
+
+    def list_versions(self, document_id: int) -> list[dict[str, object]] | None:
+        """返回文档所在主线的完整版本链，旧版本也可审计、不可被当前视图误当成现行。"""
+        with SessionLocal() as session:
+            stream_id = session.execute(
+                text("SELECT stream_id FROM document_asset WHERE id = :document_id"),
+                {"document_id": document_id},
+            ).scalar()
+            if stream_id is None:
+                return None
+            rows = session.execute(
+                text(
+                    """SELECT id, file_name, content_type, storage_uri, checksum, size_bytes,
+                              source_type, source_id, original_text, extracted_text, metadata, stream_id,
+                              version_no, status, superseded_by_version_no, created_at
+                       FROM document_asset WHERE stream_id = :stream_id ORDER BY version_no DESC"""
+                ), {"stream_id": stream_id},
+            ).mappings().all()
+        return [self._normalize_asset_row(row) for row in rows]
 
     @staticmethod
     def _embedding_model_name() -> str:
@@ -277,6 +332,13 @@ class DocumentAssetRepository:
             "original_text": row["original_text"],
             "extracted_text": row["extracted_text"],
             "metadata": dict(row["metadata"] or {}),
+            "stream_id": to_sid(row.get("stream_id")),
+            "version_no": int(row["version_no"]) if row.get("version_no") is not None else None,
+            "status": row.get("status"),
+            "superseded_by_version_no": (
+                int(row["superseded_by_version_no"])
+                if row.get("superseded_by_version_no") is not None else None
+            ),
             "created_at": as_display_iso(row["created_at"]),
         }
 
@@ -344,4 +406,3 @@ class DocumentAssetRepository:
 )
 
         return EmbeddingService().embed(text)
-

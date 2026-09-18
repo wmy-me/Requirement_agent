@@ -114,6 +114,7 @@ WRITE_SCOPE_RULES: Final = (
     (re.compile(r"^/api/v1/requirement-titles/"), REVIEW),
     (re.compile(r"^/api/v1/ops/"), OPS),
     (re.compile(r"^/api/v1/documents/[^/]+/reindex$"), OPS),
+    (re.compile(r"^/api/v1/documents/upload$"), ANALYZE),
     (re.compile(r"^/api/v1/agent/"), ANALYZE),
     (re.compile(r"^/api/v1/conversations"), ANALYZE),
     (re.compile(r"^/api/v1/memory"), ANALYZE),

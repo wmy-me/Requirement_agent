@@ -75,6 +75,35 @@ def test_different_checksum_creates_new_asset() -> None:
         _purge(b)
 
 
+def test_changed_content_advances_the_same_document_stream() -> None:
+    """同名同格式的不同内容必须形成版本链，而非两条互不关联的资产。"""
+    repo = DocumentAssetRepository()
+    checksum_a, checksum_b = f"test-{uuid.uuid4().hex}", f"test-{uuid.uuid4().hex}"
+    name = f"版本-{uuid.uuid4().hex}.txt"
+    try:
+        first = _save(repo, checksum=checksum_a, file_name=name, uri="file:///tmp/v1.txt")
+        second = _save(repo, checksum=checksum_b, file_name=name, uri="file:///tmp/v2.txt")
+
+        assert first["stream_id"] == second["stream_id"]
+        assert first["version_no"] == 1 and first["status"] == "current"
+        assert second["version_no"] == 2 and second["status"] == "current"
+        versions = repo.list_versions(int(second["id"]))
+        assert versions is not None
+        assert [(item["version_no"], item["status"]) for item in versions] == [
+            (2, "current"), (1, "superseded"),
+        ]
+        assert versions[1]["superseded_by_version_no"] == 2
+    finally:
+        _purge(checksum_a)
+        _purge(checksum_b)
+        with SessionLocal() as session:
+            session.execute(
+                text("DELETE FROM document_stream WHERE file_name = :name AND content_type = 'text/plain'"),
+                {"name": name},
+            )
+            session.commit()
+
+
 def test_find_by_checksum_handles_blank() -> None:
     repo = DocumentAssetRepository()
 
