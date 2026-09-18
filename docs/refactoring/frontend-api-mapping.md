@@ -505,6 +505,47 @@ meta  stage  checkpoint  created_at  updated_at
 
 **响应**：`{message, source_type, status, source_id}` —— ⚠️ **`source_id` 在这里是 number**（schema 声明为 `int`）。
 
+#### 🔴 **这个端点是同步的，会阻塞 10～60 秒**
+
+**2026-09-18 实测**：提交一条 90 字的需求，请求耗时 **26.5 秒** ——
+`requirement_service.submit_requirement` 直接在请求里跑完整条 LangGraph 分析链
+（extract → retrieve → analyze → risk → decide），期间 4 次真实 LLM 调用：
+
+```
+11:32:59  run started
+11:33:04  extract    4973ms
+11:33:04  embedding   383ms
+11:33:19  analyze   14632ms
+11:33:25  risk       6090ms
+11:33:25  HTTP 200 返回
+```
+
+**异步路径（outbox）只给渠道 webhook 用** —— 飞书要求 3 秒内响应，所以
+`accept_requirement` 只落库、由 `RequirementAnalysisTask` 后台跑。
+**HTTP 端点走的是同步那条**（`requirements_write.py:125` 与 `:252`，
+后者意味着**文件导入同样阻塞**）。
+
+**前端必须做的**：
+
+- 提交按钮**进入 loading 态并禁用** —— 不防重复点击的话，用户会以为卡死了
+- **客户端超时放宽到 90 秒以上**（裸 `fetch` 没有默认超时，但套了 axios 之类的默认值就会断）
+- 进度不可知 —— 服务端没有「分析到哪一步了」的中间响应。只能显示不确定态进度条，
+  或者推动后端加一个异步提交端点（见 §6）
+
+**重试是安全的，但有个前提**：幂等键是
+`{source_type}:{requester_id or 'anonymous'}:{sha256(正文)[:32]}`。
+同渠道 + 同 `requester_id` + 同正文 → 同一条来源；已处理过就直接返回现状、
+**不重复分析**。所以超时后原样重试不会产生第二条来源、也不会再花一次 LLM 钱。
+
+> ⚠️ **幂等键用的是 `requester_id`，不是 `requester_name`。**
+> 前端表单目前只让填 `requester_name`（没有登录，拿不到 id），
+> 于是键里的发起人恒为 `'anonymous'` —— **两个人贴同样的文本会被合并成同一条来源**。
+> 这可能正是想要的去重，但界面上要说清楚，否则「我提交了但列表里没有新记录」
+> 会被当成 bug。见 §6 待办。
+>
+> ⚠️ 上面那份计时就是**本仓库里真实跑的一次**：为了验证接口形状提交了一条测试需求
+> （`requester_name="验证-2026-09-18"`），它现在是一条真实的 `pending_review` 来源。
+
 ### 3.16 `POST /api/v1/requirements/ingest`（档次 `submit`）
 
 **multipart/form-data**。表单字段：`source_type`(默认 `web`，**自由字符串**，与 §3.15 的枚举不同)、
@@ -822,11 +863,60 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 > 前端点「提醒推送能力」会打开「任务指派能力」。
 > 实测响应里 `id` 是**字符串** ✅ —— 这个坑目前是堵住的。
 
-#### ⚠️ 仍未验证的两处（都卡在「要跑一次真实分析」）
+#### ✅ 2026-09-18 跑了一次真实分析（提交 90 字需求，26.5 秒，4 次 LLM 调用）
 
-1. `highlight.kind === 'constraint'` —— 派生逻辑在分析链路里
-2. `capability_match.constraints.matched[]` **出现在真实审核页上** ——
-   目前只有 `persist=False` 的直接调用证据，没有一条真实来源带它
+`capability_match.constraints.matched[]` **在真实来源上验证了** —— 第 2 条结案：
+
+```json
+"capability_match": {
+  "business_object": "门店巡检数据",
+  "constraints": {
+    "matched": [{"raw": "按部门维度筛选", "alias_hit": true,
+                 "constraint_id": "226535744766738432", "constraint_key": "按部门筛选"}],
+    "unmatched": []
+  },
+  "capabilities": [
+    {"action": "导出", "object": "Excel", "matched": false, "proposed": true,
+     "capability_id": "226546126193426432", "status": "pending_confirmation"}
+  ],
+  "summary": {"capability_total": 2, "capability_matched": 0, "capability_proposed": 2,
+              "constraint_matched": 1, "constraint_unmatched": 0}
+}
+```
+
+> ✅ **`capability_id` 是字符串**（`"226546126193426432"`）—— 走 `persist=True` 的真实分析
+> 确实会给提案一个真实 id。这印证了 §3.21 那条：`persist=False` 时它是 `null`，
+> 契约 §4.1 的样例里 proposed 带着 id 是对的，只是要分清哪种情况。
+
+**同时验证到的**（这些此前只有源码或合成数据）：
+
+| 项 | 实测结果 |
+|---|---|
+| `analysis` 类型的 run | ✅ 真的会建：`run_type=analysis`、`status=waiting_review`（**不是 `completed`**）、`current_node=decide` |
+| run 的时间格式 | ✅ `2026-09-18T11:32:59.223740+08:00` —— §5.2 的修复在真实数据上生效 |
+| **`/ops/models?run_id=`** | ✅ **4 条真实模型调用**（extract/embedding/analyze/risk），§3.17 的新参数有了真实数据 |
+| `tools[].id` | ✅ 字符串 |
+| `/invocations` 的 `models` | ✅ **仍然恒空**，坐实了「模型走 `/ops/models`」 |
+| 事件时间线 | ✅ 15 条，`sequence` 从 1 起，`run_started` → `node_started`/`node_completed` 成对，另有 `candidate_found` / `relation_found` |
+| `metadata.retrieval` | ✅ 8 个键全在：`calibration / candidate_count / candidates / contrast / contrast_confidence / filters / query / recall_limit` |
+| `metadata.degradation` | ✅ **不存在**（本次没降级）—— 印证「只有真降级时才写这个键」 |
+| `metadata` 顶层键 | 8 个：`analysis / business_domain / capability_match / extracted / retrieval / risk / standardized_document / tool_calls` |
+
+> ⚠️ `retrieval.candidates[0]` 实测 `match_type` / `keyword_score` / `retrieval_score`
+> **都是 `null`**，而契约 §4 的样例给了具体值。差别在于这次关键词检索没有命中
+> （只有向量命中），所以那几个字段没有值。**前端要按可空处理**，不要照契约样例
+> 假设它们一定是数字。
+
+#### ⚠️ 仍未验证的一处：`highlight.kind === 'constraint'`
+
+**查到根因了**：标题派生不在分析链路，而在 **`workflows/commit_nodes.py:506`** ——
+也就是**审核通过、来源入库**的那一刻（从 `capability_match.constraints.matched[].constraint_key`
+派生「按条件的能力叫法」）。
+
+所以它需要的不只是「跑一次分析」，而是**真的走一次审核通过、把来源并进某个 REQ**。
+那会给目标需求**产生一个新版本**，属于改动正式需求库的动作 ——
+**没有你的明确同意，我不做。** 要验的话，建议单独挑一条测试需求、或指定一个
+可以接受被改的 REQ；不要拿 REQ-000015 试。
 
 > 另有一条**运营层的发现**（不是接口问题）：库里 **19 条能力全部是 `pending_confirmation`，
 > 一条 `active` 都没有**。而只有 `active` 参与匹配（`find_exact(only_active=True)`）。
@@ -913,7 +1003,15 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 | 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | ✅ **已定** —— 先按状态码分支，409 内弱匹配前缀，读不到按最安全的处理。见 §3.6 |
 | 5 | **三个空形状**要不要先造数据 | 阶段 11 | ✅ **已定：先造** |
 | 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `docs/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
-| 7 | **`verify_api_contract.py` 的 SPEC 只覆盖 13 个端点**（原 10 个） | 全局 | ⏳ **待定** —— 本次补了 3 个（都是出问题的那几个）。**要不要补全到 73 条？** 不补的话下次还会有「全绿但有问题」 |
+| 7 | ~~**SPEC 只覆盖 13 个端点**~~ | 全局 | ✅ **已补到 43 条 + 覆盖率闸门**，见 §5.6 / §5.7 |
+| 8 | **`POST /requirements/submit` 同步阻塞 26 秒** | 阶段 9 | ⏳ **待定** —— 前端只能做不确定态进度；**要不要后端加异步提交端点？** 见 §3.15 |
+| 9 | **幂等键用 `requester_id`，表单只有 `requester_name`** | 阶段 9 | ⏳ **待定** —— 导致「同文本多人提交被合并成一条」。是接受这个语义并在界面说明，还是要后端改键？见 §3.15 |
+
+> 第 8 条值得单独想：26 秒的同步请求在内部工具里不是不能接受（它确实是
+> 「提交完就等结果」的语义），但它会**卡住用户 26 秒**，而且中间没有任何反馈。
+> 后端已有异步路径（`accept_requirement` + outbox，渠道 webhook 用的就是它），
+> 把它暴露成一个 `POST /requirements/submit/async` 是**复用既有实现**，
+> 成本不高。要不要做由你定。
 
 > 第 7 条是本次最有价值的一条。已经证明过一次：**把 `/agent/runs` 加进 SPEC，
 > 立刻又扫出 `meta.assistant_message_id` 是 number** —— 它此前躺在盲区里，
