@@ -87,18 +87,35 @@ class ModelInvocationRepository:
                 exc,
             )
 
-    def list_by_run(self, run_id: str, limit: int = 200) -> list[dict[str, object]]:
+    def list_by_run(
+        self, run_id: str, limit: int = 200, task_type: str | None = None
+    ) -> list[dict[str, object]]:
+        """某次运行的模型调用，**按发生顺序**（`ASC`）。
+
+        与 `list_recent` 的 `DESC` 是**刻意相反**的，因为用途不同：
+        · 全局清单（`list_recent`）要的是「最近都调了什么」→ 倒序；
+        · Run 详情页要的是「这次运行依次调了什么」→ 正序，与节点时间线对齐。
+
+        `task_type` 与 `run_id` **可组合**，不是二选一 —— 组合时若静默丢掉一个，
+        调用方会拿到一份看起来合理、实则范围不对的结果。
+        """
+        where = ["run_id = CAST(:r AS UUID)"]
+        params: dict[str, object] = {"r": run_id, "limit": max(1, min(limit, 500))}
+        if task_type:
+            where.append("task_type = :task_type")
+            params["task_type"] = task_type
+
         with SessionLocal() as session:
             rows = session.execute(
                 text(
                     f"""
                     SELECT {_COLUMNS} FROM model_invocation
-                    WHERE run_id = CAST(:r AS UUID)
+                    WHERE {' AND '.join(where)}
                     ORDER BY created_at ASC
                     LIMIT :limit
                     """
                 ),
-                {"r": run_id, "limit": max(1, min(limit, 500))},
+                params,
             ).mappings().all()
         return [_normalize(dict(row)) for row in rows]
 

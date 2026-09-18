@@ -106,6 +106,7 @@ async def get_worker_status(request: Request) -> dict[str, object]:
 @router.get("/api/v1/ops/models")
 async def list_model_invocations(
     task_type: str | None = None,
+    run_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, object]:
     """模型调用记录 + **路由配置诊断**。
@@ -113,12 +114,24 @@ async def list_model_invocations(
     「我明明给 analyze 配了模型，怎么没生效」—— `routing.unrecognized` 就是答案：
     它列出配了但**未被采用**的条目及原因（provider 名拼错 / task_type 拼错 / 缺字段）。
     配置是手写 JSON，写错键名是常事，而这个诊断让「配了没生效」不必靠读代码猜。
+
+    `run_id` 是给**智能分析页的 Run 详情**用的（2026-09-18 新增）：那个页面要的是
+    「这次运行调了哪些模型」，此前只能拉全量自己筛 —— 而「前端不聚合后端数据」
+    是本项目的既定原则。带上 `run_id` 时**返回顺序是正序**（与节点时间线对齐），
+    不带时是倒序（最近优先），见 `ModelInvocationRepository.list_by_run` 的说明。
+
+    ⚠️ `GET /api/v1/agent/runs/{id}/invocations` 的 `models` 字段**恒为空数组** ——
+    模型调用明细在这里拿，不在那里。
     """
     from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
 
     registry = ModelRegistry()
+    if run_id:
+        items = model_invocation_repo.list_by_run(run_id, limit=limit, task_type=task_type)
+    else:
+        items = model_invocation_repo.list_recent(task_type=task_type, limit=limit)
     return {
-        "items": model_invocation_repo.list_recent(task_type=task_type, limit=limit),
+        "items": items,
         "routing": {
             "unrecognized": registry.unrecognized(),
             "resolved": {

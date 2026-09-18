@@ -189,6 +189,93 @@ def test_models_routing_resolved_matches_the_registry(client: TestClient) -> Non
     assert body["routing"]["resolved"]["analyze"]["model"] == registry.get_chat_model("analyze").model
 
 
+# 造行验证 `run_id` 过滤用的标记 —— 用 provider 名而不是 id 来清理，
+# 这样 finally 里一定能删干净，不依赖 id 生成方式。
+_RUNID_FILTER_MARK = "__test_runid_filter__"
+
+
+def _seed_invocations_for(run_id: str) -> None:
+    with SessionLocal() as session:
+        for index, task_type in enumerate(("analyze", "risk")):
+            session.execute(
+                text(
+                    """
+                    INSERT INTO model_invocation
+                        (id, run_id, task_type, provider, model, status, created_at)
+                    VALUES
+                        (:id, CAST(:run_id AS UUID), :task_type, :provider, 'test-model', 'ok',
+                         NOW() - make_interval(secs => :ago))
+                    """
+                ),
+                {
+                    "id": 999000000000000001 + index,
+                    "run_id": run_id,
+                    "task_type": task_type,
+                    "provider": _RUNID_FILTER_MARK,
+                    "ago": 10 - index * 5,  # analyze 更早、risk 更晚
+                },
+            )
+        session.commit()
+
+
+def _drop_seeded_invocations() -> None:
+    with SessionLocal() as session:
+        session.execute(
+            text("DELETE FROM model_invocation WHERE provider = :p"),
+            {"p": _RUNID_FILTER_MARK},
+        )
+        session.commit()
+
+
+def test_models_can_be_filtered_by_run_id(client: TestClient) -> None:
+    """Run 详情页要「这次运行调了哪些模型」—— 按 `run_id` 过滤，**正序**。
+
+    正序与全局清单的倒序是刻意相反的：全局看「最近调了什么」，run 内看
+    「依次调了什么」，后者要与节点时间线对齐。
+
+    `run_id` 与 `task_type` **可组合**，不是二选一 —— 组合时静默丢掉一个，
+    调用方会拿到一份看起来合理、实则范围不对的结果（同一个陷阱见
+    `/api/v1/agent/runs` 的 `source_id`）。
+
+    ⚠️ 库里目前一个绑 run 的调用都没有（42 条全是 `embedding`、`run_id IS NULL`）：
+    `bind_run_id` 只在分析链路里调用，而现存的分析都跑在 B2.1（运行追踪）之前。
+    所以这里**自己造两行**再删掉，否则这条断言在当前数据上永远不会被执行。
+    """
+    with SessionLocal() as session:
+        run_id = session.execute(text("SELECT run_id FROM agent_run LIMIT 1")).scalar()
+    if not run_id:
+        pytest.skip("库里没有 run，无法验证 run_id 过滤")
+
+    try:
+        _seed_invocations_for(str(run_id))
+
+        body = client.get("/api/v1/ops/models", params={"run_id": str(run_id), "limit": 200}).json()
+        items = [i for i in body["items"] if i["provider"] == _RUNID_FILTER_MARK]
+        assert len(items) == 2, "按 run_id 过滤应拿回刚造的两条"
+        stamps = [i["created_at"] for i in items]
+        assert stamps == sorted(stamps), "绑了 run 时按发生顺序（正序）"
+
+        combo = client.get(
+            "/api/v1/ops/models",
+            params={"run_id": str(run_id), "task_type": "risk", "limit": 200},
+        ).json()
+        matched = [i for i in combo["items"] if i["provider"] == _RUNID_FILTER_MARK]
+        assert len(matched) == 1 and matched[0]["task_type"] == "risk", (
+            "run_id + task_type 要叠加过滤，不能静默丢掉其中一个"
+        )
+    finally:
+        _drop_seeded_invocations()
+
+
+def test_models_without_run_id_still_lists_everything_newest_first(client: TestClient) -> None:
+    """不带 `run_id` 时行为不变：全量、倒序。**新增参数不能改变既有路径。**"""
+    items = client.get("/api/v1/ops/models", params={"limit": 10}).json()["items"]
+    if len(items) < 2:
+        pytest.skip("样本太少，看不出顺序")
+    stamps = [i["created_at"] for i in items]
+    assert stamps == sorted(stamps, reverse=True), "全局清单应是最新的在前"
+
+
 # ── ⑤ /ops/worker ─────────────────────────────────────────────────────────
 
 
