@@ -19,7 +19,7 @@
 const TOKEN = document.querySelector('meta[name="ra-ui-token"]')?.content || '';
 
 /** 带鉴权头的 fetch 包装。**所有请求都要经过它**（否则就是那一页 401）。 */
-async function request(path, { method = 'GET', body, params } = {}) {
+async function request(path, { method = 'GET', body, params, timeoutMs = 12000, signal } = {}) {
   let url = path;
   if (params) {
     const qs = new URLSearchParams();
@@ -33,15 +33,41 @@ async function request(path, { method = 'GET', body, params } = {}) {
   }
   const headers = {};
   if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (body !== undefined && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
 
-  const resp = await fetch(url, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort('timeout'), timeoutMs);
+  const abortFromCaller = () => controller.abort(signal.reason || 'aborted');
+  if (signal) {
+    if (signal.aborted) abortFromCaller();
+    else signal.addEventListener('abort', abortFromCaller, { once: true });
+  }
 
-  if (!resp.ok) throw new Error(await describeError(resp));
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted && controller.signal.reason === 'timeout') {
+      const timeoutError = new Error('请求超时（12 秒）—— 请检查服务状态后重试。');
+      timeoutError.code = 'timeout';
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener('abort', abortFromCaller);
+  }
+
+  if (!resp.ok) {
+    const httpError = new Error(await describeError(resp));
+    httpError.status = resp.status;
+    throw httpError;
+  }
   if (resp.status === 204) return null;
   return resp.json();
 }
@@ -72,21 +98,40 @@ async function describeError(resp) {
 
 const api = {
   dashboard: {
-    overview: () => request('/api/v1/stats/overview'),
+    overview: (params) => request('/api/v1/stats/overview', { params }),
     health: () => Promise.allSettled([
       request('/api/v1/health/db'),
       request('/api/v1/health/llm'),
       request('/api/v1/health/embedding'),
     ]),
+    pending: (limit = 5) => request('/api/v1/reviews/pending', { params: { limit } }),
+    failedRuns: (limit = 5) => request('/api/v1/agent/runs', { params: { status: 'failed', limit } }),
+    outbox: (limit = 5) => request('/api/v1/ops/outbox', { params: { limit } }),
+    runs: (params) => request('/api/v1/agent/runs', { params }),
+    run: (runId) => request(`/api/v1/agent/runs/${encodeURIComponent(String(runId))}`),
+    runEvents: (runId, params) => request(`/api/v1/agent/runs/${encodeURIComponent(String(runId))}/events`, { params }),
+    runInvocations: (runId) => request(`/api/v1/agent/runs/${encodeURIComponent(String(runId))}/invocations`),
+    worker: () => request('/api/v1/ops/worker'),
+    models: (params) => request('/api/v1/ops/models', { params }),
+    channels: () => request('/api/v1/ops/channels'),
   },
   requirements: {
     list: (params) => request('/api/v1/requirements', { params }),
     versions: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/versions`),
+    diff: (key, params) => request(`/api/v1/requirements/${encodeURIComponent(key)}/diff`, { params }),
     features: (key, params) => request(`/api/v1/requirements/${encodeURIComponent(key)}/features`, { params }),
     trace: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/trace`),
     relations: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/relations`),
     capabilities: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/capabilities`),
     titles: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/titles`),
+  },
+  sources: {
+    list: (params) => request('/api/v1/sources', { params }),
+    trace: (sourceId) => request(`/api/v1/sources/${encodeURIComponent(String(sourceId))}/trace`),
+  },
+  intake: {
+    submit: (payload) => request('/api/v1/requirements/submit/async', { method: 'POST', body: payload }),
+    ingest: (form) => request('/api/v1/requirements/ingest', { method: 'POST', body: form }),
   },
   reviews: {
     pending: (limit = 50) => request('/api/v1/reviews/pending', { params: { limit } }),
@@ -192,8 +237,8 @@ const state = {
     el('div', { text: msg }),
     hint ? el('div', { class: 'state-hint', text: hint }) : null,
   ]),
-  error: (err, onRetry) => el('div', { class: 'state state-error' }, [
-    el('div', { class: 'state-title', text: '加载失败' }),
+  error: (err, onRetry) => el('div', { class: 'state state-error' + (err && err.status === 403 ? ' state-permission' : '') }, [
+    el('div', { class: 'state-title', text: err && err.status === 403 ? '权限不足' : '加载失败' }),
     el('div', { class: 'state-msg', text: err && err.message ? err.message : String(err) }),
     onRetry ? el('button', { class: 'btn', text: '重试', onclick: onRetry }) : null,
   ]),
@@ -257,7 +302,7 @@ function head(title, desc) {
 
 function kvRow(label, node, hint) {
   return [el('dt', { text: label }),
-          el('dd', {}, [node, hint ? el('div', { class: 'tiny', text: hint }) : null])];
+          el('dd', {}, [].concat(node || []).concat(hint ? [el('div', { class: 'tiny', text: hint })] : []))];
 }
 
 /** 详情抽屉。点列表某行打开，点关闭或按 Esc 收起。 */
@@ -314,5 +359,30 @@ function metric(label, value, hint, kind) {
     el('div', { class: 'metric-v', text: String(value) }),
     el('div', { class: 'metric-l', text: label }),
     hint ? el('div', { class: 'metric-h', text: hint }) : null,
+  ]);
+}
+
+/** URL 查询状态与前端分页只在公共层实现，页面不重复拼参数。 */
+function queryParams(values) {
+  return Object.fromEntries(Object.entries(values || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+}
+
+function paginate(items, page, pageSize) {
+  const safeSize = Math.max(1, Number(pageSize) || 20);
+  const total = Array.isArray(items) ? items.length : 0;
+  const pages = Math.max(1, Math.ceil(total / safeSize));
+  const current = Math.min(Math.max(1, Number(page) || 1), pages);
+  return { items: (items || []).slice((current - 1) * safeSize, current * safeSize), total, pages, current, pageSize: safeSize };
+}
+
+function paginationBar(model, onChange) {
+  if (model.total <= model.pageSize) return null;
+  return el('div', { class: 'pagination' }, [
+    el('span', { class: 'tiny', text: `显示 ${(model.current - 1) * model.pageSize + 1}–${Math.min(model.current * model.pageSize, model.total)} / ${model.total}` }),
+    el('div', { class: 'pagination-actions' }, [
+      el('button', { class: 'btn', text: '上一页', disabled: model.current <= 1, onclick: () => onChange(model.current - 1) }),
+      el('span', { class: 'pagination-page', text: `${model.current} / ${model.pages}` }),
+      el('button', { class: 'btn', text: '下一页', disabled: model.current >= model.pages, onclick: () => onChange(model.current + 1) }),
+    ]),
   ]);
 }

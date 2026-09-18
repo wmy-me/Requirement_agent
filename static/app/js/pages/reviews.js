@@ -152,8 +152,10 @@ async function openReview(item, refresh) {
       const extracted = meta.extracted || {};
       const analysis = meta.analysis || {};
       const risk = meta.risk || {};
+      const degradation = meta.degradation || null;
+      const capabilityMatch = meta.capability_match || {};
       body.replaceChildren(
-        section('来源信息', kv([
+        section('来源事实', kv([
           ['来源 ID', el('span', { class: 'mono', text: String(detail.source_id) })],
           ['提交人', detail.requester_name || '未提供'], ['渠道', detail.source_type || '未提供'],
           ['提交时间', fmt.time(detail.submitted_at)], ['当前状态', statusBadge(detail.processing_status)],
@@ -164,14 +166,29 @@ async function openReview(item, refresh) {
             ['业务对象', extracted.business_object || '未提供']]),
           textBlock(extracted.raw_text || detail.extracted_text),
         ]),
-        section('分析与风险', [
+        section('AI 分析结果（非人工结论）', [
+          degradation ? el('div', { class: 'notice notice-warn' }, [
+            el('strong', { text: '分析降级：' }),
+            el('span', { text: degradation.reason || '模型链路降级，审核时请谨慎确认。' }),
+            degradation.fields?.length ? el('div', { class: 'tiny', text: `受影响字段：${degradation.fields.join('、')}` }) : null,
+          ]) : null,
           kv([['建议', analysis.suggestion?.action || '未提供'], ['建议目标', analysis.suggestion?.target_requirement_key || '未提供'],
             ['质量风险', levelBadge(risk.quality_risk)], ['变更风险', levelBadge(risk.change_risk)],
             ['技术风险', levelBadge(risk.technical_impact_risk)], ['置信度', fmt.num(risk.confidence)]]),
           textBlock(analysis.reasoning, '未提供分析理由'),
         ]),
+        section('能力匹配（AI 提议）', compactJson({
+          business_object: capabilityMatch.business_object,
+          capabilities: capabilityMatch.capabilities,
+          constraints: capabilityMatch.constraints,
+          summary: capabilityMatch.summary,
+        }, '未提供能力匹配结果')),
         section('相似与冲突候选', compactJson({ duplicate: analysis.duplicate, related: analysis.related, conflict: analysis.conflict })),
-        decisionForm(detail, requirements.items || [], () => { refresh(); closeDrawer(); }),
+        el('div', { class: 'review-human-boundary' }, [
+          el('h3', { class: 'section-title', text: '人工裁决' }),
+          el('p', { text: '以下按钮才会改变审核状态或创建需求版本。AI 分析不会自动写入正式需求。' }),
+          decisionForm(detail, requirements.items || [], () => { refresh(); closeDrawer(); }),
+        ]),
       );
     } catch (err) {
       body.replaceChildren(state.error(err, () => openReview(item, refresh)));

@@ -1,101 +1,115 @@
-/* 总览：一屏回答「有什么要处理、系统健不健康、数据长什么样」。
- *
- * 数据全部来自 `GET /api/v1/stats/overview`（聚合在后端做，前端不算 ——
- * 前端算的话 `limit` 一满就静默少算）。
- */
+/* F1 总览：只消费后端真实聚合与只读列表接口。 */
 'use strict';
 
 function renderOverview() {
   const page = document.getElementById('page');
-
-  // ⚠️ **五块各自加载，不 await 串起来。** 串行的话一个慢接口会挡住整屏，
-  //    而且任何一块失败都会让后面的卡片根本不渲染 —— 它们之间没有依赖关系。
-  const todo = el('div', { class: 'metrics' });
+  const overview = el('div');
   const health = el('div');
-  const dist = el('div');
-  const riskBox = el('div');
-  const trendBox = el('div');
+  const pending = el('div');
+  const changes = el('div');
+  const incidents = el('div');
 
   page.replaceChildren(
-    head('总览', '待办事项、系统健康与数据分布'),
-    todo, health, dist, riskBox, trendBox,
+    el('div', { class: 'page-toolbar' }, [
+      head('总览', '需求治理工作台的待办、风险、输入与运行健康'),
+      el('span', { class: 'data-note', text: '数据来自实时接口' }),
+    ]),
+    overview,
+    el('div', { class: 'overview-grid' }, [health, pending, changes, incidents]),
   );
 
-  load(todo, () => api.dashboard.overview(), (d) => [
-    metric('待审核', d.pending_review, '等人工裁决的来源'),
-    metric('高风险', d.high_risk, `基于已分析的 ${d.analysed_sources} 条`, d.high_risk ? 'bad' : null),
-    metric('冲突', d.conflict, null, d.conflict ? 'warn' : null),
-    metric('死信', d.dead_letter, '需要人工处理', d.dead_letter ? 'bad' : null),
-    metric('需求总数', d.requirements_total, '已入库的主需求'),
-    metric('来源总数', d.sources_total, '全部渠道输入'),
-  ]);
-
-  // ⚠️ 风险/冲突只是**已分析**来源里的数 —— 分母写在指标卡上，
-  //    否则「高危 6 条」会被读成全库统计。
-
-  load(dist, () => api.dashboard.overview(), (d) => [
-    el('div', { class: 'cols cols-2' }, [
-      card('审核漏斗（来源状态分布）', [distribution(d.source_status_counts, STATUS_LABEL)]),
-      card('渠道占比', [distribution(d.channel_counts)]),
-      card('业务域分布', [distribution(d.domain_counts)]),
-      card('风险矩阵（质量 × 变更）', [
-        d.risk_matrix.length
-          ? table([
-              { key: 'quality_risk', label: '质量风险', render: (r) => levelBadge(r.quality_risk) },
-              { key: 'change_risk', label: '变更风险', render: (r) => levelBadge(r.change_risk) },
-              { key: 'count', label: '条数' },
-            ], d.risk_matrix)
-          : state.empty('还没有评估过风险的来源'),
-      ]),
-    ]),
-  ]);
-
-  load(trendBox, () => api.dashboard.overview(), (d) => [
-    card('提交趋势（按周）', [
-      d.submission_trend.length ? trendChart(d.submission_trend) : state.empty('暂无数据'),
-    ]),
-  ]);
-
-  load(health, () => api.dashboard.health(), (results) => {
-    const [db, llm, emb] = results;
-    const row = (label, r, render) => {
-      if (r.status !== 'fulfilled') {
-        return kvRow(label, badge('查询失败', 'bad'), r.reason && r.reason.message);
-      }
-      return render(r.value);
-    };
-    return [card('系统健康', [el('dl', { class: 'kv' }, [
-      ...row('数据库', db, (v) => [
-        el('dt', { text: '数据库' }),
-        el('dd', {}, [v.database ? badge('连通', 'ok') : badge('不可用', 'bad')]),
-      ]),
-      ...row('模型', llm, (v) => [
-        el('dt', { text: '模型' }),
-        el('dd', {}, [
-          v.configured ? badge('已配置', 'ok') : badge('未配置', 'warn'),
-          el('span', { class: 'muted', text: ` ${v.provider} / ${v.model}` }),
-        ]),
-      ]),
-      ...row('向量', emb, (v) => [
-        el('dt', { text: '向量来源' }),
-        el('dd', {}, v.trusted
-          ? [badge('与当前模型一致', 'ok')]
-          : [badge('不可信', 'bad'), el('div', { class: 'tiny', text: v.reason || '' }),
-             v.action ? el('div', { class: 'mono', text: v.action }) : null]),
-      ]),
-    ])])];
-  });
+  load(overview, () => api.dashboard.overview({ trend_periods: 12 }), renderOverviewStats);
+  load(health, () => api.dashboard.health(), renderHealth);
+  load(pending, () => api.dashboard.pending(5), (data) => renderPending(data.items || []));
+  load(changes, () => Promise.resolve(null), () => unsupportedCard('最近需求变更', '后端暂未提供按版本变更时间排序的总览接口。'));
+  load(incidents, async () => {
+    const [failedRuns, outbox] = await Promise.all([api.dashboard.failedRuns(5), api.dashboard.outbox(5)]);
+    return { failedRuns, outbox };
+  }, renderIncidents);
 }
 
-/** 极简柱状图。不做坐标轴 —— 这是「一眼看趋势」，不是图表组件。 */
+function valueOrUnavailable(value) {
+  return value === null || value === undefined ? '后端暂未提供' : String(value);
+}
+
+function renderOverviewStats(data) {
+  const cards = [
+    metric('需求总数', valueOrUnavailable(data.requirements_total), '已入库需求主线'),
+    metric('待审核', valueOrUnavailable(data.pending_review), '等待人工裁决', data.pending_review ? 'warn' : null),
+    metric('高风险', valueOrUnavailable(data.high_risk), data.analysed_sources == null ? '分析分母未提供' : `基于已分析 ${data.analysed_sources} 条`, data.high_risk ? 'bad' : null),
+    metric('冲突', valueOrUnavailable(data.conflict), '已分析来源中的冲突', data.conflict ? 'warn' : null),
+    metric('来源总数', valueOrUnavailable(data.sources_total), '全部渠道输入'),
+    metric('死信', valueOrUnavailable(data.dead_letter), '需要运维处理', data.dead_letter ? 'bad' : null),
+  ];
+  const distributionGrid = el('div', { class: 'overview-distributions' }, [
+    distributionCard('审核漏斗', data.source_status_counts, STATUS_LABEL),
+    distributionCard('输入渠道', data.channel_counts),
+    distributionCard('业务领域', data.domain_counts),
+    riskMatrix(data.risk_matrix, data.analysed_sources),
+  ]);
+  const trend = data.submission_trend && data.submission_trend.length
+    ? trendChart(data.submission_trend)
+    : state.empty('暂无提交趋势', '有新的来源输入后，这里会显示按周趋势。');
+  return [el('div', { class: 'metrics metrics-overview' }, cards), distributionGrid, card('提交趋势', [trend])];
+}
+
+function distributionCard(title, counts, labels = {}) {
+  const entries = Object.entries(counts || {});
+  return card(title, [entries.length ? distribution(entries, labels) : state.empty('暂无数据')]);
+}
+
+function distribution(entries, labels = {}) {
+  const max = Math.max(...entries.map(([, value]) => Number(value) || 0), 1);
+  return el('div', { class: 'distribution' }, entries.map(([key, value]) => el('div', { class: 'dist-row' }, [
+    el('span', { class: 'dist-k', text: labels[key] || key }),
+    el('span', { class: 'dist-bar' }, [el('span', { class: 'dist-fill', style: `width:${((Number(value) || 0) / max) * 100}%` })]),
+    el('span', { class: 'dist-v', text: String(value) }),
+  ])));
+}
+
+function riskMatrix(rows, denominator) {
+  if (!rows || !rows.length) return card('风险矩阵', [state.empty('暂无风险矩阵', '后端尚未提供已分析来源的风险分布。')]);
+  return card('风险矩阵', [el('div', { class: 'card-note', text: denominator == null ? '分母：后端暂未提供' : `统计范围：已分析 ${denominator} 条来源` }), table([
+    { key: 'quality_risk', label: '质量风险', render: (row) => levelBadge(row.quality_risk) },
+    { key: 'change_risk', label: '变更风险', render: (row) => levelBadge(row.change_risk) },
+    { key: 'count', label: '条数' },
+  ], rows)]);
+}
+
+function renderHealth(results) {
+  const [db, llm, embedding] = results;
+  const row = (label, result, render) => result.status === 'fulfilled' ? kvRow(label, render(result.value)) : kvRow(label, badge('查询失败', 'bad'), result.reason?.message || '请重试');
+  return card('系统健康', [el('dl', { class: 'kv health-kv' }, [
+    ...row('数据库', db, (value) => value.database ? badge('连通', 'ok') : badge('不可用', 'bad')),
+    ...row('模型', llm, (value) => [badge(value.configured ? '已配置' : '未配置', value.configured ? 'ok' : 'warn'), el('span', { class: 'muted', text: ` ${value.provider || '—'} / ${value.model || '—'}` })]),
+    ...row('向量', embedding, (value) => value.trusted ? badge('可信', 'ok') : [badge('不可信', 'bad'), el('span', { class: 'tiny', text: ` ${value.reason || '未提供原因'}` })]),
+  ])]);
+}
+
+function renderPending(items) {
+  if (!items.length) return card('最近待审核', [state.empty('暂无待审核来源', '新的来源完成分析后会出现在这里。')]);
+  return card('最近待审核', [el('div', { class: 'overview-list' }, items.map((item) => el('a', {
+    class: 'overview-list-item', href: `/app/reviews/detail?source_id=${encodeURIComponent(String(item.source_id))}`,
+  }, [el('span', { class: 'mono', text: String(item.source_id) }), el('strong', { text: fmt.cut(item.original_text || item.extracted_text || '未提供输入', 64) }), el('span', { class: 'tiny', text: `${item.source_type || '未提供渠道'} · ${item.requester_name || '未提供输入人'} · ${fmt.rel(item.submitted_at)}` })]))) ]);
+}
+
+function renderIncidents(data) {
+  const failed = data.failedRuns?.items || [];
+  const outbox = data.outbox || null;
+  const rows = failed.map((run) => el('li', {}, [badge('运行失败', 'bad'), el('span', { class: 'mono', text: String(run.run_id || run.id || '—') }), el('span', { text: run.error || run.current_node || '未提供错误信息' })]));
+  (outbox?.dead_letters || []).forEach((item) => rows.push(el('li', {}, [badge('死信', 'bad'), el('span', { class: 'mono', text: String(item.id) }), el('span', { text: item.last_error || item.event_type || '未提供错误信息' })])));
+  return card('最近运行异常', [rows.length ? el('ul', { class: 'incident-list' }, rows) : state.empty('暂无运行异常')]);
+}
+
+function unsupportedCard(title, message) {
+  return card(title, [state.empty('后端暂未提供', message)]);
+}
+
 function trendChart(points) {
-  const max = Math.max(...points.map((p) => p.count), 1);
-  return el('div', { class: 'trend' }, points.map((p) => el('div', { class: 'trend-col' }, [
-    el('div', { class: 'trend-bar-wrap' }, [
-      el('div', { class: 'trend-bar', style: `height:${(p.count / max) * 100}%`, title: `${p.period}: ${p.count}` }),
-    ]),
-    el('div', { class: 'trend-v', text: String(p.count) }),
-    el('div', { class: 'trend-k', text: p.period.replace(/^\d\d/, '') }),
+  const max = Math.max(...points.map((p) => Number(p.count) || 0), 1);
+  return el('div', { class: 'trend' }, points.map((point) => el('div', { class: 'trend-col' }, [
+    el('div', { class: 'trend-bar-wrap' }, [el('div', { class: 'trend-bar', style: `height:${((Number(point.count) || 0) / max) * 100}%`, title: `${point.period}: ${point.count}` })]),
+    el('div', { class: 'trend-v', text: String(point.count) }), el('div', { class: 'trend-k', text: String(point.period || '').replace(/^\d\d/, '') }),
   ])));
 }
 
