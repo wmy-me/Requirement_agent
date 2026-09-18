@@ -593,6 +593,22 @@ def _stringify_source_metadata(payload: object) -> dict[str, object]:
         match["constraints"] = constraints
 
     meta["capability_match"] = match
+
+    # 审核通过、来源入库时写下的追溯键（`workflows/commit_nodes.py` 的 trace_metadata）。
+    # 这几个都是雪花 id，此前原样以 number 透出 —— 实测在 `/reviews/{id}/detail`
+    # 与 `/sources/{id}/trace` 两个端点上都能看到。
+    for key in ("requirement_id", "version_id"):
+        if key in meta:
+            meta[key] = to_sid(meta[key])
+
+    trace = meta.get("trace")
+    if isinstance(trace, Mapping):
+        trace = dict(trace)
+        for key in ("source_id", "version_id"):
+            if key in trace:
+                trace[key] = to_sid(trace[key])
+        meta["trace"] = trace
+
     return meta
 
 
@@ -1313,7 +1329,10 @@ class RequirementVersionRepository:
             version = versions_by_id.setdefault(
                 version_id,
                 {
-                    "version_id": version_id,
+                    # 分组键保持 int（下面还要用它聚合来源），**对外发出去的是字符串**。
+                    # 这里此前直接把 int 发出去了 —— 与 /versions 端点上的
+                    # `versions[].id` 是字符串不一致，同一个东西两种类型。
+                    "version_id": to_sid(version_id),
                     "version_no": int(row["version_no"]),
                     "parent_version_no": row["parent_version_no"],
                     "status": row["status"],

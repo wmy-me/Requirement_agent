@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
+from requirement_agent.common.snowflake import to_sid
 from requirement_agent.workflows.commit_nodes import feature_rows_for_source
 from requirement_agent.workflows.graphs import run_decision
 from requirement_agent.infrastructure.db.repositories import (
@@ -219,7 +220,10 @@ class ReviewService:
 
         active_after = counts["keep"] + counts["modify"] + counts["add"]
         return {
-            "source_id": source_id,
+            # ⚠️ 同一个 `source_id`，`/reviews/pending` 发的是**字符串**、
+            # 这里此前发的是 number —— 正是契约 §8.1 警告的「同一字段两种类型」。
+            # 前端把待办项与预演结果拼在一起时就会撞上。
+            "source_id": to_sid(source_id),
             "merge_mode": mode,
             "target": {
                 "requirement_key": master.requirement_key,

@@ -474,7 +474,9 @@ class ChatRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
+            # 同一处 `int(row["id"])` 反模式（与 run 行那处同源）：
+            # 消息 id 是雪花 id，以 number 发出去会被 JS 静默截断。
+            "id": to_sid(row["id"]),
             "conversation_id": str(row["conversation_id"]),
             "role": row["role"],
             "content": row["content"],
