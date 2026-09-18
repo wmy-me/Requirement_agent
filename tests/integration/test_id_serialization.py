@@ -138,9 +138,7 @@ def test_run_detail_and_list_agree_on_id_type() -> None:
     """`/agent/runs` 与 `/agent/runs/{run_id}` 的 `id` 必须是同一种类型、同一个值。
 
     这两条路径读的是**同一张表的两套 SQL**（`agent_run.py` 与 `chat.py`），
-    字段集本来就不同（详情少 `source_id`/`run_type`/`started_at`/`ended_at`/`current_node`）。
-    字段集不同是既有设计，但**同一个 id 在两处必须一致** —— 否则前端把列表项
-    和详情拼在一起时，同一个 run 会有两个不同的 id。
+    详情与列表必须给出同一套字段；否则前端从详情刷新时会丢失列表已经展示的上下文。
     """
     listed = client.get("/api/v1/agent/runs?limit=5").json()["items"]
     if not listed:
@@ -155,6 +153,8 @@ def test_run_detail_and_list_agree_on_id_type() -> None:
 
     assert isinstance(detail["id"], str), f"详情端点的 id 是 {type(detail['id']).__name__}，应为 str"
     assert detail["id"] == from_list["id"], "同一个 run 在列表与详情里的 id 必须一致"
+    for field in ("source_id", "run_type", "started_at", "ended_at", "current_node"):
+        assert detail[field] == from_list[field], f"详情遗漏或改变了 `{field}`"
 
 
 def test_run_timestamps_use_the_same_format_as_the_rest_of_the_site() -> None:

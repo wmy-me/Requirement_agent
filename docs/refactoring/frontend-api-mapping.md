@@ -33,7 +33,7 @@
 |---|---|---|
 | **前缀** | 一律 `/api/v1`（只有 `/health` 例外，无前缀） | 实测 73 条路由全部如此 |
 | **列表形状** | 一律 `{"items": [...]}`，**不是裸数组** | 契约 §1 |
-| **鉴权** | 全部受保护端点要 `Authorization: Bearer <token>`；token 由服务端注入 HTML（`window.RA_UI_TOKEN`） | 契约 §1.2 · `app.py:203-231` |
+| **鉴权** | 全部受保护端点要 `Authorization: Bearer <token>`；token 由服务端注入 HTML 的 `meta[name="ra-ui-token"]` | 契约 §1.2 · `app.py:203-231` |
 | **错误** | 按 **状态码** 分支：401 / 403 / 404 / 409 / 422。**禁止解析 `detail` 中文文本** | 契约 §1.2 |
 | **雪花 ID** | 契约要求**一律 JSON 字符串**，前端永不 `Number()` | 契约 §1.1 |
 | **分页** | 全是 `limit`，**没有游标**。每个端点的默认值与上限都不同 —— 见 §2 逐条 | 契约 §5 约定 2 |
@@ -106,13 +106,13 @@
 
 | 页面 | 端点 | 档次 | 就绪 |
 |---|---|---|---|
-| 分析任务列表 | `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | read | ✅ ⚠️ 三参数**不能组合**，见 §3.10 |
-| Run 详情 | `GET /api/v1/agent/runs/{run_id}` | read | ✅ ⚠️ **字段集不同，见 §5.3** |
+| 分析任务列表 | `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | read | ✅ 三参数可组合，见 §3.10 |
+| Run 详情 | `GET /api/v1/agent/runs/{run_id}` | read | ✅ 与列表字段一致 |
 | 节点时间线 / 回放 | `GET /api/v1/agent/runs/{run_id}/events?after_seq=&limit=` | read | ✅ |
 | 工具与模型调用 | `GET /api/v1/agent/runs/{run_id}/invocations` | read | ✅ ⚠️ `models` 恒空，模型走 `/ops/models?run_id=`（§3.17） |
 | 重跑失败分析 | `POST /api/v1/agent/runs/{run_id}/retry` | **analyze** | 🔶 |
 | 渠道分析（单条来源） | `POST /api/v1/agent/run` | analyze | 🔶 ⚠️ **同步执行、会写库** |
-| 触发分析（异步任务） | `POST /api/v1/requirements/submit` | submit | 🔶 |
+| 触发分析（异步任务） | `POST /api/v1/requirements/submit/async` | submit | ✅ 202 + outbox |
 
 ### 2.5 阶段 9 · 输入中心
 
@@ -428,8 +428,8 @@ departments(string[])  sensitivity_levels(string[])
 
 **参数**：`source_id?`（**可选**）、`status?`、`run_type?`、`limit` 默认 `20`（仓储夹到 200）
 
-> ⚠️ **`source_id` 一旦给了，`status` 和 `run_type` 会被静默忽略**（`agent_chat.py:911-916`）。
-> 前端不要同时传这三个 —— 要么按来源查，要么按状态/类型筛，**不能组合**。
+三个筛选条件是 **AND 组合**：可同时按来源、状态和类型收窄结果。非法状态、类型、
+source_id 或 limit 返回 422，不再静默返回范围错误的数据。
 
 **响应** 实测 17 条，每项 **16 个键**：
 ```
@@ -445,18 +445,12 @@ started_at  ended_at  created_at  updated_at
 - `meta.assistant_message_id` 是**字符串**（2026-09-18 修复，见 §5.1）
 - ⚠️ `started_at` / `ended_at` **可能为 `null`**（实测有 15 条 run 是）
 
-### 3.11 `GET /api/v1/agent/runs/{run_id}` ⚠️ 见 §5.3
+### 3.11 `GET /api/v1/agent/runs/{run_id}`
 
 **参数**：路径 `run_id`（**UUID 字符串**，不是雪花 id）
 
-**响应**：**比 §3.10 少 5 个键、多 0 个**：
-```
-id(str ✅)  run_id  conversation_id  client_message_id  status  error
-meta  stage  checkpoint  created_at  updated_at
-```
-**缺**：`source_id`、`run_type`、`started_at`、`ended_at`、`current_node`
-
-> 两个端点的 `id` **已实测一致**（同值同类型），有测试钉住 —— 见 §5.3。
+**响应**：与 §3.10 字段集完全一致。详情和列表共用运行追踪仓储，前端可直接打开
+Run 详情而不依赖上一页缓存。
 
 ### 3.12 `GET /api/v1/agent/runs/{run_id}/events`
 
@@ -503,7 +497,7 @@ meta  stage  checkpoint  created_at  updated_at
 | `requester_name` | str\|null | 否 | `max=120` |
 | `metadata` | dict | 否 | 默认 `{}` |
 
-**响应**：`{message, source_type, status, source_id}` —— ⚠️ **`source_id` 在这里是 number**（schema 声明为 `int`）。
+**响应**：`{message, source_type, status, source_id, queued}`，其中 `source_id` 是字符串。
 
 #### 🔴 **这个端点是同步的，会阻塞 10～60 秒**
 
@@ -811,12 +805,8 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 ### 5.3 🟡 P1 · `/agent/runs/{run_id}` 与 `/agent/runs` 字段集不同
 
-同一个 run，从列表拿和从详情拿，**字段不一样**：
-列表多 `source_id / run_type / started_at / ended_at / current_node`，详情**全都没有**。
-
-**影响**：Run 详情页若先展示列表项、再拉详情补充，会**丢掉 `source_id` 和 `run_type`**。
-**建议**：详情页**同时用列表页传来的对象做底**，只用详情端点补 `checkpoint` 等字段。
-这条要在阶段 8 实现时确认是否够用（见 §6 待办）。
+~~字段不一致~~ ✅ **已修**：详情端点改用与列表相同的运行追踪仓储，
+`source_id / run_type / started_at / ended_at / current_node` 全部返回；回归测试逐字段断言。
 
 ### 5.4 ~~🟡 P1 · `/agent/runs/{id}/invocations` 的 `models` 恒空~~ ✅ **已解决**
 
@@ -987,9 +977,7 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 ### 5.9 ✅ 已确认**没有**问题的一件事
 
-`/api/v1/agent/runs` 的 `source_id` **确实已改成可选**（工作计划缺口 #6），
-实测不带 `source_id` 也能拿到最近 17 条 run。`source_id` 分支与 `status/run_type` 分支
-**互斥**（给了 source_id 就忽略另外两个），这条契约没写，已在 §3.10 注明。
+`/api/v1/agent/runs` 的 `source_id` 是可选的，且与 `status/run_type` 可组合过滤。
 
 ---
 
@@ -1004,8 +992,8 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 | 5 | **三个空形状**要不要先造数据 | 阶段 11 | ✅ **已定：先造** |
 | 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `docs/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
 | 7 | ~~**SPEC 只覆盖 13 个端点**~~ | 全局 | ✅ **已补到 43 条 + 覆盖率闸门**，见 §5.6 / §5.7 |
-| 8 | **`POST /requirements/submit` 同步阻塞 26 秒** | 阶段 9 | ⏳ **待定** —— 前端只能做不确定态进度；**要不要后端加异步提交端点？** 见 §3.15 |
-| 9 | **幂等键用 `requester_id`，表单只有 `requester_name`** | 阶段 9 | ⏳ **待定** —— 导致「同文本多人提交被合并成一条」。是接受这个语义并在界面说明，还是要后端改键？见 §3.15 |
+| 8 | ~~**`POST /requirements/submit` 同步阻塞 26 秒**~~ | 阶段 9 | ✅ 新工作台用 `POST /requirements/submit/async`（202 + outbox） |
+| 9 | ~~**幂等键用 `requester_id`，表单只有 `requester_name`**~~ | 阶段 9 | ✅ 缺 requester_id 时以 requester_name 参与幂等键 |
 
 > 第 8 条值得单独想：26 秒的同步请求在内部工具里不是不能接受（它确实是
 > 「提交完就等结果」的语义），但它会**卡住用户 26 秒**，而且中间没有任何反馈。
@@ -1026,7 +1014,7 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 | 影响分析（依赖传播 / 环检测） | 需求详情 · 影响范围 | 显示「**后端未提供**」，**不要拿关系列表充数** —— 两者不是一回事 |
 | 导入任务进度（按来源聚合的任务状态） | 输入中心 | 只能展示单条来源的 `processing_status` |
 | 截图 / 视觉输入 | 输入中心 | 视觉模型未接 |
-| 渠道状态 | 系统运维 | 只展示飞书 webhook 配置说明 |
+| 渠道实时连通性 | 系统运维 | `/ops/channels` 给配置状态；不伪装为第三方实时探活 |
 | 文档版本链 | 来源与知识 | 数据层有、**HTTP 层一个字都没有**（契约 §10-T6） |
 
 ---
@@ -1039,11 +1027,11 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 |---|---|---|---|
 | 1 | `/agent/runs`、`/memory`、`invocations.tools[]` 返回 **number 型雪花 ID** | 契约 §1.1 声称「一律字符串」 | ✅ **代码已修**；契约 §1.1 原文无需改（它本来就是对的，是实现没跟上） |
 | 2 | `/agent/runs` 的时间**不走 `as_display_iso`** | 契约 §1 声称统一 ISO | ✅ **代码已修** |
-| 3 | `/agent/runs/{run_id}` 与 `/agent/runs` **字段集不同** | 契约 §6 未提 | ⏳ 待补进契约 |
-| 4 | `/agent/runs` 的 `source_id` 会**静默忽略** `status`/`run_type` | 契约 §1.3 未提 | ⏳ 待补进契约 |
+| 3 | `/agent/runs/{run_id}` 与 `/agent/runs` **字段集不同** | 契约 §6 未提 | ✅ 详情改用运行追踪仓储，字段已统一 |
+| 4 | `/agent/runs` 的 `source_id` 会**静默忽略** `status`/`run_type` | 契约 §1.3 未提 | ✅ 三个参数改为 AND 组合筛选 |
 | 5 | `/invocations` 的 `models` 恒空，但 `/ops/models` 已有真实数据 | 契约 §6 的解释已过期 | ⏳ 待补进契约 |
 | 6 | `/ops/models` 的 `routing.resolved` 是**硬编码 6 个任务**、未配置时返回空串 | 契约 §1.3 未提 | ⏳ 待补进契约 |
-| 7 | **契约 §7 说死信 retry/discard「没有鉴权」已过期** —— 实测要求 `ops` 档次 | 契约 §7 | ⏳ **契约要改**（代码是对的） |
+| 7 | **契约 §7 说死信 retry/discard「没有鉴权」已过期** —— 实测要求 `ops` 档次 | 契约 §7 | ✅ 契约已改 |
 | 8 | `/agent/run`（单数，同步、会写库）与 `/requirements/submit`（走 outbox）语义不同 | 契约未区分 | ⏳ 待补进契约 |
 | 9 | `meta.assistant_message_id` 也是 number（**补 SPEC 后才扫出来**） | 契约 §1.1 覆盖范围内 | ✅ **代码已修** |
 

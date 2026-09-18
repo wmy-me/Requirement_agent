@@ -11,8 +11,8 @@ import logging
 import threading
 import time
 from contextlib import asynccontextmanager
+from html import escape
 from pathlib import Path
-import json
 
 from uuid import uuid4
 
@@ -220,9 +220,11 @@ def create_app() -> FastAPI:
         各自发请求 —— 所以注入必须逐页做。漏掉一页，那一页就全是 401。
         """
         html = path.read_text(encoding="utf-8")
+        # CSP 明确禁止内联脚本，因此不能把 token 写成 `window.RA_UI_TOKEN = ...`。
+        # meta 仅承载配置，由同源的 core.js / app.js 读取，不需要放宽 script-src。
         snippet = (
-            "<script>/* 服务端注入，勿手改 */"
-            f"window.RA_UI_TOKEN = {json.dumps(settings.frontend_token())};</script>"
+            '<meta name="ra-ui-token" content="'
+            f'{escape(settings.frontend_token(), quote=True)}">'
         )
         marker = "<!-- RA_UI_TOKEN_INJECT -->"
         if marker in html:
@@ -246,6 +248,25 @@ def create_app() -> FastAPI:
         if page not in _WORKBENCH_PAGES:
             raise HTTPException(status_code=404, detail=f"未知页面：{page}")
         return _render_page(STATIC_DIR / "app" / f"{page}.html")
+
+    @app.get("/app/reviews/detail", include_in_schema=False)
+    async def review_detail_page() -> HTMLResponse:
+        """审核详情复用审核中心页面；具体来源由前端 URL 状态读取。"""
+        return _render_page(STATIC_DIR / "app" / "reviews.html")
+
+    @app.get("/app/requirements/{requirement_key}", include_in_schema=False)
+    async def requirement_detail_page(requirement_key: str) -> HTMLResponse:
+        """需求档案页。路径参数不参与文件路径拼接，避免目录穿越。"""
+        if not requirement_key or "/" in requirement_key:
+            raise HTTPException(status_code=404, detail="未知需求页面")
+        return _render_page(STATIC_DIR / "app" / "requirements.html")
+
+    @app.get("/app/analysis/runs/{run_id}", include_in_schema=False)
+    async def analysis_run_detail_page(run_id: str) -> HTMLResponse:
+        """分析 Run 详情页。run_id 只供前端读取，服务端不据此访问文件。"""
+        if not run_id or "/" in run_id:
+            raise HTTPException(status_code=404, detail="未知分析页面")
+        return _render_page(STATIC_DIR / "app" / "analysis.html")
 
     return app
 

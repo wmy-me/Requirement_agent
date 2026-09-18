@@ -15,7 +15,7 @@ from queue import Empty, Queue
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
@@ -852,18 +852,24 @@ async def resume_agent_run(run_id: str) -> StreamingResponse:
     run = chat_repo.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
-    if run["status"] == "completed":
+    if run["status"] != "paused":
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="run already completed"
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"run is {run['status']}, only paused runs can resume",
         )
     if not run["checkpoint"]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="run has no checkpoint to resume from"
         )
-    # 该会话不能在跑另一个运行（resume 的 run 本身不活跃，撞车的是别人）
-    _ensure_conversation_idle(run["conversation_id"])
-    # 置回活跃：同一 run，唯一索引以 conversation 为键，只有它自己 active，不冲突
-    chat_repo.update_run(run_id=run_id, status="running", stage=run["stage"] or "queued")
+    # paused 本身占用同会话的唯一活跃槽，因此不可能另有 active run；直接将同一行
+    # 切回 running，不能调用 _ensure_conversation_idle（它会把本行当成冲突）。
+    chat_repo.update_run(
+        run_id=run_id,
+        status="running",
+        meta=run["meta"],
+        stage=run["stage"] or "queued",
+        checkpoint=run["checkpoint"],
+    )
     return StreamingResponse(
         _stream_resumed_run(run),
         media_type="text/event-stream",
@@ -875,10 +881,52 @@ async def resume_agent_run(run_id: str) -> StreamingResponse:
     )
 
 
+@router.post("/api/v1/agent/runs/{run_id}/pause")
+async def pause_agent_run(run_id: str) -> dict[str, object]:
+    """在最近 checkpoint 暂停对话 Run，暂停后只能继续或取消。"""
+    run = chat_repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    if run["status"] != "running":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"run is {run['status']}, cannot pause")
+    if not run["checkpoint"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="run has no checkpoint to pause from")
+    paused = chat_repo.update_run(
+        run_id=run_id,
+        status="paused",
+        error=None,
+        meta=run["meta"],
+        stage=run["stage"],
+        checkpoint=run["checkpoint"],
+    )
+    return {"run_id": run_id, "status": paused["status"] if paused else "paused"}
+
+
+@router.post("/api/v1/agent/runs/{run_id}/cancel")
+async def cancel_agent_run(run_id: str) -> dict[str, object]:
+    """终止 Run。取消是终态，不能用 resume 恢复。"""
+    run = chat_repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent run not found")
+    if run["status"] not in ("running", "paused"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"run is {run['status']}, cannot cancel")
+    cancelled = chat_repo.update_run(
+        run_id=run_id,
+        status="cancelled",
+        error="cancelled by user",
+        meta=run["meta"],
+        stage=run["stage"],
+        checkpoint=run["checkpoint"],
+    )
+    return {"run_id": run_id, "status": cancelled["status"] if cancelled else "cancelled"}
+
+
 @router.get("/api/v1/agent/runs/{run_id}")
 async def get_agent_run(run_id: str) -> dict[str, object]:
     """按 run_id 查询单次 Agent 运行记录；不存在返回 404。"""
-    run = chat_repo.get_run(run_id)
+    # 与列表使用同一个仓储。ChatRepository 的兼容查询漏了 source_id、run_type、
+    # 起止时间和 current_node，详情页据此会丢失已展示的信息。
+    run = run_tracking.repo.get_run(run_id)
     if run is None:
         from fastapi import HTTPException, status
 
@@ -893,10 +941,10 @@ async def get_agent_run(run_id: str) -> dict[str, object]:
 
 @router.get("/api/v1/agent/runs")
 async def list_agent_runs(
-    source_id: int | None = None,
-    status: str | None = None,
-    run_type: str | None = None,
-    limit: int = 20,
+    source_id: int | None = Query(default=None, gt=0),
+    status: Literal["queued", "running", "paused", "waiting_review", "completed", "failed", "cancelled", "retrying"] | None = None,
+    run_type: Literal["conversation", "analysis"] | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
 ) -> dict[str, object]:
     """运行记录（新→旧）。两种用法：
 
@@ -909,11 +957,9 @@ async def list_agent_runs(
     现在按是否传参决定走哪条查询，两条路都有索引支撑。
     """
     repo = run_tracking.repo
-    if source_id is not None:
-        return {"items": repo.list_by_source(source_id, limit=limit)}
-    return {
-        "items": repo.list_recent(limit=limit, status=status, run_type=run_type)
-    }
+    return {"items": repo.list_recent(
+        limit=limit, source_id=source_id, status=status, run_type=run_type,
+    )}
 
 
 @router.get("/api/v1/agent/runs/{run_id}/events")

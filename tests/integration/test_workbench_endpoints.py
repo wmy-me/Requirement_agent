@@ -331,4 +331,4 @@ def test_runs_still_filters_by_source_when_given(client: TestClient) -> None:
 
     assert r.status_code == 200
     for run in r.json()["items"]:
-        assert run["source_id"] == int(source_id)
+        assert run["source_id"] == str(source_id)

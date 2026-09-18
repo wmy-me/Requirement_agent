@@ -21,7 +21,7 @@ function renderOverview() {
     todo, health, dist, riskBox, trendBox,
   );
 
-  load(todo, () => api.get('/api/v1/stats/overview'), (d) => [
+  load(todo, () => api.dashboard.overview(), (d) => [
     metric('待审核', d.pending_review, '等人工裁决的来源'),
     metric('高风险', d.high_risk, `基于已分析的 ${d.analysed_sources} 条`, d.high_risk ? 'bad' : null),
     metric('冲突', d.conflict, null, d.conflict ? 'warn' : null),
@@ -33,7 +33,7 @@ function renderOverview() {
   // ⚠️ 风险/冲突只是**已分析**来源里的数 —— 分母写在指标卡上，
   //    否则「高危 6 条」会被读成全库统计。
 
-  load(dist, () => api.get('/api/v1/stats/overview'), (d) => [
+  load(dist, () => api.dashboard.overview(), (d) => [
     el('div', { class: 'cols cols-2' }, [
       card('审核漏斗（来源状态分布）', [distribution(d.source_status_counts, STATUS_LABEL)]),
       card('渠道占比', [distribution(d.channel_counts)]),
@@ -50,17 +50,13 @@ function renderOverview() {
     ]),
   ]);
 
-  load(trendBox, () => api.get('/api/v1/stats/overview'), (d) => [
+  load(trendBox, () => api.dashboard.overview(), (d) => [
     card('提交趋势（按周）', [
       d.submission_trend.length ? trendChart(d.submission_trend) : state.empty('暂无数据'),
     ]),
   ]);
 
-  load(health, () => Promise.allSettled([
-    api.get('/api/v1/health/db'),
-    api.get('/api/v1/health/llm'),
-    api.get('/api/v1/health/embedding'),
-  ]), (results) => {
+  load(health, () => api.dashboard.health(), (results) => {
     const [db, llm, emb] = results;
     const row = (label, r, render) => {
       if (r.status !== 'fulfilled') {

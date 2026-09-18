@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from requirement_agent.api.dependencies import model_invocation_repo, outbox_repo
+from requirement_agent.api.dependencies import feishu_client, model_invocation_repo, outbox_repo
 from requirement_agent.common.time import as_display_iso
 
 router = APIRouter()
@@ -143,4 +143,18 @@ async def list_model_invocations(
                 for spec in (registry.resolve(task).primary,)
             },
         },
+    }
+
+
+@router.get("/api/v1/ops/channels")
+async def list_channel_status() -> dict[str, object]:
+    """返回渠道配置状态，而非伪造外部平台实时连通性。"""
+    configured = feishu_client.is_configured
+    return {
+        "items": [{
+            "channel": "feishu",
+            "status": "configured" if configured else "not_configured",
+            "configured": configured,
+            "inbound_endpoint": "/api/v1/channels/feishu/webhook",
+        }],
     }

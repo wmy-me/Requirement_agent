@@ -170,6 +170,7 @@ EXCLUDED_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/requirements/export"): "返回 CSV，没有字段形状可言",
     ("POST", "/api/v1/requirements/ingest"): "multipart 写端点",
     ("POST", "/api/v1/requirements/submit"): "写端点",
+    ("POST", "/api/v1/requirements/submit/async"): "写端点（outbox 异步分析）",
     ("POST", "/api/v1/requirements/{requirement_key}/revert"): "写端点",
     ("POST", "/api/v1/requirements/{requirement_key}/titles"): "写端点",
     ("POST", "/api/v1/reviews/submit"): "写端点",
@@ -393,6 +394,11 @@ SPEC: tuple[Endpoint, ...] = (
         path="/api/v1/ops/worker",
         items_key="",
         fields=("consumer", "counts", "stale_processing", "stale_timeout_seconds"),
+    ),
+    Endpoint(
+        name="渠道配置状态",
+        path="/api/v1/ops/channels",
+        fields=("channel", "status", "configured", "inbound_endpoint"),
     ),
     Endpoint(
         name="模型调用",

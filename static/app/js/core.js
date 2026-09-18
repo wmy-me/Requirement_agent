@@ -7,7 +7,7 @@
  *
  * 1. **不用 innerHTML 塞数据。** 所有来自后端或用户的内容一律走 `textContent`
  *    或 `el()` 的文本参数。需求正文、审核意见都是用户输入，拼 HTML 就是 XSS。
- * 2. **token 由服务端注入**（`window.RA_UI_TOKEN`），见 api/app.py 的 `_render_page`。
+ * 2. **token 由服务端注入**（`meta[name="ra-ui-token"]`），见 api/app.py 的 `_render_page`。
  *    这里只负责带上它，**不做「让用户填」那一套** —— 内网共用工作台，
  *    token 是服务入口凭证不是个人凭证。
  * 3. **错误要说人话。** 401/403/404/409 各有含义，直接抛「请求失败」等于没写。
@@ -16,7 +16,7 @@
 
 /* ── 请求 ────────────────────────────────────────────────────────────── */
 
-const TOKEN = window.RA_UI_TOKEN || '';
+const TOKEN = document.querySelector('meta[name="ra-ui-token"]')?.content || '';
 
 /** 带鉴权头的 fetch 包装。**所有请求都要经过它**（否则就是那一页 401）。 */
 async function request(path, { method = 'GET', body, params } = {}) {
@@ -71,9 +71,32 @@ async function describeError(resp) {
 }
 
 const api = {
-  get: (path, params) => request(path, { params }),
-  post: (path, body) => request(path, { method: 'POST', body }),
-  patch: (path, body) => request(path, { method: 'PATCH', body }),
+  dashboard: {
+    overview: () => request('/api/v1/stats/overview'),
+    health: () => Promise.allSettled([
+      request('/api/v1/health/db'),
+      request('/api/v1/health/llm'),
+      request('/api/v1/health/embedding'),
+    ]),
+  },
+  requirements: {
+    list: (params) => request('/api/v1/requirements', { params }),
+    versions: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/versions`),
+    features: (key, params) => request(`/api/v1/requirements/${encodeURIComponent(key)}/features`, { params }),
+    trace: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/trace`),
+    relations: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/relations`),
+    capabilities: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/capabilities`),
+    titles: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/titles`),
+  },
+  reviews: {
+    pending: (limit = 50) => request('/api/v1/reviews/pending', { params: { limit } }),
+    detail: (sourceId) => request(`/api/v1/reviews/${encodeURIComponent(sourceId)}/detail`),
+    history: (params) => request('/api/v1/reviews/history', { params }),
+    preview: (sourceId, params) => request(
+      `/api/v1/reviews/${encodeURIComponent(sourceId)}/merge-preview`, { params },
+    ),
+    submit: (payload) => request('/api/v1/reviews/submit', { method: 'POST', body: payload }),
+  },
 };
 
 /* ── 格式化 ──────────────────────────────────────────────────────────── */

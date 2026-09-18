@@ -20,6 +20,7 @@ from requirement_agent.api.dependencies import (
     document_repo,
     object_storage,
     requirement_service,
+    requirement_analysis_task,
     revert_service,
 )
 from requirement_agent.api.schemas import (
@@ -32,6 +33,25 @@ from requirement_agent.infrastructure.db.repositories import ConcurrentModificat
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _source_from_submit_payload(payload: RequirementSubmitRequest) -> RequirementSource:
+    """构造文本来源；同步与异步提交入口必须共享同一幂等语义。"""
+    return RequirementSource(
+        idempotency_key=build_idempotency_key(
+            source_type=payload.source_type,
+            # 表单只提供姓名时也应参与幂等键，避免不同提交人同文本被错误合并。
+            requester=payload.requester_id or payload.requester_name,
+            text=payload.original_text,
+        ),
+        source_type=payload.source_type,
+        source_event_id=payload.source_event_id,
+        requester_id=payload.requester_id,
+        requester_name=payload.requester_name,
+        original_text=payload.original_text,
+        original_payload={"input_mode": "text"},
+        metadata=payload.metadata,
+    )
 
 
 def library_filters(
@@ -106,28 +126,32 @@ async def export_requirements(
 @router.post("/api/v1/requirements/submit", response_model=RequirementSubmitResponse)
 async def submit_requirement(payload: RequirementSubmitRequest) -> RequirementSubmitResponse:
     """提交文本需求进入评审流程：返回提交状态与 source_id。"""
-    source = RequirementSource(
-        # 幂等键用正文摘要而非正文本身：直接拼接会让长文本（如 PDF 正文）超出
-        # Postgres btree 索引行上限 2704 字节，INSERT 被拒 —— 需求根本存不进库。
-        idempotency_key=build_idempotency_key(
-            source_type=payload.source_type,
-            requester=payload.requester_id,
-            text=payload.original_text,
-        ),
-        source_type=payload.source_type,
-        source_event_id=payload.source_event_id,
-        requester_id=payload.requester_id,
-        requester_name=payload.requester_name,
-        original_text=payload.original_text,
-        original_payload={"input_mode": "text"},
-        metadata=payload.metadata,
-    )
-    response = requirement_service.submit_requirement(source)
+    response = requirement_service.submit_requirement(_source_from_submit_payload(payload))
     return RequirementSubmitResponse(
         message="Requirement submitted for review",
         source_type=payload.source_type,
         status=str(response["status"]),
-        source_id=response.get("source_id"),
+        source_id=str(response["source_id"]) if response.get("source_id") is not None else None,
+    )
+
+
+@router.post(
+    "/api/v1/requirements/submit/async",
+    response_model=RequirementSubmitResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_requirement_async(payload: RequirementSubmitRequest) -> RequirementSubmitResponse:
+    """快速接收文本需求并经 outbox 异步分析，避免 HTTP 请求等待模型调用。"""
+    source = requirement_service.accept_requirement(_source_from_submit_payload(payload))
+    queued = source.processing_status in {"received", "failed"}
+    if queued:
+        requirement_analysis_task.enqueue(source_id=int(source.id or 0))
+    return RequirementSubmitResponse(
+        message="Requirement accepted for asynchronous analysis",
+        source_type=source.source_type,
+        status=source.processing_status,
+        source_id=str(source.id) if source.id is not None else None,
+        queued=queued,
     )
 
 
@@ -287,5 +311,5 @@ async def ingest_requirement(
         message="Requirement submitted for review",
         source_type=source_type,
         status=str(response["status"]),
-        source_id=response.get("source_id"),
+        source_id=str(response["source_id"]) if response.get("source_id") is not None else None,
     )

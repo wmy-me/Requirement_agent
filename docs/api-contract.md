@@ -103,7 +103,7 @@
 |---|---|
 | `read` | **全部 GET** |
 | `analyze` | `/agent/*`、`/conversations/*`、`/memory*` |
-| `submit` | `/requirements/submit`、`/requirements/ingest` |
+| `submit` | `/requirements/submit`、`/requirements/submit/async`、`/requirements/ingest` |
 | `review` | `/reviews/submit`、能力/条件/标题/关系的**裁决**端点 |
 | `revert` | `/requirements/{key}/revert` |
 | `ops` | `/ops/*`、`/documents/{id}/reindex` |
@@ -162,10 +162,10 @@ API_AUTH_TOKEN=...
 ```html
 <!-- index.html 里的占位符，服务端返回时替换 -->
 <!-- RA_UI_TOKEN_INJECT -->
-<!-- 替换成：<script>window.RA_UI_TOKEN = "…";</script> -->
+<!-- 替换成：<meta name="ra-ui-token" content="…"> -->
 ```
 
-`app.js` 的 `authHeaders()` 读它，`apiJson()`（31 个调用点）与三处 SSE / 续跑的
+`app.js` 的 `authHeaders()` 读这个 meta，`apiJson()`（31 个调用点）与三处 SSE / 续跑的
 裸 `fetch()` 统一带上。
 
 > ⚠️ **这里原先写的是「启动时生成 `static/js/ui-config.js`、页面用 `<script src>` 引它」。
@@ -210,7 +210,8 @@ UI_EXPOSED_TOKEN=<前端 token>
 | `GET /api/v1/reviews/history?status=&limit=` | 审核历史 | 默认 `approved/rejected/committed`，**不含 `returned`** |
 | `GET /api/v1/ops/models?task_type=&limit=` | 模型调用记录 + 路由诊断 | `routing.unrecognized` 报「配了没生效」的条目 |
 | `GET /api/v1/ops/worker` | 消费循环健康 | ⚠️ 见下「stale_processing」 |
-| `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | 运行列表 | **`source_id` 现在是可选的** |
+| `GET /api/v1/ops/channels` | 渠道配置状态 | 配置状态，不伪装成外部平台实时探活 |
+| `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | 运行列表 | 三个筛选条件可组合，`source_id` 可选 |
 
 #### `stats/overview` 的返回
 
@@ -248,7 +249,18 @@ UI_EXPOSED_TOKEN=<前端 token>
 
 原先**强制要求**（不带就 422，理由是「全表扫没有意义」）。有了任务列表页之后，
 那条限制从「防误用」变成了「做不到」（前端只能一个个来源去问）。
-现在**可选**：带 → 按来源反查；不带 → 最近的运行。两条路都有索引支撑。
+现在**可选**：带 → 按来源反查；不带 → 最近的运行。`source_id`、`status`、`run_type`
+是 **AND 组合筛选**，不会静默忽略任何一个；非法枚举或非法 limit 返回 422。
+
+#### 异步文本提交
+
+`POST /api/v1/requirements/submit` 保留原同步语义，兼容既有调用方。新工作台应使用
+`POST /api/v1/requirements/submit/async`：返回 **202** 与
+`{message, source_type, status:"received"|…, source_id:string, queued:boolean}`，分析由 outbox
+异步完成。前端以 `source_id` 轮询来源状态，不能把 `received` 误显示为审核完成。
+
+`source_id` 在两个提交入口及所有响应里都是字符串。提交人幂等身份优先用 `requester_id`，
+缺失时退回 `requester_name`，避免不同姓名提交相同正文被合并。
 
 ---
 
@@ -731,9 +743,9 @@ data: {"step":"analyze","label":"正在分析冲突与重复…"}
 
 | 端点 | 出参 | 说明 |
 |---|---|---|
-| `GET /api/v1/agent/runs?source_id=N&limit=M` | `{items:[run…]}` | 按来源反查运行记录（新→旧）。**`source_id` 必填**，不支持全表列举 |
+| `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | `{items:[run…]}` | 最近运行；三个筛选条件可组合，均为可选 |
 | `GET /api/v1/agent/runs/{run_id}/events?after_seq=N&limit=M` | `{items, run_id, after_seq}` | **断线回放的唯一入口** |
-| `GET /api/v1/agent/runs/{run_id}/invocations` | `{run_id, tools:[…], models:[]}` | 工具调用明细。`models` 恒为空 —— 模型调用要等 B3.1 的 ModelRegistry |
+| `GET /api/v1/agent/runs/{run_id}/invocations` | `{run_id, tools:[…], models:[]}` | 工具调用明细；模型调用改用 `/ops/models?run_id=` |
 | `POST /api/v1/agent/runs/{run_id}/retry` | `{run_id, retry_of, queued}` | 重跑失败的分析。**新建 run 而非原地复活**；走 outbox 异步执行 |
 
 `run` 行的完整字段（`agent_run` 表，2026-09-17 起）：
@@ -745,21 +757,24 @@ created_at  updated_at
 ```
 
 - `run_type`：`conversation`（对话助手的一次回答）/ `analysis`（对某条来源做的一次分析）
-- `status`：`queued / running / waiting_review / completed / failed / cancelled / retrying`
+- `status`：`queued / running / paused / waiting_review / completed / failed / cancelled / retrying`
   —— ⚠️ **分析跑完是 `waiting_review` 而不是 `completed`**：产物是一条待审来源，
   人要审完才算真的结束。
 - `current_node`：正在跑（失败时＝出错）的节点名。**失败定位靠它。**
 - ⚠️ **`retry` 只支持 `analysis` 类型**：对话 run 的「重试」在语义上是「把话再说一遍」，
   那是客户端行为，不是服务端能替它决定的。
 
+`GET /api/v1/agent/runs/{run_id}` 与列表返回同一套 run 字段，前端可独立打开详情页，
+不依赖上一页内存缓存。
+
 **其余对话端点**（契约此前未列，前端在用）：`POST /api/v1/agent/chat`（非流式）、
 `POST /api/v1/agent/chat/stream-with-files`（多文件）、`GET /api/v1/agent/chat/{sid}`、
 `GET /api/v1/agent/runs/{id}`。见 §10-T3。
 
-> ⚠️ **`POST /api/v1/agent/runs/{id}/pause` 已于 2026-09-17 删除。** 它从来没跑通过：
-> 它写 `status='paused'`，而 `agent_run` 的 CHECK 约束只有
-> `running/completed/failed/cancelled`（**从库里读出来的，不是只读迁移文件推的**）。
-> 实测写 `paused` 抛 `CheckViolation`。前端用的是 `resume` 不是 pause，所以删除无影响。
+`POST /api/v1/agent/runs/{id}/pause` 仅可暂停带 checkpoint 的 `running` Run，返回
+`{run_id, status:"paused"}`。`POST /api/v1/agent/runs/{id}/resume` 仅接受 `paused`；
+`POST /api/v1/agent/runs/{id}/cancel` 将 `running/paused` 置为不可恢复的 `cancelled`。
+`failed` 使用 retry 创建新 Run，不借 resume 原地复活。
 
 ---
 
@@ -771,9 +786,21 @@ created_at  updated_at
 > 测试客户端或未启用 outbox 时就是 `null`（实测就是 `null`）。
 > 前端已按 null 处理（`app.js:1473`），重写时别漏。
 
-其余：`POST /api/v1/ops/outbox/dead-letters/{event_id}/retry` 与 `/discard`。
-⚠️ 这两个**没有鉴权**（见 `docs/current-state.md` §三 遗留 8）。`event_id` 取自
+其余：`POST /api/v1/ops/outbox/dead-letters/{event_id}/retry` 与 `/discard`，两个操作都需要
+`ops` 权限。`event_id` 取自
 `dead_letters[].id`，是**字符串**（§1.1）—— 前端拼 URL 时原样用，别 `Number()`。
+
+`GET /api/v1/ops/channels` 只报告当前可配置的渠道及其配置状态，例如
+`{items:[{channel:"feishu",status:"configured",configured:true,inbound_endpoint:"…"}]}`。
+它不代表飞书平台实时连通；事件是否正在进入系统应看来源和审计记录。
+
+## 7.1 当前明确未提供的能力
+
+- 需求影响分析：需要依赖传播与环检测，不能用关系列表代替。
+- 文档版本链：现有 `document_asset` 没有版本父子关系，不能按文件名猜版本。
+- 截图/视觉输入：视觉模型与安全的文件处理链尚未接入。
+
+前端必须显示“后端未提供”，不得造一个看似可用的结果页。
 
 ---
 

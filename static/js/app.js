@@ -98,7 +98,7 @@ function scrollBottom() {
 
 /* ── 鉴权（B1 起服务端要求 Bearer token）──────────────────────────────
  *
- * token 由**服务端在返回页面时直接注入**（`window.RA_UI_TOKEN`，见 api/app.py 的
+ * token 由**服务端在返回页面时直接注入**（`meta[name="ra-ui-token"]`，见 api/app.py 的
  * `ui_page`）—— 使用者的动作是零：打开页面就用，不需要填任何东西。
  *
  * ⚠️ **这里刻意没有「输入 token」的弹窗。** 这是公司内网共用的一套工作台，
@@ -109,7 +109,8 @@ function scrollBottom() {
 function getToken() {
   // 只认服务端注入的那一个。`localStorage` 是留给排障时手工覆盖的逃生口
   // （控制台执行 `raSetToken('…')`），不参与正常路径。
-  if (window.RA_UI_TOKEN) return String(window.RA_UI_TOKEN);
+  const injected = document.querySelector('meta[name="ra-ui-token"]')?.content;
+  if (injected) return injected;
   try { return localStorage.getItem('requirement_agent_token') || ''; } catch (e) { return ''; }
 }
 

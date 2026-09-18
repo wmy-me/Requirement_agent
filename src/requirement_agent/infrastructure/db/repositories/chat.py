@@ -16,10 +16,8 @@ from requirement_agent.config.settings import settings
 from requirement_agent.domain.agent_run import stringify_run_meta
 from requirement_agent.infrastructure.db.session import SessionLocal
 
-# 并发隔离用的部分唯一索引（migrations/012）：(conversation_id) WHERE status IN ('running','paused')
-# ⚠️ 谓词里的 'paused' 是**永不可能出现**的值 —— 代码里已无写入方（pause 端点已删）、
-# DB 的 CHECK 也从不允许它。索引实际只覆盖 running；留着它是因为改索引谓词要动
-# 已有迁移建的对象，而收益只是好看。
+# 并发隔离用的部分唯一索引（migrations/012）：暂停仍占用对话，只有恢复或取消后
+# 才能在同一会话发起下一次运行。
 _ACTIVE_RUN_CONSTRAINT = "uq_run_active_per_conversation"
 
 
@@ -264,7 +262,7 @@ class ChatRepository:
         return self._normalize_run_row(row)
 
     def get_active_run(self, conversation_id: str) -> dict[str, object] | None:
-        """取该对话当前的活跃运行（running），供「本对话在忙」的 409 提示用。"""
+        """取该对话当前的活跃运行（running/paused），供 409 提示用。"""
         with SessionLocal() as session:
             row = session.execute(
                 text(
@@ -272,7 +270,7 @@ class ChatRepository:
                     SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     FROM agent_run
                     WHERE conversation_id = CAST(:conversation_id AS UUID)
-                      AND status = 'running'
+                      AND status IN ('running', 'paused')
                     ORDER BY created_at DESC
                     LIMIT 1
                     """
@@ -388,8 +386,8 @@ class ChatRepository:
     def find_resumable_run(self, conversation_id: str) -> dict[str, object] | None:
         """该会话最近一个「未完成但已有断点」的 run，供续跑入口用。
 
-        只认 cancelled/failed 且 checkpoint 非空 —— completed（跑完了没必要续）、
-        running（正在跑，不该再续一次）、checkpoint 为空（没算出任何东西，续了也是从头）都不算。
+        只认 paused 且 checkpoint 非空。failed 由 retry 创建新 run，cancelled 是用户
+        明确终止，二者都不能恢复；completed/running 也不应续跑。
         """
         with SessionLocal() as session:
             row = session.execute(
@@ -398,7 +396,7 @@ class ChatRepository:
                     SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
                     FROM agent_run
                     WHERE conversation_id = CAST(:conversation_id AS UUID)
-                      AND status IN ('cancelled', 'failed')
+                      AND status = 'paused'
                       AND checkpoint::text <> '{}'
                     ORDER BY updated_at DESC
                     LIMIT 1
@@ -506,4 +504,3 @@ class ChatRepository:
             "created_at": as_display_iso(row["created_at"]),
             "updated_at": as_display_iso(row["updated_at"]),
         }
-

@@ -59,7 +59,7 @@ class FakeStreamProvider:
 
 def _make_checked_run() -> dict[str, object]:
     conv = str(chat_repo.create_conversation(actor_id="resume-test", title="续跑测试")["id"])
-    run = chat_repo.create_run(conversation_id=conv, client_message_id="m-1", status="cancelled")
+    run = chat_repo.create_run(conversation_id=conv, client_message_id="m-1", status="paused")
     run_id = str(run["run_id"])
     checkpoint = {
         "extracted": {
@@ -70,7 +70,7 @@ def _make_checked_run() -> dict[str, object]:
         "analysis": {"duplicate": False, "related": False, "conflict": False, "independent": True},
         "risk": {"quality_risk": "low", "change_risk": "low", "technical_impact_risk": "low", "confidence": 0.7},
     }
-    chat_repo.update_run(run_id=run_id, status="cancelled", stage="assessed", checkpoint=checkpoint)
+    chat_repo.update_run(run_id=run_id, status="paused", stage="assessed", checkpoint=checkpoint)
     return {"conv": conv, "run": chat_repo.get_run(run_id)}
 
 
@@ -157,60 +157,31 @@ def test_resume_endpoint_validates_bad_runs() -> None:
             session.commit()
 
 
-# ── pause 端点已删除（2026-09-17）──────────────────────────────────────────
-#
-# 这个端点**从来没跑通过**：它写 `status='paused'`，而 `agent_run` 的 CHECK 约束
-# 是 `('running','completed','failed','cancelled')` —— 从库里读出来的，不是只读迁移
-# 文件推的。实测写 paused 会抛 `CheckViolation`，全仓也没有任何 pause 的测试。
-#
-# 删而不是修：`paused` 不在追加文档 §3.3 的 Run 状态枚举里，而删除它只影响一个
-# 从未生效的端点（前端用的是 `resume`，不是 pause）。⚠️ `migrations/012` 的索引
-# 谓词里还留着 `'paused'` —— 那是个**永不可能出现**的值，索引实际只覆盖 running。
-
-
-def test_pause_endpoint_is_gone() -> None:
-    """回归：那个必报 500 的端点不该再挂在那里。
-
-    它现在既不该被路由匹配（405/404），更不该以任何形式写 `paused`。
-    """
+def test_pause_then_resume_and_cancel_cannot_resume() -> None:
+    """暂停是唯一可恢复状态；取消是不可逆终态。"""
     from fastapi.testclient import TestClient
-
     from requirement_agent.api.app import app
 
     c = TestClient(app, headers={"Authorization": "Bearer test-api-token"})
-    resp = c.post(f"/api/v1/agent/runs/{uuid.uuid4()}/pause")
+    conv = str(chat_repo.create_conversation(actor_id="pause-test", title="暂停")["id"])
+    try:
+        run = chat_repo.create_run(conversation_id=conv, client_message_id="pause", status="running")
+        run_id = str(run["run_id"])
+        chat_repo.update_run(run_id=run_id, status="running", stage="extracted", checkpoint={"extracted": {"raw_text": "x"}})
 
-    assert resp.status_code in (404, 405), (
-        f"pause 端点应当已删除，实际返回 {resp.status_code} —— "
-        "若它复活了，先确认它写的状态在 agent_run 的 CHECK 约束里（当前没有 paused）"
-    )
+        paused = c.post(f"/api/v1/agent/runs/{run_id}/pause")
+        assert paused.status_code == 200 and paused.json()["status"] == "paused"
+        assert chat_repo.get_run(run_id)["status"] == "paused"
 
-
-def test_run_status_check_rejects_paused() -> None:
-    """把「为什么删」钉在数据库层：**写 paused 会被约束拒绝**。
-
-    这条不是在测我们的代码，而是在记录一个**既成事实** —— 将来若有人想把 pause
-    加回来，必须同时改 CHECK（新迁移），否则又是一次「代码在写、约束不认」。
-    """
-    from sqlalchemy import text
-    from sqlalchemy.exc import IntegrityError
-
-    from requirement_agent.infrastructure.db.session import SessionLocal
-
-    with SessionLocal() as session:
-        try:
-            run_id = session.execute(
-                text(
-                    "INSERT INTO agent_run (run_id, conversation_id, status, meta) "
-                    "VALUES (gen_random_uuid(), NULL, 'running', '{}'::jsonb) RETURNING run_id"
-                )
-            ).scalar()
-            with pytest.raises(IntegrityError):
-                session.execute(
-                    text("UPDATE agent_run SET status='paused' WHERE run_id=:r"), {"r": run_id}
-                )
-        finally:
-            session.rollback()
+        cancelled = c.post(f"/api/v1/agent/runs/{run_id}/cancel")
+        assert cancelled.status_code == 200 and cancelled.json()["status"] == "cancelled"
+        assert c.post(f"/api/v1/agent/runs/{run_id}/resume").status_code == 409
+    finally:
+        from sqlalchemy import text
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM agent_run WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv})
+            session.execute(text("DELETE FROM agent_conversation WHERE id = CAST(:c AS UUID)"), {"c": conv})
+            session.commit()
 
 
 # ── run.meta 的关联必须是真的（2026-09-17）────────────────────────────────

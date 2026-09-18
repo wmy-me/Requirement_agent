@@ -105,6 +105,7 @@ def test_revert_needs_a_revert_scope_not_review() -> None:
 def test_classification_of_representative_writes() -> None:
     cases = {
         ("POST", "/api/v1/requirements/submit"): SUBMIT,
+        ("POST", "/api/v1/requirements/submit/async"): SUBMIT,
         ("POST", "/api/v1/requirements/ingest"): SUBMIT,
         ("POST", "/api/v1/agent/chat/stream"): ANALYZE,
         ("POST", "/api/v1/conversations"): ANALYZE,

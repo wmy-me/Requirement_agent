@@ -49,7 +49,8 @@ class RequirementSubmitResponse(BaseModel):
     message: str
     source_type: str
     status: str = "pending_review"
-    source_id: int | None = None
+    source_id: str | None = None
+    queued: bool = False
 
 
 class RequirementRevertRequest(BaseModel):

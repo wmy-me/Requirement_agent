@@ -103,7 +103,7 @@ EXEMPT_EXACT: Final = frozenset(
 # 只对**非 GET**生效 —— GET 一律 `read`。
 WRITE_SCOPE_RULES: Final = (
     (re.compile(r"^/api/v1/requirements/[^/]+/revert$"), REVERT),
-    (re.compile(r"^/api/v1/requirements/submit$"), SUBMIT),
+    (re.compile(r"^/api/v1/requirements/submit(?:/async)?$"), SUBMIT),
     (re.compile(r"^/api/v1/requirements/ingest$"), SUBMIT),
     (re.compile(r"^/api/v1/requirements/relations/"), REVIEW),
     (re.compile(r"^/api/v1/requirements/[^/]+/titles$"), REVIEW),

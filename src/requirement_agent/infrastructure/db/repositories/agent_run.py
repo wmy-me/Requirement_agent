@@ -53,7 +53,7 @@ def _normalize_run_row(row: dict[str, object] | None) -> dict[str, object] | Non
         "id": to_sid(row["id"]),
         "run_id": str(row["run_id"]),
         "conversation_id": str(row["conversation_id"]) if row.get("conversation_id") is not None else None,
-        "source_id": row.get("source_id"),
+        "source_id": to_sid(row.get("source_id")),
         "run_type": row.get("run_type"),
         "client_message_id": row.get("client_message_id"),
         "status": row.get("status"),
@@ -154,7 +154,12 @@ class AgentRunRepository:
         return [_normalize_run_row(dict(row)) for row in rows]
 
     def list_recent(
-        self, *, limit: int = 50, status: str | None = None, run_type: str | None = None
+        self,
+        *,
+        limit: int = 50,
+        source_id: int | None = None,
+        status: str | None = None,
+        run_type: str | None = None,
     ) -> list[dict[str, object]]:
         """最近的全部运行（新→旧），可按状态与类型过滤。
 
@@ -164,6 +169,9 @@ class AgentRunRepository:
         """
         where: list[str] = []
         params: dict[str, object] = {"limit": max(1, min(limit, 200))}
+        if source_id is not None:
+            where.append("source_id = :source_id")
+            params["source_id"] = source_id
         if status:
             where.append("status = :status")
             params["status"] = status
