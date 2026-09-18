@@ -90,9 +90,12 @@ EXEMPT_PATTERNS: Final = (
 )
 EXEMPT_PREFIXES: Final = (
     "/static",
+    "/app/",  # 新工作台页面：// 与 /ui 同理，页面本身要能打开（数据请求仍要 token）
     "/api/v1/health",  # 探活：前端每 30 秒轮询，鉴权会让它变成噪声
 )
-EXEMPT_EXACT: Final = frozenset({"/", "/ui", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"})
+EXEMPT_EXACT: Final = frozenset(
+    {"/", "/ui", "/app", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
+)
 
 # ── 写路由 → 权限档次 ─────────────────────────────────────────────────────
 # ⚠️ **顺序敏感：具体的规则必须排在笼统的前面**（如 `/requirements/{key}/revert`

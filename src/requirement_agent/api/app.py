@@ -16,7 +16,7 @@ import json
 
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,6 +37,12 @@ STATIC_DIR = PROJECT_ROOT / "static"
 # 真正出问题时反而淹没在噪声里。
 _LOG_SKIP_PREFIXES = ("/static", "/api/v1/health", "/favicon.ico")
 _LOG_SKIP_PATHS = {"/", "/ui", "/health", "/docs", "/redoc", "/openapi.json"}
+
+#: 新工作台的页面白名单（`static/app/<name>.html`）。**不从 URL 拼路径** ——
+#: 见 `workbench_page` 的说明。
+_WORKBENCH_PAGES = frozenset(
+    {"index", "requirements", "reviews", "versions", "analysis", "knowledge", "intake", "ops"}
+)
 
 
 @asynccontextmanager
@@ -194,11 +200,10 @@ def create_app() -> FastAPI:
     async def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/ui", include_in_schema=False)
-    async def ui_page() -> HTMLResponse:
-        """返回工作台页面，**并把 API token 直接注入 HTML**。
+    def _render_page(path) -> HTMLResponse:
+        """读一个页面 HTML，**并把 API token 直接注入**。
 
-        ## 为什么是注入而不是让前端自己拿
+        ## 为什么注入而不是让前端自己拿
 
         这是**公司内部共用的一套工作台**：大家看同一个需求池、用同一套模型，
         没有「每个用户一个身份」这回事。token 是**服务入口凭证**，不是个人凭证 ——
@@ -206,27 +211,41 @@ def create_app() -> FastAPI:
 
         ## 为什么注入进 HTML，而不是发一个 `ui-config.js`
 
-        第一版是生成一个独立 JS 文件、页面用 `<script src>` 引它。**那多了一次请求，
-        也就多了一个会失败的地方**（漏加载 / 404 / 顺序不对 → 前端拿不到 token →
-        弹输入框）。注入进 HTML 是**一次响应里同时拿到页面和 token**，
-        没有第二个请求、没有加载顺序、没有中间态。
+        那多了一次请求，也就多了一个会失败的地方（漏加载 / 404 / 顺序不对 →
+        前端拿不到 token）。注入进 HTML 是**一次响应里同时拿到页面和 token**。
 
-        注入点由 `index.html` 里的 `<!-- RA_UI_TOKEN_INJECT -->` 占位符标记；
-        占位符没了就退回到「插在 `</head>` 之前」，并打一条 warning
-        —— 静默不注入会让所有人看到 401 而不知道原因。
+        ## 每个页面都要注入
+
+        新工作台是**多个独立 HTML**（`static/app/*.html`），每个都是完整文档、
+        各自发请求 —— 所以注入必须逐页做。漏掉一页，那一页就全是 401。
         """
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html = path.read_text(encoding="utf-8")
         snippet = (
             "<script>/* 服务端注入，勿手改 */"
             f"window.RA_UI_TOKEN = {json.dumps(settings.frontend_token())};</script>"
         )
         marker = "<!-- RA_UI_TOKEN_INJECT -->"
         if marker in html:
-            html = html.replace(marker, snippet)
-        else:
-            logger.warning("event=ui_token_marker_missing path=%s", STATIC_DIR / "index.html")
-            html = html.replace("</head>", snippet + "</head>", 1)
-        return HTMLResponse(html)
+            return HTMLResponse(html.replace(marker, snippet))
+        logger.warning("event=ui_token_marker_missing path=%s", path)
+        return HTMLResponse(html.replace("</head>", snippet + "</head>", 1))
+
+    @app.get("/ui", include_in_schema=False)
+    async def ui_page() -> HTMLResponse:
+        """旧工作台（对话为中心）。**保留不动** —— 新工作台逐页替换它。"""
+        return _render_page(STATIC_DIR / "index.html")
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/{page}", include_in_schema=False)
+    async def workbench_page(page: str = "index") -> HTMLResponse:
+        """新工作台的一个页面（`static/app/<page>.html`）。
+
+        ⚠️ **页名走白名单**，不做路径拼接 —— `page` 直接来自 URL，拼进路径就是
+        目录穿越（`../../.env`）。白名单同时让「有哪些页面」这件事在代码里可见。
+        """
+        if page not in _WORKBENCH_PAGES:
+            raise HTTPException(status_code=404, detail=f"未知页面：{page}")
+        return _render_page(STATIC_DIR / "app" / f"{page}.html")
 
     return app
 

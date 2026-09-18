@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>输入中心 · 需求治理工作台</title>
+  <link rel="stylesheet" href="/static/app/css/app.css" />
+  <!-- token 由服务端注入（api/app.py 的 _render_page）。每个页面都是独立文档，
+       各自发请求，所以**每一页都要注入** —— 漏掉一页那一页就全是 401。 -->
+  <!-- RA_UI_TOKEN_INJECT -->
+</head>
+<body data-page="intake" data-title="文本提交、文件导入">
+  <div id="shell"></div>
+  <main id="page"></main>
+
+  <script src="/static/app/js/core.js"></script>
+  <script src="/static/app/js/shell.js"></script>
+  <script src="/static/app/js/pages/intake.js"></script>
+</body>
+</html>
