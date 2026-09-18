@@ -24,6 +24,7 @@ from requirement_agent.application.decision_rules import next_action_for as deci
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
+from requirement_agent.infrastructure.llm.invocation import bind_run_id
 from requirement_agent.api.dependencies import (
     actor_id_or_default,
     analyze_agent,
@@ -213,13 +214,18 @@ def _narrative_prompt(pipeline: dict[str, object], memory_context: str | None = 
     return prompt
 
 
-async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | None = None) -> AsyncIterator[str]:
+async def _narrative_chunks(
+    pipeline: dict[str, object], memory_context: str | None = None, *, run_id: str | None = None
+) -> AsyncIterator[str]:
     """将结构化结论转成自然语言流。有 LLM 则走真实流式；否则退化为分段输出。
 
     生产者在线程池读取 LLM 流，消费者在事件循环用 get_nowait + sleep 轮询，
     避免阻塞默认执行器线程（防止客户端断连时线程泄漏、进而拖垮其它请求）。
     """
     provider = LLMProvider()
+    # 保留无参构造以兼容注入的测试 provider 和全局模型配置；但审计必须能区分
+    # 流式叙事与其它 chat 调用，不能落成 unknown_stream。
+    provider.task_type = "narrative"
     if not provider.is_configured():
         # 未配置 LLM 时直接给出确定性结论（逐段输出以模拟节奏）
         text = _fallback_narrative(pipeline)
@@ -233,10 +239,13 @@ async def _narrative_chunks(pipeline: dict[str, object], memory_context: str | N
 
     def _pump() -> None:
         try:
-            for chunk in provider.generate_stream(
-                _narrative_prompt(pipeline, memory_context=memory_context), system_prompt=NARRATIVE_SYSTEM_PROMPT
-            ):
-                queue.put(("t", chunk))
+            # run_in_executor 不保证把 ContextVar 传入这个手工创建的线程，故在
+            # 生产线程内重新绑定。否则叙事记录会变成 run_id=NULL。
+            with bind_run_id(run_id):
+                for chunk in provider.generate_stream(
+                    _narrative_prompt(pipeline, memory_context=memory_context), system_prompt=NARRATIVE_SYSTEM_PROMPT
+                ):
+                    queue.put(("t", chunk))
             queue.put(("done", ""))
         except Exception as exc:  # pragma: no cover - depends on external LLM
             queue.put(("err", str(exc)))
@@ -448,12 +457,13 @@ async def _stream_chat_pipeline(
                 run_id, "step", {"step": "extract", "label": "正在理解你的需求…"},
                 node="extract",
             )
-            extracted = await run_in_threadpool(
-                extract_agent.extract,
-                run_text,
-                source_type=source_type,
-                requester_name=requester_name,
-            )
+            with bind_run_id(run_id):
+                extracted = await run_in_threadpool(
+                    extract_agent.extract,
+                    run_text,
+                    source_type=source_type,
+                    requester_name=requester_name,
+                )
             extracted_payload = extracted.model_dump(mode="python")
             pipeline["extracted"] = extracted_payload
             save_progress("extracted")
@@ -467,11 +477,12 @@ async def _stream_chat_pipeline(
                 run_id, "step", {"step": "retrieve", "label": "正在检索相似需求…"},
                 node="retrieve",
             )
-            candidates = await run_in_threadpool(
-                retrieval_service.search,
-                extracted.summary or run_text,
-                limit=5,
-            )
+            with bind_run_id(run_id):
+                candidates = await run_in_threadpool(
+                    retrieval_service.search,
+                    extracted.summary or run_text,
+                    limit=5,
+                )
             pipeline["candidates"] = candidates
             save_progress("retrieved")
         else:
@@ -484,9 +495,10 @@ async def _stream_chat_pipeline(
                 run_id, "step", {"step": "analyze", "label": "正在分析冲突与重复…"},
                 node="analyze",
             )
-            analysis = await run_in_threadpool(
-                analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
-            )
+            with bind_run_id(run_id):
+                analysis = await run_in_threadpool(
+                    analyze_agent.analyze, extracted, candidates, analysis_mode=analysis_mode
+                )
             analysis_payload = analysis.model_dump(mode="python")
             pipeline["analysis"] = analysis_payload
             # 标签由**判定级别**映射，不再拿 similarity 比阈值 ——
@@ -511,7 +523,8 @@ async def _stream_chat_pipeline(
                 run_id, "step", {"step": "risk", "label": "正在评估风险…"},
                 node="risk",
             )
-            risk = await run_in_threadpool(risk_agent.assess, extracted)
+            with bind_run_id(run_id):
+                risk = await run_in_threadpool(risk_agent.assess, extracted)
             risk_payload = risk.model_dump(mode="python")
             pipeline["risk"] = risk_payload
 
@@ -525,7 +538,8 @@ async def _stream_chat_pipeline(
 
         # 跨会话长期记忆：仅当命中才注入最终结论 prompt
         check_run_status()
-        memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
+        with bind_run_id(run_id):
+            memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
 
         yield _sse("artifacts", {"artifacts": pipeline})
 
@@ -534,7 +548,7 @@ async def _stream_chat_pipeline(
 
         yield _sse("narrative", {"start": True})
         try:
-            async for token in _narrative_chunks(pipeline, memory_context=memory_ctx):
+            async for token in _narrative_chunks(pipeline, memory_context=memory_ctx, run_id=run_id):
                 check_run_status()
                 narrative_parts.append(token)
                 yield _sse("narrative", {"t": token})

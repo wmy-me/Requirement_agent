@@ -12,6 +12,7 @@
 import asyncio
 
 from requirement_agent.api.routes import agent_chat
+from requirement_agent.infrastructure.llm.invocation import current_run_id, record_invocation, set_recorder
 
 
 class FakeStreamProvider:
@@ -50,3 +51,36 @@ def test_streaming_narrative_is_forwarded(monkeypatch) -> None:
 def test_streaming_narrative_handles_empty_stream(monkeypatch) -> None:
     """模型一段都没给时要正常结束，不能挂死（也不能抛错）。"""
     assert _collect([], monkeypatch) == []
+
+
+def test_narrative_invocation_keeps_run_id_inside_background_thread(monkeypatch) -> None:
+    """手工 executor 线程不会自动继承 ContextVar，叙事必须显式重新绑定。"""
+    records: list[dict[str, object]] = []
+
+    class ObservedProvider(FakeStreamProvider):
+        def __init__(self):
+            super().__init__(["已记录"])
+            self.task_type = ""
+
+        def generate_stream(self, prompt: str, system_prompt: str | None = None):
+            record_invocation({
+                "run_id": current_run_id(), "task_type": self.task_type,
+                "provider": "test", "model": "test", "status": "ok",
+            })
+            yield from self.pieces
+
+    provider = ObservedProvider()
+    monkeypatch.setattr(agent_chat, "LLMProvider", lambda: provider)
+    set_recorder(records.append)
+    pipeline = {"extracted": {}, "candidates": [], "analysis": {}, "risk": {}}
+    try:
+        async def run() -> list[str]:
+            return [token async for token in agent_chat._narrative_chunks(pipeline, run_id="run-audit-test")]
+
+        assert asyncio.run(run()) == ["已记录"]
+        assert records == [{
+            "run_id": "run-audit-test", "task_type": "narrative",
+            "provider": "test", "model": "test", "status": "ok",
+        }]
+    finally:
+        set_recorder(None)
