@@ -353,16 +353,16 @@ departments(string[])  sensitivity_levels(string[])
 > ⚠️ `/capabilities` 对老需求可能返回空数组 —— **空 ≠ 出错**，别让整页挂掉。
 > ⚠️ `constraints[].alias_hit` 在旧快照里**可能没有这个键**（契约 §8.1，实测抓到过活实例）。
 
-### 3.10 `GET /api/v1/agent/runs` ⚠️ 见 §5.1、§5.2
+### 3.10 `GET /api/v1/agent/runs`
 
-**参数**：`source_id?`（**现在可选**）、`status?`、`run_type?`、`limit` 默认 `20`（仓储夹到 200）
+**参数**：`source_id?`（**可选**）、`status?`、`run_type?`、`limit` 默认 `20`（仓储夹到 200）
 
 > ⚠️ **`source_id` 一旦给了，`status` 和 `run_type` 会被静默忽略**（`agent_chat.py:911-916`）。
 > 前端不要同时传这三个 —— 要么按来源查，要么按状态/类型筛，**不能组合**。
 
-**响应** 实测 17 条，每项 **16 个键**（数据库原始列，**未经归一化**）：
+**响应** 实测 17 条，每项 **16 个键**：
 ```
-id(number ⚠️)  run_id(str)  conversation_id  source_id  run_type  client_message_id
+id(str ✅)  run_id(str)  conversation_id  source_id  run_type  client_message_id
 status  error  meta  stage  checkpoint  current_node
 started_at  ended_at  created_at  updated_at
 ```
@@ -371,17 +371,21 @@ started_at  ended_at  created_at  updated_at
 - `status`：`queued / running / waiting_review / completed / failed / cancelled / retrying`
   —— ⚠️ **分析跑完是 `waiting_review` 而不是 `completed`**
 - `current_node`：失败定位靠它
+- `meta.assistant_message_id` 是**字符串**（2026-09-18 修复，见 §5.1）
+- ⚠️ `started_at` / `ended_at` **可能为 `null`**（实测有 15 条 run 是）
 
 ### 3.11 `GET /api/v1/agent/runs/{run_id}` ⚠️ 见 §5.3
 
 **参数**：路径 `run_id`（**UUID 字符串**，不是雪花 id）
 
-**响应**：**比 §3.10 少 5 个键、多 0 个**（`chat.py:361` 的 SELECT 就没有那些列）：
+**响应**：**比 §3.10 少 5 个键、多 0 个**：
 ```
-id(number ⚠️)  run_id  conversation_id  client_message_id  status  error
+id(str ✅)  run_id  conversation_id  client_message_id  status  error
 meta  stage  checkpoint  created_at  updated_at
 ```
 **缺**：`source_id`、`run_type`、`started_at`、`ended_at`、`current_node`
+
+> 两个端点的 `id` **已实测一致**（同值同类型），有测试钉住 —— 见 §5.3。
 
 ### 3.12 `GET /api/v1/agent/runs/{run_id}/events`
 
@@ -397,8 +401,8 @@ meta  stage  checkpoint  created_at  updated_at
 
 **响应**：`{run_id, tools:[…], models: []}` —— **`models` 恒为空数组**（`agent_chat.py:950`）。
 
-`tools[]` 每项（**数据库原始行，未归一化**）：
-`id(number ⚠️), run_id, tool_name, arguments_summary, result_summary, status, elapsed_ms, error_message, created_at`
+`tools[]` 每项：
+`id(str ✅), run_id, tool_name, arguments_summary, result_summary, status, elapsed_ms, error_message, created_at`
 
 > ⚠️ 契约 §6 说 `models` 恒空是因为「模型调用要等 B3.1 的 ModelRegistry」。
 > **B3.1 已经交付了**（`/ops/models` 有 41 条真实记录），但这个端点**仍然恒空** ——
@@ -467,14 +471,14 @@ meta  stage  checkpoint  created_at  updated_at
 > 未配置的任务（如 `vision`）会返回 `provider: "", model: ""` —— **那是「没配」不是「配错了」**，
 > 前端要区分显示。响应里**没有 fallbacks**，只有 primary。
 
-### 3.18 `GET /api/v1/memory` ⚠️ 见 §5.1
+### 3.18 `GET /api/v1/memory`
 
 **参数**：`actor_id?`、`limit` 默认 `20`（1-50）
 **响应** 实测 3 条，每项 **14 键**：
 ```
-id(number ⚠️)  actor_id  kind  status  active(bool)  content
-source_conversation_id  source_message_id(number ⚠️)  ref_requirement_key
-superseded_by  importance  meta  created_at  updated_at
+id(str ✅)  actor_id  kind  status  active(bool)  content
+source_conversation_id  source_message_id(str ✅)  ref_requirement_key
+superseded_by(str ✅)  importance  meta  created_at  updated_at
 ```
 SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
@@ -533,50 +537,62 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 ## 5. 实测发现的问题（**这是本次盘点的最大产出**）
 
-### 5.1 🔴 P0 · 两个端点返回 **number 型雪花 ID**，违反契约 §1.1
+### 5.1 ~~🔴 P0 · 两个端点返回 number 型雪花 ID~~ ✅ **已修（2026-09-18 同日）**
 
-| 端点 | 违规字段 | 实测值 | 出处 |
+**盘点时发现**下列端点把雪花 ID 当 JSON number 发出去，违反契约 §1.1：
+
+| 端点 | 违规字段 | 盘点时实测值 | 出处 |
 |---|---|---|---|
-| `GET /api/v1/agent/runs` | `id` | `225549012554481664` | `repositories/agent_run.py:94` 返回 `dict(row)` 裸行 |
-| `GET /api/v1/agent/runs/{run_id}` | `id` | —— | `repositories/chat.py:490` 显式 `int(row["id"])` |
-| `GET /api/v1/agent/runs/{id}/invocations` | `tools[].id` | —— | `repositories/agent_run.py:339` 返回裸行 |
-| `GET /api/v1/memory` | `id`、`source_message_id` | `225102660003430400`、`225102609537564672` | `repositories/memory.py` 归一化未调 `to_sid` |
+| `GET /api/v1/agent/runs` | `id` | `225549012554481664`（int） | `repositories/agent_run.py` 返回 `dict(row)` 裸行 |
+| `GET /api/v1/agent/runs/{run_id}` | `id` | —— | `repositories/chat.py` 显式 `int(row["id"])` |
+| `GET /api/v1/agent/runs/{id}/invocations` | `tools[].id` | —— | 同上，返回裸行 |
+| `GET /api/v1/memory` | `id`、`source_message_id`、`superseded_by` | `225102660003430400`、`225102609537564672` | `_normalize_memory_row` 未调 `to_sid` |
 
-**危险程度：潜伏，不是已发作。** 实测这三个值**恰好**能被 double 精确表示（末尾零足够多，`seq=0`），
-所以现在 `JSON.parse` 不会改值。
+**当时的危险程度：潜伏，不是已发作。** 这些值**恰好**能被 double 精确表示（末尾零足够多，`seq=0`）。
+但契约 §1.1 明说那不是可依赖的性质 —— 库里**已经有 2 个不可精确表示的 ID**
+（`requirement_title_candidate.id`、`outbox_event.id`，由 `verify_api_contract.py` 扫出）。
+一旦出现 `seq≠0` 的行，前端就会**悄悄拿到一个差 1 的 id**。
 
-**但契约 §1.1 明说这不是可依赖的性质** —— 库里**已经有 2 个不可精确表示的 ID**
-（`requirement_title_candidate.id = 226274893426065409`、`outbox_event.id = 225548242094391297`，
-由仓库自带的 `scripts/verify_api_contract.py` 扫出）。一旦 `agent_run` 或 `memory` 里出现
-`seq≠0` 的行，前端就会**悄悄拿到一个差 1 的 id**。
+> ⚠️ **仓库自带的检查脚本当时为什么没报？** 因为它的 `SPEC` **只覆盖 10 个端点**，
+> 而 `agent/run*`、`memory*`、`conversations*` **一个字都没提**。
+> 它的 `✅ 无精度风险` 是**在它看到的那 10 个端点上成立的结论**，不是全量结论。
 
-> ⚠️ **仓库自带的检查脚本为什么没报？** 因为它的 `SPEC` **只覆盖 10 个端点**，
-> 而 `agent/run*`、`memory*`、`conversations*` **一个字都没提**
-> （`grep -c "agent/run\|/memory\|conversations" scripts/verify_api_contract.py` → `0`）。
-> 它的 `✅ 契约与实现一致，且当前无精度风险` 是**在它看到的那 10 个端点上成立的结论**，
-> 不是全量结论。这正是「测试全绿 ≠ 没问题」的一个实例。
+**已做的修复**：
 
-**对前端的影响**：`run_id` 是 UUID 字符串（安全），前端所有 run 相关的 URL 都用它 ——
-所以**当前不会出事**。但 **`memory` 页面的删除操作**要拼 `/memory/{memory_id}/delete`，
-`memory_id` 来自 `items[].id`（number ⚠️）。**这是目前唯一一条「拿 id 拼 URL」的高危路径。**
+1. `agent_run.py` 新增 `_normalize_run_row` / `_normalize_tool_row`，套用到
+   `create_run` / `get_run` / `list_by_source` / `list_recent` / `list_tool_invocations`
+2. `chat.py::_normalize_run_row` 的 `int(row["id"])` → `to_sid(row["id"])`
+3. `memory.py::_normalize_memory_row` 的三个 id 字段改 `to_sid`
+4. `verify_api_contract.py` 的 SPEC 补入 `/agent/runs`、`/memory`、`/sources`
+5. 回归测试：`test_id_serialization.py` 的 `ID_ENDPOINTS` 加两条 + 三条新用例
 
-**建议**（不在本阶段实施）：后端补 `to_sid` + 把这几组端点加进 `verify_api_contract.py` 的 SPEC；
-前端在 `api.js` 里对这几个字段**原样透传**并在注释里标注风险。
+> **补 SPEC 立刻又抓出一个**：把 `/agent/runs` 加进去后，脚本的大整数扫描报出
+> **`meta.assistant_message_id` 也是 number**（嵌在存储型 JSON 里，与
+> `provenance[].source_id` 同一类）。它此前一直在盲区里，实测 **15 条 run** 带这个字段。
+> 修法沿用契约 §10-T1 第 2 条「**读时转**」：落在 `domain/agent_run.py::stringify_run_meta`，
+> 由两个仓储的 run 归一化共用。
+>
+> 这是本次最值得记的一条：**覆盖边界就是结论边界** ——
+> 脚本报「无风险」不是因为它检查过，是因为它没看。
 
-### 5.2 🔴 P0 · `/agent/runs` 的时间格式与全站不一致
+**对前端的影响**：修好之后，`api.js` **不需要为这几个字段写任何兼容分支**，一律原样透传。
+（`run_id` 本来就是 UUID 字符串。）
 
-| 端点 | `created_at` 实测 |
-|---|---|
-| `/agent/runs` | `'2026-09-15T09:31:15.092449Z'`（**UTC，无偏移**） |
-| `/sources` | `'2026-09-16T15:17:03.829708+08:00'` |
-| `/reviews/pending` | `'2026-09-16T12:07:12.925786+08:00'` |
-| `/documents` | `'2026-09-14T11:55:10.118948+08:00'` |
+### 5.2 ~~🔴 P0 · `/agent/runs` 的时间格式与全站不一致~~ ✅ **已修（2026-09-18 同日）**
+
+| 端点 | 盘点时 `created_at` 实测 | 修复后 |
+|---|---|---|
+| `/agent/runs` | `'2026-09-15T09:31:15.092449Z'`（**UTC，无偏移**） | `'2026-09-15T17:31:15.092449+08:00'` |
+| `/sources` | `'2026-09-16T15:17:03.829708+08:00'` | 不变 |
+| `/reviews/pending` | `'2026-09-16T12:07:12.925786+08:00'` | 不变 |
+| `/documents` | `'2026-09-14T11:55:10.118948+08:00'` | 不变 |
 
 原因：`/agent/runs` 走 FastAPI 的 datetime 编码器，其余走 `as_display_iso`。
 
-**影响**：`new Date(iso)` 对两种格式都能解析正确 —— 所以**不算数据错误**。
-但**如果前端用字符串切片格式化**（`iso.slice(11,16)`）就会差 8 小时。
-`core.js` 现有的 `fmt.time()` 用的是 `new Date()`，**是安全的**；拆分成 `format.js` 时**必须保持这一点**。
+**影响其实有限** —— `new Date()` 对两种格式都能解析正确，所以**不是数据错误**；
+但如果前端用字符串切片格式化（`iso.slice(11,16)`）会差 8 小时。
+`core.js` 现有的 `fmt.time()` 用的是 `new Date()`，**是安全的**；
+拆分成 `format.js` 时**必须保持这一点**（已加测试钉住）。
 
 ### 5.3 🟡 P1 · `/agent/runs/{run_id}` 与 `/agent/runs` 字段集不同
 
@@ -627,14 +643,19 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 ## 6. 进入下一阶段前必须拍板/确认的事
 
-| # | 事项 | 影响阶段 | 建议 |
+| # | 事项 | 影响阶段 | 状态 |
 |---|---|---|---|
-| 1 | **`/agent/runs` 的 `id` 是 number** —— 前端要不要现在就做防御？ | 阶段 8 | 后端补 `to_sid` 是**一行**的事；建议让后端修，前端不写兼容分支 |
-| 2 | **`memory` 页面的删除**要用 number 型 `id` 拼 URL | 阶段 12 | 见 §5.1，**这是唯一高危路径**。要么后端修，要么阶段 12 前别接删除 |
-| 3 | **Run 详情页的模型调用**走哪条路 | 阶段 8 | 建议后端给 `/ops/models` 加 `run_id` 参数（避免前端聚合） |
-| 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | 见 §3.6，需要在实现时定一个「读不到就按最安全处理」的策略 |
-| 5 | **`/constraints` 等三个空形状**要不要先造数据 | 阶段 11 | 建议先造，否则页面写完无法验证 |
-| 6 | **`docs/方案_前端工作台.md` §6.1 写的「已定 React + TS + Vite」** | 全局 | 本次要求是**原生 ES Modules、无构建**。该文档的选型结论已作废，**建议改掉**，否则下一个人会照它做 |
+| 1 | **`/agent/runs` 的 `id` 是 number** | 阶段 8 | ✅ **已修**，见 §5.1。前端**不写兼容分支** |
+| 2 | **`memory` 页面的删除**要用 number 型 `id` 拼 URL | 阶段 12 | ✅ **已修**（`id` / `source_message_id` / `superseded_by` 全部字符串化） |
+| 3 | **Run 详情页的模型调用**走哪条路 | 阶段 8 | ⏳ **待定** —— 建议后端给 `/ops/models` 加 `run_id` 参数（避免前端聚合），见 §5.4 |
+| 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | ⏳ **待定** —— 见 §3.6，需要在实现时定一个「读不到就按最安全处理」的策略 |
+| 5 | **`/constraints` 等三个空形状**要不要先造数据 | 阶段 11 | ⏳ **待定** —— 建议先造，否则页面写完无法验证，见 §5.5 |
+| 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `docs/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
+| 7 | **`verify_api_contract.py` 的 SPEC 只覆盖 13 个端点**（原 10 个） | 全局 | ⏳ **待定** —— 本次补了 3 个（都是出问题的那几个）。**要不要补全到 73 条？** 不补的话下次还会有「全绿但有问题」 |
+
+> 第 7 条是本次最有价值的一条。已经证明过一次：**把 `/agent/runs` 加进 SPEC，
+> 立刻又扫出 `meta.assistant_message_id` 是 number** —— 它此前躺在盲区里，
+> 而 15 条 run 都带着这个字段。
 
 ---
 
@@ -654,20 +675,21 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 本次盘点**新发现**、契约尚未记录的：
 
-| # | 差异 | 位置 |
-|---|---|---|
-| 1 | `/agent/runs`、`/memory`、`invocations.tools[]` 返回 **number 型雪花 ID** | 契约 §1.1 声称「一律字符串」 |
-| 2 | `/agent/runs` 的时间**不走 `as_display_iso`** | 契约 §1 声称统一 ISO |
-| 3 | `/agent/runs/{run_id}` 与 `/agent/runs` **字段集不同** | 契约 §6 未提 |
-| 4 | `/agent/runs` 的 `source_id` 会**静默忽略** `status`/`run_type` | 契约 §1.3 未提 |
-| 5 | `/invocations` 的 `models` 恒空，但 `/ops/models` 已有真实数据 | 契约 §6 的解释已过期 |
-| 6 | `/ops/models` 的 `routing.resolved` 是**硬编码 6 个任务**、未配置时返回空串 | 契约 §1.3 未提 |
-| 7 | **契约 §7 说死信 retry/discard「没有鉴权」已过期** —— 实测 `auth.py:115` 要求 `ops` 档次 | 契约 §7 |
-| 8 | `/agent/run`（单数，同步、会写库）与 `/requirements/submit`（走 outbox）语义不同 | 契约未区分 |
+| # | 差异 | 位置 | 状态 |
+|---|---|---|---|
+| 1 | `/agent/runs`、`/memory`、`invocations.tools[]` 返回 **number 型雪花 ID** | 契约 §1.1 声称「一律字符串」 | ✅ **代码已修**；契约 §1.1 原文无需改（它本来就是对的，是实现没跟上） |
+| 2 | `/agent/runs` 的时间**不走 `as_display_iso`** | 契约 §1 声称统一 ISO | ✅ **代码已修** |
+| 3 | `/agent/runs/{run_id}` 与 `/agent/runs` **字段集不同** | 契约 §6 未提 | ⏳ 待补进契约 |
+| 4 | `/agent/runs` 的 `source_id` 会**静默忽略** `status`/`run_type` | 契约 §1.3 未提 | ⏳ 待补进契约 |
+| 5 | `/invocations` 的 `models` 恒空，但 `/ops/models` 已有真实数据 | 契约 §6 的解释已过期 | ⏳ 待补进契约 |
+| 6 | `/ops/models` 的 `routing.resolved` 是**硬编码 6 个任务**、未配置时返回空串 | 契约 §1.3 未提 | ⏳ 待补进契约 |
+| 7 | **契约 §7 说死信 retry/discard「没有鉴权」已过期** —— 实测要求 `ops` 档次 | 契约 §7 | ⏳ **契约要改**（代码是对的） |
+| 8 | `/agent/run`（单数，同步、会写库）与 `/requirements/submit`（走 outbox）语义不同 | 契约未区分 | ⏳ 待补进契约 |
+| 9 | `meta.assistant_message_id` 也是 number（**补 SPEC 后才扫出来**） | 契约 §1.1 覆盖范围内 | ✅ **代码已修** |
 
 > 差异 #7 值得单独说：契约 §7 写「这两个**没有鉴权**（见 current-state §三 遗留 8）」，
 > 但 B1（2026-09-17）之后 `/api/v1/ops/` 全部要求 `ops` 档次。**照契约写前端会以为可以裸调**，
-> 实际会拿到 403。这是「文档比代码旧」的又一例。
+> 实际会拿到 403。这是「文档比代码旧」的又一例 —— **这次要改的是文档，不是代码**。
 
 ---
 
