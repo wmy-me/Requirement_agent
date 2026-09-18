@@ -38,7 +38,7 @@
 | **雪花 ID** | 契约要求**一律 JSON 字符串**，前端永不 `Number()` | 契约 §1.1 |
 | **分页** | 全是 `limit`，**没有游标**。每个端点的默认值与上限都不同 —— 见 §2 逐条 | 契约 §5 约定 2 |
 | **日期筛选 `to`** | 前端要补 `T23:59:59`，否则当天数据被排除 | 契约 §1 |
-| **时间** | 多数走 `as_display_iso`（`+08:00`）；**`/agent/runs` 不是**，见 §5.2 | 实测 |
+| **时间** | 一律走 `as_display_iso`（`+08:00`）。`/agent/runs` 曾是例外，已修（§5.2） | 实测 |
 
 ### 1.1 权限档次 → 前端该怎么表现
 
@@ -80,7 +80,7 @@
 | 页面 | 端点 | 档次 | 就绪 |
 |---|---|---|---|
 | 待审队列 | `GET /api/v1/reviews/pending?limit=` | read | ✅ |
-| 审核工作区 | `GET /api/v1/reviews/{source_id}/detail` | read | 🔶 形状同 pending 单项（源码取证） |
+| 审核工作区 | `GET /api/v1/reviews/{source_id}/detail` | read | ✅ 形状同 pending 单项 |
 | 合并预演 | `GET /api/v1/reviews/{source_id}/merge-preview?target_requirement_key=&merge_mode=` | read | 🔶 |
 | 提交裁决 | `POST /api/v1/reviews/submit` | review | 🔶 |
 | 审核历史 | `GET /api/v1/reviews/history?status=&limit=` | read | ✅ |
@@ -98,7 +98,7 @@
 | 详情 · 溯源 | `GET /api/v1/requirements/{key}/trace` | read | ✅ |
 | 详情 · 关系 | `GET /api/v1/requirements/{key}/relations` | read | ✅ |
 | 详情 · 能力条件 | `GET /api/v1/requirements/{key}/capabilities` | read | ✅ |
-| 详情 · 候选标题 | `GET /api/v1/requirements/{key}/titles` | read | ✅（**实测 0 条**，见 §5.5） |
+| 详情 · 候选标题 | `GET /api/v1/requirements/{key}/titles` | read | ✅（形状实测，见 §3.9） |
 | 关系裁决 | `PATCH /api/v1/requirements/relations/{relation_id}` | review | 🔶 |
 | **影响分析** | —— | —— | **⛔ 后端 B4 未做** |
 
@@ -106,10 +106,10 @@
 
 | 页面 | 端点 | 档次 | 就绪 |
 |---|---|---|---|
-| 分析任务列表 | `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | read | ✅ ⚠️ **见 §5.1** |
+| 分析任务列表 | `GET /api/v1/agent/runs?source_id=&status=&run_type=&limit=` | read | ✅ ⚠️ 三参数**不能组合**，见 §3.10 |
 | Run 详情 | `GET /api/v1/agent/runs/{run_id}` | read | ✅ ⚠️ **字段集不同，见 §5.3** |
 | 节点时间线 / 回放 | `GET /api/v1/agent/runs/{run_id}/events?after_seq=&limit=` | read | ✅ |
-| 工具与模型调用 | `GET /api/v1/agent/runs/{run_id}/invocations` | read | ✅ ⚠️ `models` 恒空 |
+| 工具与模型调用 | `GET /api/v1/agent/runs/{run_id}/invocations` | read | ✅ ⚠️ `models` 恒空，模型走 `/ops/models?run_id=`（§3.17） |
 | 重跑失败分析 | `POST /api/v1/agent/runs/{run_id}/retry` | **analyze** | 🔶 |
 | 渠道分析（单条来源） | `POST /api/v1/agent/run` | analyze | 🔶 ⚠️ **同步执行、会写库** |
 | 触发分析（异步任务） | `POST /api/v1/requirements/submit` | submit | 🔶 |
@@ -121,7 +121,7 @@
 | 文本提交 | `POST /api/v1/requirements/submit` | submit | 🔶 |
 | 文件导入 | `POST /api/v1/requirements/ingest`（**multipart**） | submit | 🔶 |
 | 导入结果查看 | `GET /api/v1/sources?…` | read | ✅ |
-| 单条来源回放 | `GET /api/v1/sources/{source_id}/trace` | read | 🔶 |
+| 单条来源回放 | `GET /api/v1/sources/{source_id}/trace` | read | ✅ |
 | **截图上传** | —— | —— | **⛔ 视觉模型未接** |
 | **导入任务进度** | —— | —— | **⛔ 无「按来源聚合的任务状态」端点** |
 
@@ -145,7 +145,7 @@
 | 分片检索 | `GET /api/v1/documents/search?q=&limit=` | read | ✅ |
 | 重建索引 | `POST /api/v1/documents/{document_id}/reindex` | **ops** | 🔶 |
 | 能力词表 | `GET /api/v1/capabilities?status=&q=&limit=` | read | ✅ |
-| 条件词表 | `GET /api/v1/constraints?status=&q=&limit=` | read | ✅（**实测 0 条**） |
+| 条件词表 | `GET /api/v1/constraints?status=&q=&limit=` | read | ✅（形状实测，见 §3.19） |
 | 能力→需求反查 | `GET /api/v1/capabilities/{id}/streams?constraint=&review_status=&limit=` | read | 🔶 |
 | **文档版本链** | —— | —— | **⛔ 数据层有、HTTP 层没有**（契约 §10-T6） |
 
@@ -158,9 +158,9 @@
 | 死信重投 | `POST /api/v1/ops/outbox/dead-letters/{event_id}/retry` | **ops** | 🔶 |
 | 死信丢弃 | `POST /api/v1/ops/outbox/dead-letters/{event_id}/discard` | **ops** | 🔶 |
 | Worker | `GET /api/v1/ops/worker` | read | ✅ |
-| 模型调用 | `GET /api/v1/ops/models?task_type=&limit=` | read | ✅ |
+| 模型调用 | `GET /api/v1/ops/models?task_type=&run_id=&limit=` | read | ✅ |
 | 审计 | `GET /api/v1/audit/events?limit=` | read | ✅ |
-| 对话与记忆 | `GET /api/v1/conversations?limit=&offset=`、`GET /api/v1/memory?…` | read | ✅ ⚠️ **见 §5.1** |
+| 对话与记忆 | `GET /api/v1/conversations?limit=&offset=`、`GET /api/v1/memory?…` | read | ✅ |
 | **渠道状态** | —— | —— | **⛔ 无端点** |
 
 ### 2.9 阶段 13 · 总览 Dashboard
@@ -304,11 +304,45 @@ processing_status  submitted_at  updated_at
 **响应**：`{decision, reviewer_id, status, version_no, requirement_key}`
 
 > ⚠️ **请求体不接受 `reviewer_id`** —— 审核人身份由服务端取。前端只能传 `reviewer_name`。
-> ⚠️ **409 有三种**：`source_id=X not found`（列表陈旧）/ `… is not pending review`（重复点击）/
-> **「该需求已被他人修改，请重新加载后再审核」**（乐观锁冲突）。
-> 按契约 §1.2 本应只按状态码分支，但这里**三种 409 的处理动作不同**，是唯一需要读 `detail` 的例外 ——
-> 建议前端识别时用 `detail` 里的 `source_id` / 固定前缀做**弱匹配**，并且在读不到时**默认按最安全的处理**
-> （重新加载目标 REQ）。这条要在实现时确认，见 §6 待办。
+
+#### 409 的三种签名（**已实测**，2026-09-18）
+
+**为什么这里破例读 `detail`**：三种 409 的处理动作**不同**，而状态码三者都是 409。
+这是全项目**唯一**需要读 `detail` 的地方 —— 其余一律只按状态码分支。
+
+| `detail` 前缀 | 触发 | 前端该做什么 |
+|---|---|---|
+| `source_id=` … `not found` | 列表陈旧：拿着已失效的 id | 刷新待办列表 |
+| `source_id=` … `is not pending review` | 重复点击 / 该条已被处理 | 刷新待办列表 |
+| `该需求已被他人修改` | **乐观锁冲突** | **重新加载目标 REQ 再决定** |
+
+**实测证据**（用不存在的 / 非待审的 source_id 打，不会改动任何数据）：
+
+```
+source_id=999999999999999999        → 409  'source_id=999999999999999999 not found'
+status=committed 的来源提交裁决      → 409  'source_id=225877630925144064 is not pending review'
+重复提交同一来源                     → 409  'source_id=225877630925144064 is not pending review'
+```
+
+**实现要求**：
+
+1. **先按状态码分支，再在 409 内部弱匹配前缀**。匹配用 `startsWith` / `includes` 的固定片段，
+   **不要匹配整句** —— 乐观锁那句在审核端点是「…请重新加载后**再审核**」，
+   在回滚端点是「…请重新加载后**再回滚**」，**只差最后两个字**。
+   前缀取 `该需求已被他人修改` 可以同时覆盖，且两者要做的事**是同一件**（重新加载）。
+2. **读不到前缀时，按最安全的那个处理** —— 即「重新加载目标 REQ」。
+   理由：三种里只有乐观锁会**基于陈旧的功能集产出错误的版本**，
+   那个后果最重；另外两种最坏也只是多重刷一次列表。
+3. 乐观锁冲突时**整个事务已回滚，没有产生任何数据** —— 提示文案不要写「提交失败」，
+   要写「这条需求在你审核期间被改过，已重新加载」。
+
+> ⚠️ **同一个字符串在不同端点含义不同**（实测）：
+> `source_id=X not found` 在 `POST /reviews/submit` 是 **409**，
+> 在 `GET /reviews/{id}/merge-preview` 是 **404**。
+> 原因是两处的抛出点不同 —— submit 走 `workflows/commit_nodes.py:109` 的 `ValueError`，
+> merge-preview 走 `application/review_service.py:141` 的 `LookupError`。
+> **这是「不许按中文文本判断错误类型」这条规则最有力的一个例子**：
+> 照文本判断，前端会把两种完全不同的状态混为一谈。
 
 ### 3.7 `GET /api/v1/requirements`（需求库列表）
 
@@ -352,6 +386,43 @@ departments(string[])  sensitivity_levels(string[])
 > 要区分得读 `diff_payload.kind === 'revert'`（`/trace` 里带）。
 > ⚠️ `/capabilities` 对老需求可能返回空数组 —— **空 ≠ 出错**，别让整页挂掉。
 > ⚠️ `constraints[].alias_hit` 在旧快照里**可能没有这个键**（契约 §8.1，实测抓到过活实例）。
+
+#### `GET /api/v1/requirements/{key}/titles`（实测形状，2026-09-18）
+
+**参数**：`review_status?`
+**响应**：`{requirement_key, items:[…]}`
+
+每项（**实测**）：
+```json
+{"id": "226274893421871104",           // 字符串 ✅
+ "requirement_id": "225548242010505216",
+ "title": "巡检计划创建能力",
+ "angle": "capability",                 // business_object / capability / constraint / free
+ "capability_id": "225856650450305024", // angle=capability 时才有值
+ "constraint_key": null,
+ "source": "analysis",                  // analysis（派生）/ review（人工新增）
+ "review_status": "proposed",           // proposed / confirmed / dismissed
+ "decided_by": null,
+ "created_by": "analysis",
+ "created_at": "2026-09-17T17:35:38.558962+08:00",
+ "highlight": {"feature_keys": ["F-001"], "kind": "capability", "capability_id": "225856650450305024"}}
+```
+
+**`highlight` 的键是「按 kind 变化」的** —— 实测：
+
+| `kind` | `feature_keys` | 是否有 `capability_id` |
+|---|---|---|
+| `capability` | **可能有值**（实测 `["F-001"]` / `["F-014"]`），**也可能为 `[]`**（该能力在需求里没有对应功能行） | ✅ 有 |
+| `business_object` | `[]` | ❌ 无该键 |
+| `free` | `[]` | ❌ 无该键 |
+| `constraint` | —— | **未实测**（要跑一次真实分析才能派生出来） |
+
+> ⚠️ **`feature_keys` 为空不代表这个标题没用** —— `kind=capability` 的「提醒推送能力」
+> 实测就是 `[]`（那条能力在 REQ-000015 里没有对应功能行）。前端不要据此隐藏入口。
+>
+> ⚠️ **当前数据里全部是 `review_status: 'proposed'`** —— 派生的和人工新增的都是。
+> 契约说「列表只该展示 `confirmed` 的」，但**实测一条 confirmed 都没有**，
+> 照那条实现会得到一个空列表。前端应显示全部并标注状态，而不是过滤掉。
 
 ### 3.10 `GET /api/v1/agent/runs`
 
@@ -453,7 +524,7 @@ meta  stage  checkpoint  created_at  updated_at
 |---|---|---|
 | `/ops/outbox` | 无 | `{counts:{pending,processing,completed,dead_letter,discarded}, dead_letters:[…], consumer}` |
 | `/ops/worker` | 无 | `{consumer, counts, stale_processing, stale_timeout_seconds}` |
-| `/ops/models` | `task_type?`, `limit` 默认 `50`（1-200） | `{items:[…], routing:{unrecognized, resolved}}` |
+| `/ops/models` | `task_type?`、**`run_id?`**、`limit` 默认 `50`（1-200） | `{items:[…], routing:{unrecognized, resolved}}` |
 | `/audit/events` | `limit` 默认 `50`（**1-100**，仓储不加夹） | `{items:[…]}` |
 
 实测值：
@@ -471,6 +542,35 @@ meta  stage  checkpoint  created_at  updated_at
 > 未配置的任务（如 `vision`）会返回 `provider: "", model: ""` —— **那是「没配」不是「配错了」**，
 > 前端要区分显示。响应里**没有 fallbacks**，只有 primary。
 
+#### `run_id` 过滤（2026-09-18 新增，给 Run 详情页用）
+
+`/api/v1/agent/runs/{id}/invocations` 的 `models` 字段**恒为空数组**，所以 Run 详情页要的
+模型调用明细得从这里拿。新增 `run_id` 参数之前，前端只能拉全量自己筛 —— 那违反
+「不在前端聚合后端数据」。
+
+| 调用 | 顺序 | 用途 |
+|---|---|---|
+| `?run_id=<uuid>` | **正序** `created_at ASC` | Run 详情页：这次运行**依次**调了什么，与节点时间线对齐 |
+| 不带 `run_id` | **倒序** `created_at DESC` | 运维页：**最近**调了什么（既有行为，未改） |
+
+`run_id` 与 `task_type` **可组合**，是叠加过滤而不是二选一 —— 组合时静默丢掉一个，
+调用方会拿到一份看起来合理、实则范围不对的结果（同一个陷阱见 `/agent/runs` 的 `source_id`）。
+
+实测（造两行 → 验证 → 删除，可逆）：
+
+```
+?run_id=<uuid>                        → 2 条，时间正序 ✅
+?run_id=<uuid>&task_type=risk         → 1 条，组合生效 ✅
+不带 run_id（limit=200）              → 44 条全局，倒序 ✅（既有行为未变）
+```
+
+> ⚠️ **当前库里一个绑 run 的调用都没有**：42 条 `model_invocation` **全部是 `embedding` 且
+> `run_id IS NULL`**，而 `agent_run` 的 17 条**全是 `conversation` 类型，`analysis` 一个都没有**。
+> 原因是 `bind_run_id` 只在分析链路（`requirement_service.py:153`）调用，
+> 而现存的分析都跑在 B2.1（运行追踪）交付**之前**。
+> **所以这个参数对存量数据返回空是正常的**，要等新的分析跑出来才有内容。
+> 前端不要把它读成「功能没生效」—— 对应地，界面上应显示「暂无模型调用记录」而非错误态。
+
 ### 3.18 `GET /api/v1/memory`
 
 **参数**：`actor_id?`、`limit` 默认 `20`（1-50）
@@ -487,12 +587,33 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 | 端点 | 参数 | 响应 |
 |---|---|---|
 | `/capabilities` | `status?`（**单值**，正则 `active|deprecated|pending_confirmation`）、`q?`(max 120)、`limit` 默认 `200`（1-1000） | `{items:[{id(str), action, object, display_name, status, created_by, origin_source_id, created_at, updated_at}]}` 实测 19 条 |
-| `/constraints` | 同上 | `{items:[{id(str), constraint_key, display_name, status, created_by, aliases[], created_at, updated_at}]}` **实测 0 条** |
+| `/constraints` | 同上 | `{items:[…]}`，形状见下（**已造数据实测**） |
 | `/capabilities/{id}/streams` | `constraint?`、`review_status?`、`limit?` | `{items:[{requirement_key, requirement_name, status, current_version, review_status, action, object, display_name}]}` |
-| `/constraints/{constraint_id}` | 无 | 裸对象（**不是 `{items}`**）：`{id, constraint_key, display_name, status, created_by, aliases[], created_at, updated_at}` |
+| `/constraints/{constraint_id}` | 无 | **裸对象**（不是 `{items}`），字段同下 |
+
+**`constraints` 条目的实测形状**（2026-09-18 造数据后取得，契约 §10-T4 的那条已解）：
+
+```json
+{"id": "226535744766738432",          // 字符串 ✅
+ "constraint_key": "按部门筛选",
+ "display_name": "按部门筛选",
+ "status": "active",
+ "created_by": "seed-2026-09-18",
+ "aliases": ["按部门维度筛选"],          // list[str]，无别名时为 []
+ "created_at": "2026-09-18T10:52:10.397120+08:00",
+ "updated_at": "2026-09-18T10:52:10.397120+08:00"}
+```
+
+- `aliases` **一定存在**（无别名是 `[]`，不是缺键）—— 与 `capabilities` 相比多的就是这一个字段
+- `/constraints/{id}` 是**裸对象**，`/constraints` 是 `{items:[…]}` —— 两者形状不同，别写同一个解析函数
+- `status` 只可能是 `active` / `deprecated` / `pending_confirmation`，而**只有 `active` 参与匹配**
+
+> ⚠️ **实测：19 条能力全是 `pending_confirmation`，一条 `active` 都没有。**
+> 所以 `capability_match.capabilities[].matched` 在当前数据上**恒为 `false`**。
+> 详见 §5.5 末尾。
 
 > ⚠️ **`status` 在词表端点是单值**，而在 `/sources`、`/reviews/history` 是**可重复多值**。
-> 写 api.js 时不能共用一个「数组参数」策略 —— 见 §5.6。
+> 写 api.js 时不能共用一个「数组参数」策略 —— 见 §5.8。
 
 ### 3.20 文档端点
 
@@ -512,6 +633,59 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 >
 > ⚠️ `/documents/search` 必须声明在 `/documents/{document_id}`**之前**（路由顺序），
 > 否则 `search` 会被当成 `document_id` 解析。这是后端已处理的，前端只需知道它可用。
+
+### 3.21 `metadata.capability_match` 的形状（**已实测**，2026-09-18）
+
+**这不是一个端点**，而是 `requirement_source.metadata` 里的一个键 —— 审核页要展示的
+「这条需求有什么能力、带什么条件」全在这里。契约 §10-T4 把它的 `constraints.matched`
+列为「只有读代码的证据」，**现在有实测了**。
+
+**取得方式**：`CapabilityMatchService().match(extracted, persist=False)` ——
+`persist=False` **一行都不写**（该参数就是为「预演必须真的只读」而加的）。
+
+**实测输出**：
+
+```json
+{
+  "business_object": "员工数据",
+  "capabilities": [
+    {"raw_text": "可以导出 Excel", "action": "导出", "object": "Excel",
+     "matched": false, "proposed": true,
+     "capability_id": null, "status": "pending_confirmation"}
+  ],
+  "constraints": {
+    "matched": [
+      {"raw": "按部门维度筛选",              // 命中别名
+       "constraint_id": "226535744766738432",  // 字符串 ✅
+       "constraint_key": "按部门筛选",         // 归到哪个正式条件
+       "alias_hit": true}                    // 命中的是别名，不是正式键
+    ],
+    "unmatched": [{"raw": "按区域层级导出"}]   // 只有 raw 一个键
+  },
+  "summary": {
+    "capability_total": 2, "capability_matched": 0, "capability_proposed": 2,
+    "constraint_matched": 1, "constraint_unmatched": 1
+  }
+}
+```
+
+**`alias_hit` 的两个分支都实测到了**：
+
+| 输入 | `alias_hit` |
+|---|---|
+| `"按部门维度筛选"`（登记过的**别名**） | `true` |
+| `"按部门筛选"`（**正式键**本身） | `false` |
+
+**几条必须知道的**：
+
+1. **`capability_id` 在 `proposed: true` 时可能是 `null`** —— 上面那份实测就是
+   （`persist=False` 不建提案行，自然没有 id）。真实分析走 `persist=True`，
+   提案落库后才会带上雪花 id。**契约 §4.1 的样例里 proposed 却带着 id，那容易误导。**
+2. **`constraints.unmatched[]` 里只有 `raw` 一个键** —— 契约的样例是一致的，但它**没有
+   `alias_hit`**，因为压根没命中。别写 `c.alias_hit ? … : ''` 去读 unmatched 的条目。
+3. **`matched` 的能力未必存在** —— 只有 `status='active'` 的能力词条才参与匹配。
+   **实测：库里 19 条能力全是 `pending_confirmation`，一条 `active` 都没有**，
+   所以 `matched` 在当前数据上**恒为 `false`**（见 §5.5 末尾）。
 
 ---
 
@@ -603,27 +777,115 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 **建议**：详情页**同时用列表页传来的对象做底**，只用详情端点补 `checkpoint` 等字段。
 这条要在阶段 8 实现时确认是否够用（见 §6 待办）。
 
-### 5.4 🟡 P1 · `/agent/runs/{id}/invocations` 的 `models` 恒空，但模型数据其实已有
+### 5.4 ~~🟡 P1 · `/agent/runs/{id}/invocations` 的 `models` 恒空~~ ✅ **已解决**
 
 契约 §6 的解释是「模型调用要等 B3.1 的 ModelRegistry」——**B3.1 已经交付了**：
-`GET /api/v1/ops/models` 实测返回 **41 条**真实模型调用记录，字段含 `run_id`。
+`GET /api/v1/ops/models` 实测有真实模型调用记录，字段含 `run_id`。
 
-所以「Run 详情页要展示模型调用」**不需要等后端**：拿 `/ops/models` 按 `run_id` 过滤即可。
-但**契约没写这条路径**，且 `/ops/models` 的 `task_type` 过滤是服务端的、`run_id` 过滤**没有**——
-前端要么拉全量自己筛（**违反「不在前端聚合」**），要么请后端加 `run_id` 参数。**见 §6 待办。**
+**处置**（2026-09-18）：给 `/ops/models` 加了 `run_id` 参数，见 §3.17。
+前端不再需要拉全量自己筛。`/agent/runs/{id}/invocations` 的 `models` **仍然恒空，
+不要用** —— 那条路径后端没有改，也不打算改。
 
-### 5.5 🟡 P1 · 三个「空的形状」仍未验证（契约 §10-T4 遗留）
+> ⚠️ **附带发现**：`run_id` 过滤对**存量数据返回空**是正确的 —— 库里 42 条调用全是
+> `embedding` 且 `run_id IS NULL`，17 个 run 全是 `conversation` 类型。
+> 详见 §3.17 末尾的说明。
 
-| 形状 | 实测 | 状态 |
+### 5.5 ~~🟡 P1 · 三个「空的形状」仍未验证（契约 §10-T4 遗留）~~ ✅ **已造数据并实测（2026-09-18）**
+
+| 形状 | 结果 | 说明 |
 |---|---|---|
-| `/constraints` 的 `items[]` | **0 条** | 形状只有代码证据（§3.19） |
-| `/requirements/{key}/titles` 的 `highlight` | **0 条** | 四种 `kind` 一个都没跑过 |
-| `capability_match.constraints.matched[]` | 未出现 | 词表空，`alias_hit` 分支没跑过 |
+| `/constraints` 的 `items[]` | ✅ **已实测** | 造了 2 条 + 1 个别名，形状见 §3.19 |
+| `capability_match.constraints.matched[]` | ✅ **已实测** | `alias_hit` 的 `true` / `false` 两个分支都跑到了 |
+| `/requirements/{key}/titles` 的 `highlight` | ⚠️ **一半** | `business_object` / `capability` / `free` 三种跑到了；**`constraint` 仍未验证** |
 
-> **在拿到实测形状之前，这几块前端不要写死字段。** 建议阶段 11 开工前先造数据
-> （`POST /constraints/aliases` 登记一条即可）。
+#### 造了什么（走正式代码路径，不是裸 SQL）
 
-### 5.6 🟢 P2 · 同名参数在不同端点是不同类型
+| 数据 | 路径 |
+|---|---|
+| 条件词表 2 条（`按部门筛选`、`按门店维度聚合`，`status=active`） | `ConstraintVocabRepository.create()` |
+| 1 个别名（`按部门维度筛选`） | `POST /api/v1/constraints/aliases`（产品路径） |
+| 候选标题 2 条（`angle=free`） | `POST /api/v1/requirements/REQ-000015/titles`（产品路径） |
+
+`capability_match` 的形状用 **`CapabilityMatchService().match(..., persist=False)`** 拿到 ——
+**一行都没写**（该参数就是为「预演必须真的只读」加的）。见 §3.21。
+
+#### ⚠️ 契约 §10-T4 有一条**已过期**
+
+它说「`requirement_title_candidate` 表 **0 行**（2026-09-16）」——
+**实测该表有数据**，4 行是 2026-09-17 17:35 分析链路派生的（`source='analysis'`）。
+所以 `/titles` 的形状**本来就是有真实数据的**，只是那次复跑的时间点早于它。
+
+> **顺带亲眼看到了 §1.1 警告的那个精度事故**：实测的标题 `id` 里有
+> `226274893426065408` 与 `226274893426065409` —— **相邻两行**，
+> 而后者正是 `verify_api_contract.py` 扫出的「不可被 double 精确表示」的那个值
+> （`JSON.parse` 后变成前者）。**两行同时存在**，所以一旦以 number 发出，
+> 前端点「提醒推送能力」会打开「任务指派能力」。
+> 实测响应里 `id` 是**字符串** ✅ —— 这个坑目前是堵住的。
+
+#### ⚠️ 仍未验证的两处（都卡在「要跑一次真实分析」）
+
+1. `highlight.kind === 'constraint'` —— 派生逻辑在分析链路里
+2. `capability_match.constraints.matched[]` **出现在真实审核页上** ——
+   目前只有 `persist=False` 的直接调用证据，没有一条真实来源带它
+
+> 另有一条**运营层的发现**（不是接口问题）：库里 **19 条能力全部是 `pending_confirmation`，
+> 一条 `active` 都没有**。而只有 `active` 参与匹配（`find_exact(only_active=True)`）。
+> **所以 `capability_match.capabilities[].matched` 在当前数据上恒为 `false`**，
+> 审核页的「命中能力」区块会永远显示为「AI 提议」。
+> 这是设计如此（未确认的能力不参与后续匹配），但**没人确认过任何一条** ——
+> 要么是审核流程没走到那一步，要么是裁决入口没人用。前端按「全 proposed」的状态设计即可，
+> 不要假设一定有 confirmed。
+
+### 5.6 🔴 P0 · 把 SPEC 补全后，**又炸出 13 处 number 型雪花 ID** ✅ 已修
+
+`verify_api_contract.py` 的 SPEC 从 10 条补到 43 条（覆盖全部只读端点）之后，
+脚本当场报出 **13 个此前完全不可见的 number 型 id 字段**：
+
+| 端点 | 字段 | 出处 |
+|---|---|---|
+| `/audit/events` | `items.before_data.source_id` | `audit.py` 只做 `dict(row[...])` |
+| `/conversations/{id}/messages` | `items.id` | `chat.py::_normalize_message_row` 的 `int(row["id"])` |
+| `/agent/chat/{session_id}` | `history[].id` | 同上（同一函数） |
+| `/requirements/{key}/trace` | `versions[].version_id` | `trace_by_requirement_key` 用 int 做分组键，顺手发出去了 |
+| `/reviews/{id}/detail` | `metadata.requirement_id`、`metadata.version_id`、`metadata.trace.source_id`、`metadata.trace.version_id` | `_stringify_source_metadata` 没覆盖这几个键 |
+| `/sources/{id}/trace` | `source.metadata.*`（同上四个） | 同一个 helper |
+| `/reviews/{id}/merge-preview` | **`source_id`** | `review_service` 返回时没转 |
+
+**已全部修掉**，脚本回到 `✅`，类型表 64 处 id 字段**全是 string**。
+
+> ⚠️ 其中 `merge-preview` 的那条最值得单说：**同一个 `source_id`，
+> `/reviews/pending` 发字符串、`/reviews/{id}/merge-preview` 发 number**。
+> 前端把待办项和预演结果拼在一起时就会撞上 —— 正是契约 §8.1 警告的
+> 「同一字段两种类型」，只不过这次是在不同端点之间。
+>
+> `merge-preview` 的 `source_id: to_sid(...)` 是**一行**的改动，
+> 但它能存在的唯一原因是**没有人核对过那个端点的字段**。
+
+**审计载荷那一处是唯一有设计取舍的**：`before_data` / `after_data` 是任意聚合的快照，
+没法预先枚举键，所以用了**按键名递归**（键是 `id` 或以 `_id` 结尾）。
+它与契约禁止的「全局 JSON 编码器」不是一回事 —— 契约反对的是**按值大小**判断
+（那会让同一字段在小 id 时是 number、大 id 时是 string），而按**键名**判断是确定性的，
+同一个键在任何数据上类型都一致。UUID 字符串经 `to_sid` 原样返回，不会被改坏。
+
+### 5.7 ✅ 新增：覆盖率闸门（这条比上面修复的都重要）
+
+只补今天这 43 条，明天加个端点照样会溜过去。所以给脚本加了一道闸门：
+**每一条活路由都必须在 `SPEC`（要核对）或 `EXCLUDED_ROUTES`（说清为什么不核对）
+里表过态，否则脚本直接红。**
+
+`EXCLUDED_ROUTES` 收的是 30 条写端点与非 JSON 端点（SSE / CSV / HTML / multipart），
+每条都写了理由。它们不是「不重要」，是**这个只发 GET 的脚本核对不了** ——
+写路由的权限分类另有 `tests/integration/test_api_auth.py` 兜底。
+
+效果立竿见影：加完闸门当场就报了 2 条漏网的（`/reviews/{id}/detail`、
+`/reviews/{id}/merge-preview`），补进去之后又炸出上面那 13 个字段。
+
+> ⚠️ 闸门第一版自己写错了 —— `live` 是 `(method, path)` 元组集合，
+> 而 `spec_paths` 只有路径字符串，集合相减一个都减不掉，于是**每条路由都被报成未覆盖**。
+> 留着这段是因为它说明了闸门的意义：**它自己响了，所以被修了**。
+> 如果当时静默地「看起来过了」，这个 bug 会一直躺在那里。
+
+### 5.8 🟢 P2 · 同名参数在不同端点是不同类型
 
 | 参数 | 多值？ | 出现在 |
 |---|---|---|
@@ -633,7 +895,7 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 `api.js` 若写一个统一的「数组转重复 query」助手，**在这两处会静默行为不同**。
 建议在 api.js 里**逐端点显式声明参数形状**，而不是靠通用约定。
 
-### 5.7 ✅ 已确认**没有**问题的一件事
+### 5.9 ✅ 已确认**没有**问题的一件事
 
 `/api/v1/agent/runs` 的 `source_id` **确实已改成可选**（工作计划缺口 #6），
 实测不带 `source_id` 也能拿到最近 17 条 run。`source_id` 分支与 `status/run_type` 分支
@@ -647,9 +909,9 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 |---|---|---|---|
 | 1 | **`/agent/runs` 的 `id` 是 number** | 阶段 8 | ✅ **已修**，见 §5.1。前端**不写兼容分支** |
 | 2 | **`memory` 页面的删除**要用 number 型 `id` 拼 URL | 阶段 12 | ✅ **已修**（`id` / `source_message_id` / `superseded_by` 全部字符串化） |
-| 3 | **Run 详情页的模型调用**走哪条路 | 阶段 8 | ⏳ **待定** —— 建议后端给 `/ops/models` 加 `run_id` 参数（避免前端聚合），见 §5.4 |
-| 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | ⏳ **待定** —— 见 §3.6，需要在实现时定一个「读不到就按最安全处理」的策略 |
-| 5 | **`/constraints` 等三个空形状**要不要先造数据 | 阶段 11 | ⏳ **待定** —— 建议先造，否则页面写完无法验证，见 §5.5 |
+| 3 | **Run 详情页的模型调用**走哪条路 | 阶段 8 | ✅ **已定并实现** —— `/ops/models` 加 `run_id` 参数，见 §3.17 |
+| 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | ✅ **已定** —— 先按状态码分支，409 内弱匹配前缀，读不到按最安全的处理。见 §3.6 |
+| 5 | **三个空形状**要不要先造数据 | 阶段 11 | ✅ **已定：先造** |
 | 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `docs/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
 | 7 | **`verify_api_contract.py` 的 SPEC 只覆盖 13 个端点**（原 10 个） | 全局 | ⏳ **待定** —— 本次补了 3 个（都是出问题的那几个）。**要不要补全到 73 条？** 不补的话下次还会有「全绿但有问题」 |
 
