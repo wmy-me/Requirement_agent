@@ -29,13 +29,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
+
+from requirement_agent.common.snowflake import to_sid
 
 __all__ = [
     "ACTIVE_STATUSES",
     "EVENT_TYPES",
     "MAX_PAYLOAD_CHARS",
+    "META_ID_KEYS",
     "NODE_STATUSES",
     "RUN_STATUSES",
     "TERMINAL_STATUSES",
@@ -45,7 +49,15 @@ __all__ = [
     "RunStatus",
     "RunType",
     "redact_payload",
+    "stringify_run_meta",
 ]
+
+#: `agent_run.meta` 里**是雪花 id** 的键。
+#:
+#: 现在只有一个。`meta.conversation_id` 是 UUID、`meta.retry_of` 是 run_id（也是 UUID），
+#: 两者本来就不会被 double 截断，不要一起转 —— 类型该由**字段语义**决定，
+#: 不是「看起来像 id 就转」（那句教训写在 `api-contract.md` §10-T1 的第 3 条）。
+META_ID_KEYS: Final = ("assistant_message_id",)
 
 RunType = Literal["conversation", "analysis"]
 
@@ -158,6 +170,30 @@ def redact_payload(payload: Any, *, max_chars: int = MAX_PAYLOAD_CHARS) -> dict[
             "note": "payload 超长，已整体截断；完整内容见对应节点的业务产物",
         }
     return result
+
+
+def stringify_run_meta(payload: Any) -> dict[str, Any]:
+    """把 `agent_run.meta` 里的雪花 id（见 `META_ID_KEYS`）字符串化成字符串。
+
+    **为什么在读时做而不是写入时**：`meta` 是**存储型 JSON**，改写入只影响新行，
+    老行会保持 number —— 同一个字段在新旧数据上两种类型，正是
+    `docs/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
+    什么时候写的，类型都一样」。
+
+    **为什么必须做**：`meta.assistant_message_id` 是消息表的雪花 id。实测
+    `/api/v1/agent/runs` 把它以 JSON number 发出去，而库里**已经存在**不能被
+    double 精确表示的 id（`scripts/verify_api_contract.py` 会扫出来）——
+    前端 `JSON.parse` 之后拿到的是差 1 的值。
+
+    形状对不上时原样返回，不猜。
+    """
+    if not isinstance(payload, Mapping):
+        return {}
+    meta = dict(payload)
+    for key in META_ID_KEYS:
+        if key in meta:
+            meta[key] = to_sid(meta[key])
+    return meta
 
 
 @dataclass(frozen=True, slots=True)

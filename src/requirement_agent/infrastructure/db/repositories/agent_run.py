@@ -23,9 +23,9 @@ import json
 
 from sqlalchemy import text
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
-from requirement_agent.domain.agent_run import redact_payload
+from requirement_agent.domain.agent_run import redact_payload, stringify_run_meta
 from requirement_agent.infrastructure.db.session import SessionLocal
 
 __all__ = ["AgentRunRepository"]
@@ -34,6 +34,54 @@ _RUN_COLUMNS = (
     "id, run_id, conversation_id, source_id, run_type, client_message_id, status, error, "
     "meta, stage, checkpoint, current_node, started_at, ended_at, created_at, updated_at"
 )
+
+
+def _normalize_run_row(row: dict[str, object] | None) -> dict[str, object] | None:
+    """run 行 → 对外形状。
+
+    **本模块此前直接把 `dict(row)` 发出去**，于是 `id` 是 JSON number、
+    时间走 FastAPI 的 datetime 编码器（实测是 `...Z`，而全站其余端点是 `+08:00`）。
+    两者都违反契约：§1.1 要求雪花 id 一律字符串，§1 要求时间统一。
+
+    `id` 眼下**恰好**能被 double 精确表示（同毫秒内没产生过第二个 id），
+    但契约写明了那不是可依赖的性质 —— 库里已经存在不能精确表示的 id。
+    前端拿到差 1 的 id 会静默指向错误的行。
+    """
+    if row is None:
+        return None
+    return {
+        "id": to_sid(row["id"]),
+        "run_id": str(row["run_id"]),
+        "conversation_id": str(row["conversation_id"]) if row.get("conversation_id") is not None else None,
+        "source_id": row.get("source_id"),
+        "run_type": row.get("run_type"),
+        "client_message_id": row.get("client_message_id"),
+        "status": row.get("status"),
+        "error": row.get("error"),
+        "meta": stringify_run_meta(row.get("meta")),
+        "stage": row.get("stage"),
+        "checkpoint": dict(row.get("checkpoint") or {}),
+        "current_node": row.get("current_node"),
+        "started_at": as_display_iso(row.get("started_at")),
+        "ended_at": as_display_iso(row.get("ended_at")),
+        "created_at": as_display_iso(row.get("created_at")),
+        "updated_at": as_display_iso(row.get("updated_at")),
+    }
+
+
+def _normalize_tool_row(row: dict[str, object]) -> dict[str, object]:
+    """工具调用行 → 对外形状。同上：`id` 字符串化、时间走 `as_display_iso`。"""
+    return {
+        "id": to_sid(row["id"]),
+        "run_id": str(row["run_id"]),
+        "tool_name": row.get("tool_name"),
+        "arguments_summary": row.get("arguments_summary"),
+        "result_summary": row.get("result_summary"),
+        "status": row.get("status"),
+        "elapsed_ms": row.get("elapsed_ms"),
+        "error_message": row.get("error_message"),
+        "created_at": as_display_iso(row.get("created_at")),
+    }
 
 
 class AgentRunRepository:
@@ -79,7 +127,7 @@ class AgentRunRepository:
                 },
             ).mappings().one()
             session.commit()
-        return dict(row)
+        return _normalize_run_row(dict(row))
 
     def get_run(self, run_id: str) -> dict[str, object] | None:
         with SessionLocal() as session:
@@ -87,7 +135,7 @@ class AgentRunRepository:
                 text(f"SELECT {_RUN_COLUMNS} FROM agent_run WHERE run_id = CAST(:r AS UUID)"),
                 {"r": run_id},
             ).mappings().first()
-        return dict(row) if row else None
+        return _normalize_run_row(dict(row) if row else None)
 
     def list_by_source(self, source_id: int, limit: int = 50) -> list[dict[str, object]]:
         """某条来源的全部运行记录（新→旧）。同一条来源可以被分析多次。"""
@@ -103,7 +151,7 @@ class AgentRunRepository:
                 ),
                 {"source_id": source_id, "limit": max(1, min(limit, 200))},
             ).mappings().all()
-        return [dict(row) for row in rows]
+        return [_normalize_run_row(dict(row)) for row in rows]
 
     def list_recent(
         self, *, limit: int = 50, status: str | None = None, run_type: str | None = None
@@ -135,7 +183,7 @@ class AgentRunRepository:
                 ),
                 params,
             ).mappings().all()
-        return [dict(row) for row in rows]
+        return [_normalize_run_row(dict(row)) for row in rows]
 
     def mark_running(self, run_id: str, *, current_node: str | None = None) -> None:
         """`queued → running`。节点名一并写入，让「跑到哪了」在第一个节点就能查到。"""
@@ -336,7 +384,7 @@ class AgentRunRepository:
                 ),
                 {"r": run_id, "limit": max(1, min(limit, 500))},
             ).mappings().all()
-        return [dict(row) for row in rows]
+        return [_normalize_tool_row(dict(row)) for row in rows]
 
 
 def _normalize_event(row: dict[str, object]) -> dict[str, object]:

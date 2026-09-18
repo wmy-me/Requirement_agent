@@ -65,6 +65,12 @@ ID_ENDPOINTS = [
     ("/api/v1/requirements/REQ-000015/relations", "items", ("id", "source_id")),
     ("/api/v1/capabilities", "items", ("id", "origin_source_id")),
     ("/api/v1/reviews/pending", "items", ("source_id",)),
+    # 下面三条是 2026-09-18 前端接口盘点时补的缺口：这三个端点的仓储直接
+    # `dict(row)` 发出去，`id` 是 JSON number。**它们一直在测试的盲区里** ——
+    # `scripts/verify_api_contract.py` 的 SPEC 当时只覆盖 10 个端点，恰好没写它们，
+    # 所以脚本报「无风险」而这三个端点确实在发 number。
+    ("/api/v1/agent/runs", "items", ("id",)),
+    ("/api/v1/memory", "items", ("id", "source_message_id", "superseded_by")),
 ]
 
 
@@ -106,6 +112,66 @@ def test_diff_payload_source_id_is_a_string() -> None:
     if not values:
         pytest.skip("没有带 source_id 的 diff_payload")
     assert all(isinstance(value, str) for value in values), values
+
+
+def test_run_meta_assistant_message_id_is_a_string() -> None:
+    """`agent_run.meta` 里的 `assistant_message_id` 也要字符串化。
+
+    **这是嵌在存储型 JSON 里的 id**，与 `provenance[].source_id`、`diff_payload.source_id`
+    同一类。它在 2026-09-18 才被发现 —— 不是靠 review，是靠把 `/agent/runs`
+    加进 `scripts/verify_api_contract.py` 的 SPEC 之后，脚本的大整数扫描直接报了红。
+    覆盖边界就是结论的边界：写 SPEC 之前，它一直是「无风险」的。
+    """
+    items = client.get("/api/v1/agent/runs?limit=20").json()["items"]
+    values = [
+        item["meta"]["assistant_message_id"]
+        for item in items
+        if isinstance(item.get("meta"), dict) and "assistant_message_id" in item["meta"]
+    ]
+    if not values:
+        pytest.skip("没有带 assistant_message_id 的 run 样本")
+    for value in values:
+        assert isinstance(value, str), f"meta.assistant_message_id 是 {type(value).__name__}，应为 str"
+
+
+def test_run_detail_and_list_agree_on_id_type() -> None:
+    """`/agent/runs` 与 `/agent/runs/{run_id}` 的 `id` 必须是同一种类型、同一个值。
+
+    这两条路径读的是**同一张表的两套 SQL**（`agent_run.py` 与 `chat.py`），
+    字段集本来就不同（详情少 `source_id`/`run_type`/`started_at`/`ended_at`/`current_node`）。
+    字段集不同是既有设计，但**同一个 id 在两处必须一致** —— 否则前端把列表项
+    和详情拼在一起时，同一个 run 会有两个不同的 id。
+    """
+    listed = client.get("/api/v1/agent/runs?limit=5").json()["items"]
+    if not listed:
+        pytest.skip("当前无 run 样本")
+
+    from_list = listed[0]
+    assert isinstance(from_list["id"], str), "列表端点的 id 应是 str"
+
+    response = client.get(f"/api/v1/agent/runs/{from_list['run_id']}")
+    assert response.status_code == 200, response.text
+    detail = response.json()
+
+    assert isinstance(detail["id"], str), f"详情端点的 id 是 {type(detail['id']).__name__}，应为 str"
+    assert detail["id"] == from_list["id"], "同一个 run 在列表与详情里的 id 必须一致"
+
+
+def test_run_timestamps_use_the_same_format_as_the_rest_of_the_site() -> None:
+    """`/agent/runs` 的时间必须走 `as_display_iso`，与全站一致（`+08:00`）。
+
+    这个端点此前走 FastAPI 的 datetime 编码器，实测返回 `...Z`（UTC 无偏移）。
+    `new Date()` 对两种都能正确解析，所以**它不是数据错误** —— 但格式不一致
+    会让「按字符串切片格式化」的写法静默差 8 小时，而这正是前端下一步
+    把 `core.js` 拆成 `format.js` 时最容易发生的事。钉住它。
+    """
+    items = client.get("/api/v1/agent/runs?limit=5").json()["items"]
+    stamps = [i.get("created_at") for i in items if i.get("created_at")]
+    if not stamps:
+        pytest.skip("当前无带时间戳的 run 样本")
+    for value in stamps:
+        assert not value.endswith("Z"), f"`{value}` 是 UTC 裸格式，应走 as_display_iso"
+        assert "+" in value[10:], f"`{value}` 缺时区偏移"
 
 
 # ── 端到端：字符串能原样回传并定位到同一行 ────────────────────────────────

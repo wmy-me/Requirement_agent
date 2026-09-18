@@ -261,6 +261,9 @@ def test_tool_invocation_lands_for_a_real_analysis(no_llm, cleanup) -> None:
     assert row["status"] == "success"
     assert row["result_summary"]["count"] == 2
     assert row["result_summary"]["sample"][0]["requirement_key"] == "REQ-000001"
+    # 工具调用的 id 也是雪花 id，同样要字符串化（2026-09-18 补）。
+    assert isinstance(row["id"], str), f"tools[].id 是 {type(row['id']).__name__}，应为 str"
+    assert not str(row["created_at"]).endswith("Z"), "时间应走 as_display_iso"
 
 
 # ── ④ 幂等 ────────────────────────────────────────────────────────────────

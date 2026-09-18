@@ -10,9 +10,10 @@ import json
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.common.time import as_display_iso
 from requirement_agent.config.settings import settings
+from requirement_agent.domain.agent_run import stringify_run_meta
 from requirement_agent.infrastructure.db.session import SessionLocal
 
 # 并发隔离用的部分唯一索引（migrations/012）：(conversation_id) WHERE status IN ('running','paused')
@@ -488,13 +489,16 @@ class ChatRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
+            # 雪花 id 一律字符串（契约 §1.1）。这里此前是 `int(row["id"])` —— 显式转回
+            # number，正好抵消 T1 的统一，是「同一个 id 在列表端点是 string、
+            # 在详情端点是 number」那类分裂的典型来源。
+            "id": to_sid(row["id"]),
             "run_id": str(row["run_id"]),
             "conversation_id": str(row["conversation_id"]) if row.get("conversation_id") is not None else None,
             "client_message_id": row["client_message_id"],
             "status": row["status"],
             "error": row["error"],
-            "meta": dict(row["meta"] or {}),
+            "meta": stringify_run_meta(row["meta"]),
             "stage": str(row.get("stage") or "queued"),
             "checkpoint": dict(row.get("checkpoint") or {}),
             "created_at": as_display_iso(row["created_at"]),

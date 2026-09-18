@@ -169,6 +169,43 @@ SPEC: tuple[Endpoint, ...] = (
         ),
         optional=True,
     ),
+    # ── 2026-09-18 前端接口盘点补入 ────────────────────────────────────────
+    #
+    # 这三条此前**不在 SPEC 里**，于是脚本报「✅ 契约与实现一致，且当前无精度风险」，
+    # 而它们恰恰在发 JSON number 型的雪花 id —— 报「无风险」不是因为它检查过，
+    # 是因为它没看。**测试全绿 ≠ 没问题**，这份 SPEC 的覆盖边界就是结论的边界。
+    Endpoint(
+        name="运行列表",
+        path="/api/v1/agent/runs",
+        params={"limit": 3},
+        fields=(
+            "id", "run_id", "conversation_id", "source_id", "run_type",
+            "client_message_id", "status", "error", "meta", "stage", "checkpoint",
+            "current_node", "started_at", "ended_at", "created_at", "updated_at",
+        ),
+        optional=True,  # 全新库上可能一个 run 都没有
+    ),
+    Endpoint(
+        name="长期记忆",
+        path="/api/v1/memory",
+        params={"limit": 3},
+        fields=(
+            "id", "actor_id", "kind", "status", "active", "content",
+            "source_conversation_id", "source_message_id", "ref_requirement_key",
+            "superseded_by", "importance", "meta", "created_at", "updated_at",
+        ),
+        optional=True,
+    ),
+    Endpoint(
+        name="来源列表",
+        path="/api/v1/sources",
+        params={"limit": 3},
+        fields=(
+            "source_id", "source_type", "requester_name", "processing_status",
+            "error_message", "excerpt", "linked_requirement_key", "submitted_at", "updated_at",
+        ),
+        optional=True,
+    ),
 )
 
 

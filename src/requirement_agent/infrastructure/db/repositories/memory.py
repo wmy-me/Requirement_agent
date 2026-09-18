@@ -9,7 +9,7 @@ import json
 
 from sqlalchemy import text
 
-from requirement_agent.common.snowflake import new_id
+from requirement_agent.common.snowflake import new_id, to_sid
 from requirement_agent.infrastructure.embedding.embedding_service import (
     current_embedding_model,
 )
@@ -163,16 +163,19 @@ class MemoryRepository:
         if row is None:
             return None
         return {
-            "id": int(row["id"]),
+            # 三个都是雪花 id（`superseded_by` 外键指向 `memory_note(id)`），
+            # 一律字符串化 —— 前端要拿 `id` 拼 `/memory/{id}/delete`，
+            # 以 number 发出去一旦遇到 seq≠0 的行就会点到错误的记忆。
+            "id": to_sid(row["id"]),
             "actor_id": row["actor_id"],
             "kind": row["kind"],
             "status": row["status"],
             "active": bool(row["active"]),
             "content": row["content"],
             "source_conversation_id": str(row["source_conversation_id"]) if row.get("source_conversation_id") is not None else None,
-            "source_message_id": row["source_message_id"],
+            "source_message_id": to_sid(row["source_message_id"]),
             "ref_requirement_key": row["ref_requirement_key"],
-            "superseded_by": row["superseded_by"],
+            "superseded_by": to_sid(row["superseded_by"]),
             "importance": int(row["importance"]),
             "meta": dict(row["meta"] or {}),
             "created_at": as_display_iso(row["created_at"]),
