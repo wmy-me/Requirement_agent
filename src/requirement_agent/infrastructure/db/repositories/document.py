@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -149,6 +151,64 @@ class DocumentAssetRepository:
                 {"id": document_id},
             ).scalar()
         return bool(count)
+
+    def create_upload_session(self, *, file_name: str, content_type: str, total_size: int, total_chunks: int, checksum: str) -> dict[str, object]:
+        upload_id = str(uuid4())
+        with SessionLocal() as session:
+            row = session.execute(text("""INSERT INTO document_upload_session
+                (id, file_name, content_type, total_size, total_chunks, checksum)
+                VALUES (CAST(:id AS UUID), :name, :type, :size, :chunks, :checksum)
+                RETURNING id, file_name, content_type, total_size, total_chunks, checksum, status, document_id"""),
+                {"id": upload_id, "name": file_name, "type": content_type, "size": total_size, "chunks": total_chunks, "checksum": checksum}).mappings().one()
+            session.commit()
+        return self._normalize_upload_row(row, [])
+
+    def get_upload_session(self, upload_id: str) -> dict[str, object] | None:
+        with SessionLocal() as session:
+            row = session.execute(text("SELECT id, file_name, content_type, total_size, total_chunks, checksum, status, document_id FROM document_upload_session WHERE id=CAST(:id AS UUID)"), {"id": upload_id}).mappings().first()
+            if row is None:
+                return None
+            indexes = session.execute(text("SELECT chunk_index FROM document_upload_chunk WHERE upload_id=CAST(:id AS UUID) ORDER BY chunk_index"), {"id": upload_id}).scalars().all()
+        return self._normalize_upload_row(row, indexes)
+
+    def put_upload_chunk(self, *, upload_id: str, chunk_index: int, checksum: str, payload: bytes) -> dict[str, object] | None:
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != checksum:
+            raise ValueError("chunk checksum mismatch")
+        with SessionLocal() as session:
+            state = session.execute(text("SELECT total_chunks, status FROM document_upload_session WHERE id=CAST(:id AS UUID) FOR UPDATE"), {"id": upload_id}).mappings().first()
+            if state is None:
+                return None
+            if state["status"] != "open":
+                raise ValueError("upload is not open")
+            if chunk_index < 0 or chunk_index >= int(state["total_chunks"]):
+                raise ValueError("chunk index out of range")
+            session.execute(text("""INSERT INTO document_upload_chunk (upload_id, chunk_index, checksum, size_bytes, payload)
+                VALUES (CAST(:id AS UUID), :index, :checksum, :size, :payload)
+                ON CONFLICT (upload_id, chunk_index) DO UPDATE SET checksum=EXCLUDED.checksum, size_bytes=EXCLUDED.size_bytes, payload=EXCLUDED.payload"""),
+                {"id": upload_id, "index": chunk_index, "checksum": checksum, "size": len(payload), "payload": payload})
+            session.commit()
+        return self.get_upload_session(upload_id)
+
+    def complete_upload(self, upload_id: str) -> tuple[dict[str, object], bytes] | None:
+        with SessionLocal() as session:
+            row = session.execute(text("SELECT id, file_name, content_type, total_size, total_chunks, checksum, status, document_id FROM document_upload_session WHERE id=CAST(:id AS UUID) FOR UPDATE"), {"id": upload_id}).mappings().first()
+            if row is None:
+                return None
+            if row["status"] != "open":
+                raise ValueError("upload is not open")
+            chunks = session.execute(text("SELECT chunk_index, payload FROM document_upload_chunk WHERE upload_id=CAST(:id AS UUID) ORDER BY chunk_index"), {"id": upload_id}).mappings().all()
+            if [item["chunk_index"] for item in chunks] != list(range(int(row["total_chunks"]))):
+                raise ValueError("upload is incomplete")
+            payload = b"".join(bytes(item["payload"]) for item in chunks)
+            if len(payload) != int(row["total_size"]) or hashlib.sha256(payload).hexdigest() != row["checksum"]:
+                raise ValueError("upload checksum mismatch")
+        return self._normalize_upload_row(row, list(range(int(row["total_chunks"])))), payload
+
+    def mark_upload_completed(self, upload_id: str, document_id: int) -> None:
+        with SessionLocal() as session:
+            session.execute(text("UPDATE document_upload_session SET status='completed', document_id=:document_id WHERE id=CAST(:id AS UUID) AND status='open'"), {"id": upload_id, "document_id": document_id})
+            session.commit()
 
     def list_documents(self, limit: int = 20) -> list[dict[str, object]]:
         """按创建时间倒序列出上传文档 asset，返回规范化行列表。"""
@@ -341,6 +401,10 @@ class DocumentAssetRepository:
             ),
             "created_at": as_display_iso(row["created_at"]),
         }
+
+    @staticmethod
+    def _normalize_upload_row(row: dict[str, object], chunk_indexes: list[int]) -> dict[str, object]:
+        return {"upload_id": str(row["id"]), "file_name": row["file_name"], "content_type": row["content_type"], "total_size": int(row["total_size"]), "total_chunks": int(row["total_chunks"]), "checksum": row["checksum"], "status": row["status"], "document_id": to_sid(row.get("document_id")), "received_chunks": list(chunk_indexes)}
 
     def _normalize_chunk_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
         if row is None:

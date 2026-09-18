@@ -6,11 +6,64 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from pydantic import BaseModel, Field
 
 from requirement_agent.api.dependencies import document_chunk_task, document_parser, document_repo, object_storage
 
 router = APIRouter()
+
+
+class UploadSessionCreateRequest(BaseModel):
+    file_name: str = Field(min_length=1, max_length=500)
+    content_type: str = Field(min_length=1, max_length=200)
+    total_size: int = Field(gt=0, le=2_147_483_647)
+    total_chunks: int = Field(gt=0, le=10_000)
+    checksum: str = Field(min_length=64, max_length=64)
+
+
+@router.post("/api/v1/documents/uploads", status_code=status.HTTP_201_CREATED)
+async def create_upload_session(payload: UploadSessionCreateRequest) -> dict[str, object]:
+    return document_repo.create_upload_session(**payload.model_dump())
+
+
+@router.get("/api/v1/documents/uploads/{upload_id}")
+async def get_upload_session(upload_id: str) -> dict[str, object]:
+    upload = document_repo.get_upload_session(upload_id)
+    if upload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload not found")
+    return upload
+
+
+@router.put("/api/v1/documents/uploads/{upload_id}/chunks/{chunk_index}")
+async def put_upload_chunk(upload_id: str, chunk_index: int, request: Request, checksum: str = Query(min_length=64, max_length=64)) -> dict[str, object]:
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="upload chunk is empty")
+    try:
+        upload = document_repo.put_upload_chunk(upload_id=upload_id, chunk_index=chunk_index, checksum=checksum, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if upload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload not found")
+    return upload
+
+
+@router.post("/api/v1/documents/uploads/{upload_id}/complete", status_code=status.HTTP_202_ACCEPTED)
+async def complete_upload(upload_id: str) -> dict[str, object]:
+    try:
+        upload_and_payload = document_repo.complete_upload(upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if upload_and_payload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload not found")
+    upload, payload = upload_and_payload
+    parsed = document_parser.parse(str(upload["file_name"]), payload)
+    stored = object_storage.upload(str(upload["file_name"]), payload)
+    document = document_repo.save(file_name=str(upload["file_name"]), content_type=str(upload["content_type"]), storage_uri=stored.uri, checksum=stored.checksum, size_bytes=stored.size, original_text=parsed.raw_content, extracted_text=parsed.content, metadata={"input_mode": "resumable_upload", "upload_id": upload_id})
+    document_repo.mark_upload_completed(upload_id, int(document["id"]))
+    result = document_chunk_task.enqueue(document_id=int(document["id"]), content=parsed.content) if parsed.content and not document_repo.has_chunks(int(document["id"])) else None
+    return {"upload_id": upload_id, "document": document, "status": "queued" if result else "ready", "result": result}
 
 
 @router.post("/api/v1/documents/upload", status_code=status.HTTP_202_ACCEPTED)
