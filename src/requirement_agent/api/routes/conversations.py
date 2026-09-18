@@ -25,14 +25,24 @@ from requirement_agent.api.dependencies import (
     memory_extractor,
     memory_repo,
     summarize_text,
+    requirement_analysis_task,
+    requirement_service,
 )
 from requirement_agent.api.schemas import (
     ConversationCreateRequest,
     ConversationMessageCreateRequest,
+    ConversationRequirementDraftCreateRequest,
+    ConversationRequirementDraftSubmitRequest,
     ConversationUpdateRequest,
 )
+from requirement_agent.domain.requirement import RequirementSource, build_idempotency_key
 
 router = APIRouter()
+
+
+def _require_conversation(conversation_id: str, actor_id: str) -> None:
+    if chat_repo.get_conversation(conversation_id, actor_id=actor_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
 
 
 @router.get("/api/v1/conversations")
@@ -74,6 +84,53 @@ async def add_conversation_message(conversation_id: str, payload: ConversationMe
         client_message_id=payload.client_message_id or str(uuid4()),
     )
     return {"message": message}
+
+
+@router.get("/api/v1/conversations/{conversation_id}/requirement-drafts")
+async def list_requirement_drafts(conversation_id: str, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    _require_conversation(conversation_id, actor_id_or_default(actor_id))
+    return {"conversation_id": conversation_id, "items": chat_repo.list_requirement_drafts(conversation_id)}
+
+
+@router.post("/api/v1/conversations/{conversation_id}/requirement-drafts", status_code=status.HTTP_201_CREATED)
+async def create_requirement_draft(conversation_id: str, payload: ConversationRequirementDraftCreateRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    _require_conversation(conversation_id, actor_id_or_default(actor_id))
+    return {"draft": chat_repo.create_requirement_draft(conversation_id=conversation_id, content=payload.content)}
+
+
+@router.post("/api/v1/conversations/{conversation_id}/requirement-drafts/{draft_id}/revise", status_code=status.HTTP_201_CREATED)
+async def revise_requirement_draft(conversation_id: str, draft_id: str, payload: ConversationRequirementDraftCreateRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    _require_conversation(conversation_id, actor_id_or_default(actor_id))
+    draft = chat_repo.revise_requirement_draft(conversation_id=conversation_id, draft_id=draft_id, content=payload.content)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="draft is not active in this conversation")
+    return {"draft": draft}
+
+
+@router.post("/api/v1/conversations/{conversation_id}/requirement-drafts/{draft_id}/submit", status_code=status.HTTP_202_ACCEPTED)
+async def submit_requirement_draft(conversation_id: str, draft_id: str, payload: ConversationRequirementDraftSubmitRequest, actor_id: str | None = Query(default=None, max_length=120)) -> dict[str, object]:
+    """显式提交草稿才创建待分析来源，聊天或草稿编辑本身绝不写正式需求链。"""
+    normalized_actor = actor_id_or_default(actor_id)
+    _require_conversation(conversation_id, normalized_actor)
+    draft = next((item for item in chat_repo.list_requirement_drafts(conversation_id) if item["id"] == draft_id), None)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="draft not found")
+    if draft["status"] != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="draft is not active")
+    metadata = {**payload.metadata, "conversation_id": conversation_id, "conversation_draft_id": draft_id}
+    source = requirement_service.accept_requirement(RequirementSource(
+        idempotency_key=build_idempotency_key(source_type=payload.source_type, requester=payload.requester_id or payload.requester_name, text=str(draft["content"])),
+        source_type=payload.source_type, requester_id=payload.requester_id,
+        requester_name=payload.requester_name, original_text=str(draft["content"]),
+        original_payload={"input_mode": "conversation_draft"}, metadata=metadata,
+    ))
+    submitted = chat_repo.mark_requirement_draft_submitted(conversation_id=conversation_id, draft_id=draft_id, source_id=int(source.id or 0))
+    if submitted is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="draft was updated while submitting")
+    queued = source.processing_status in {"received", "failed"}
+    if queued:
+        requirement_analysis_task.enqueue(source_id=int(source.id or 0))
+    return {"draft": submitted, "source_id": str(source.id), "status": source.processing_status, "queued": queued}
 
 
 @router.patch("/api/v1/conversations/{conversation_id}")

@@ -166,6 +166,100 @@ class ChatRepository:
             ).mappings().all()
         return [self._normalize_message_row(row) for row in rows]
 
+    def list_requirement_drafts(self, conversation_id: str) -> list[dict[str, object]]:
+        """列出会话需求草稿；草稿不是正式来源，不触发分析。"""
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, conversation_id, parent_draft_id, user_message_id, content, status,
+                           source_id, created_at, updated_at
+                    FROM conversation_requirement_draft
+                    WHERE conversation_id = CAST(:conversation_id AS UUID)
+                    ORDER BY created_at ASC
+                    """
+                ),
+                {"conversation_id": conversation_id},
+            ).mappings().all()
+        return [self._normalize_requirement_draft_row(row) for row in rows]
+
+    def create_requirement_draft(
+        self,
+        *,
+        conversation_id: str,
+        content: str,
+        parent_draft_id: str | None = None,
+        user_message_id: str | None = None,
+    ) -> dict[str, object]:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    INSERT INTO conversation_requirement_draft
+                        (id, conversation_id, parent_draft_id, user_message_id, content)
+                    VALUES
+                        (:id, CAST(:conversation_id AS UUID), :parent_draft_id, :user_message_id, :content)
+                    RETURNING id, conversation_id, parent_draft_id, user_message_id, content, status,
+                              source_id, created_at, updated_at
+                    """
+                ),
+                {
+                    "id": new_id(), "conversation_id": conversation_id,
+                    "parent_draft_id": parent_draft_id, "user_message_id": user_message_id,
+                    "content": content.strip(),
+                },
+            ).mappings().one()
+            session.commit()
+        return self._normalize_requirement_draft_row(row)
+
+    def revise_requirement_draft(
+        self, *, conversation_id: str, draft_id: str, content: str
+    ) -> dict[str, object] | None:
+        """以新草稿取代 active 父草稿，保留可审计的修订链。"""
+        with SessionLocal() as session:
+            parent = session.execute(
+                text(
+                    """SELECT id FROM conversation_requirement_draft
+                       WHERE id = :draft_id AND conversation_id = CAST(:conversation_id AS UUID)
+                         AND status = 'active' FOR UPDATE"""
+                ), {"draft_id": draft_id, "conversation_id": conversation_id},
+            ).mappings().first()
+            if parent is None:
+                return None
+            session.execute(
+                text("UPDATE conversation_requirement_draft SET status = 'superseded' WHERE id = :draft_id"),
+                {"draft_id": draft_id},
+            )
+            row = session.execute(
+                text(
+                    """INSERT INTO conversation_requirement_draft (id, conversation_id, parent_draft_id, content)
+                       VALUES (:id, CAST(:conversation_id AS UUID), :parent_draft_id, :content)
+                       RETURNING id, conversation_id, parent_draft_id, user_message_id, content, status,
+                                 source_id, created_at, updated_at"""
+                ),
+                {"id": new_id(), "conversation_id": conversation_id,
+                 "parent_draft_id": draft_id, "content": content.strip()},
+            ).mappings().one()
+            session.commit()
+        return self._normalize_requirement_draft_row(row)
+
+    def mark_requirement_draft_submitted(
+        self, *, conversation_id: str, draft_id: str, source_id: int
+    ) -> dict[str, object] | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """UPDATE conversation_requirement_draft
+                       SET status = 'submitted', source_id = :source_id
+                       WHERE id = :draft_id AND conversation_id = CAST(:conversation_id AS UUID)
+                         AND status = 'active'
+                       RETURNING id, conversation_id, parent_draft_id, user_message_id, content, status,
+                                 source_id, created_at, updated_at"""
+                ), {"draft_id": draft_id, "conversation_id": conversation_id, "source_id": source_id},
+            ).mappings().first()
+            session.commit()
+        return self._normalize_requirement_draft_row(row) if row else None
+
     def upsert_user_message(
         self,
         *,
@@ -483,6 +577,21 @@ class ChatRepository:
             "run_id": str(row["run_id"]) if row.get("run_id") is not None else None,
             "meta": dict(row["meta"] or {}),
             "created_at": as_display_iso(row["created_at"]),
+        }
+
+    def _normalize_requirement_draft_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
+        if row is None:
+            return None
+        return {
+            "id": to_sid(row["id"]),
+            "conversation_id": str(row["conversation_id"]),
+            "parent_draft_id": to_sid(row.get("parent_draft_id")),
+            "user_message_id": to_sid(row.get("user_message_id")),
+            "content": row["content"],
+            "status": row["status"],
+            "source_id": to_sid(row.get("source_id")),
+            "created_at": as_display_iso(row["created_at"]),
+            "updated_at": as_display_iso(row["updated_at"]),
         }
 
     def _normalize_run_row(self, row: dict[str, object] | None) -> dict[str, object] | None:

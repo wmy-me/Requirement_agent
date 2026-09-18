@@ -46,3 +46,24 @@ class ConversationMessageCreateRequest(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+
+class ConversationRequirementDraftCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("content must not be blank")
+        return value
+
+
+class ConversationRequirementDraftSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_type: Literal["web", "email", "meeting", "manual"] = "web"
+    requester_id: str | None = Field(default=None, max_length=120)
+    requester_name: str | None = Field(default=None, max_length=120)
+    metadata: dict[str, object] = Field(default_factory=dict)

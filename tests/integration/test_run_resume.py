@@ -184,6 +184,66 @@ def test_pause_then_resume_and_cancel_cannot_resume() -> None:
             session.commit()
 
 
+def test_pipeline_preserves_pause_requested_during_a_stage(monkeypatch) -> None:
+    """暂停恰好落在耗时阶段期间时，后续阶段不得执行或把状态覆写为 completed。"""
+    conv = str(chat_repo.create_conversation(actor_id="cooperative-pause", title="协作暂停")["id"])
+    created_run: dict[str, object] = {}
+    original_create_run = chat_repo.create_run
+
+    class Extract:
+        def extract(self, text, **kwargs):
+            return agent_chat.ExtractedRequirement(
+                raw_text=text, requirement_title="暂停测试", summary="暂停测试", business_domain="general",
+                priority="medium", tags=[], requirements=[]
+            )
+
+    class Retrieval:
+        def search(self, *args, **kwargs):
+            run = chat_repo.get_run(str(created_run["run_id"]))
+            assert run is not None
+            chat_repo.update_run(
+                run_id=str(run["run_id"]), status="paused", error=None, meta=run["meta"],
+                stage=run["stage"], checkpoint=run["checkpoint"],
+            )
+            return []
+
+    class MustNotRun:
+        def analyze(self, *args, **kwargs):
+            raise AssertionError("paused run must not analyze")
+
+        def assess(self, *args, **kwargs):
+            raise AssertionError("paused run must not assess risk")
+
+    def capture_run(**kwargs):
+        run = original_create_run(**kwargs)
+        created_run.update(run)
+        return run
+
+    try:
+        monkeypatch.setattr(chat_repo, "create_run", capture_run)
+        monkeypatch.setattr(agent_chat, "extract_agent", Extract())
+        monkeypatch.setattr(agent_chat, "retrieval_service", Retrieval())
+        monkeypatch.setattr(agent_chat, "analyze_agent", MustNotRun())
+        monkeypatch.setattr(agent_chat, "risk_agent", MustNotRun())
+        frames = asyncio.run(_collect(agent_chat._stream_chat_pipeline(
+            session_id=conv, actor_id="cooperative-pause", client_message_id="cooperative",
+            user_content="请暂停", user_meta=None, run_text="请暂停", source_type="web",
+            requester_name=None, analysis_mode="strict", history=[],
+        )))
+        final = chat_repo.get_run(str(created_run["run_id"]))
+        assert final is not None
+        assert final["status"] == "paused", (final["error"], frames)
+        assert final["stage"] == "retrieved"
+        assert "\"status\": \"paused\"" in "".join(frames)
+    finally:
+        from sqlalchemy import text
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM agent_run WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv})
+            session.execute(text("DELETE FROM agent_message WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv})
+            session.execute(text("DELETE FROM agent_conversation WHERE id = CAST(:c AS UUID)"), {"c": conv})
+            session.commit()
+
+
 # ── run.meta 的关联必须是真的（2026-09-17）────────────────────────────────
 
 

@@ -117,6 +117,14 @@ def _tracked_sse(
 CONVERSATION_BUSY_MESSAGE = "本对话正在思考上一个问题；可以等它跑完，或新建对话去问。"
 
 
+class RunStopped(RuntimeError):
+    """流水线在阶段边界观察到用户暂停或取消。"""
+
+    def __init__(self, status: str) -> None:
+        super().__init__(status)
+        self.status = status
+
+
 def _ensure_conversation_idle(session_id: str | None) -> None:
     """同对话并发隔离的前置检查：本对话在忙就直接 409。
 
@@ -387,10 +395,24 @@ async def _stream_chat_pipeline(
     # 逐阶段落盘（对话状态机 B 批）：每个 LLM 阶段完成就把已算出的结果写进 run 的
     # checkpoint。这样即使后面断开，之前花掉的 token 也不白费——stage 表示「已完成到哪」，
     # 续跑（C 批）据此跳过已完成阶段。
+    def check_run_status() -> None:
+        current = chat_repo.get_run(run_id)
+        current_status = current.get("status") if current else "cancelled"
+        if current_status in {"paused", "cancelled"}:
+            raise RunStopped(str(current_status))
+        if current_status != "running":
+            raise RunStopped("cancelled")
+
     def save_progress(stage: str) -> None:
+        # 暂停/取消可能恰好发生在耗时调用期间。绝不能用这里的旧视图把用户
+        # 已写入的终止状态重新覆盖成 running；保留终态同时写入最新 checkpoint。
+        current = chat_repo.get_run(run_id)
+        current_status = current.get("status") if current else "cancelled"
         chat_repo.update_run(
             run_id=run_id,
-            status="running",
+            status=str(current_status),
+            error=current.get("error") if current else "cancelled by user",
+            meta=current.get("meta") if current else {},
             stage=stage,
             checkpoint={
                 key: pipeline[key]
@@ -398,6 +420,8 @@ async def _stream_chat_pipeline(
                 if key in pipeline
             },
         )
+        if current_status in {"paused", "cancelled"}:
+            raise RunStopped(str(current_status))
 
     # —— 续跑初始化：从 checkpoint 预填已完成阶段的产物，算出「已完成几步」——
     # stage 序列表示「已完成到哪」：extracted=1步、retrieved=2、analyzed=3、assessed/narrating=4。
@@ -416,6 +440,7 @@ async def _stream_chat_pipeline(
 
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
+        check_run_status()
 
         # extract（第 1 步）
         if done_steps < 1:
@@ -436,6 +461,7 @@ async def _stream_chat_pipeline(
             extracted = ExtractedRequirement.model_validate(pipeline["extracted"])
 
         # retrieve（第 2 步）
+        check_run_status()
         if done_steps < 2:
             yield _tracked_sse(
                 run_id, "step", {"step": "retrieve", "label": "正在检索相似需求…"},
@@ -452,6 +478,7 @@ async def _stream_chat_pipeline(
             candidates = pipeline["candidates"]
 
         # analyze（第 3 步）
+        check_run_status()
         if done_steps < 3:
             yield _tracked_sse(
                 run_id, "step", {"step": "analyze", "label": "正在分析冲突与重复…"},
@@ -478,6 +505,7 @@ async def _stream_chat_pipeline(
             analysis_payload = pipeline["analysis"]
 
         # risk（第 4 步）
+        check_run_status()
         if done_steps < 4:
             yield _tracked_sse(
                 run_id, "step", {"step": "risk", "label": "正在评估风险…"},
@@ -496,6 +524,7 @@ async def _stream_chat_pipeline(
         pipeline["next_action"] = decision_next_action(analysis_payload, risk_payload)
 
         # 跨会话长期记忆：仅当命中才注入最终结论 prompt
+        check_run_status()
         memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
 
         yield _sse("artifacts", {"artifacts": pipeline})
@@ -506,6 +535,7 @@ async def _stream_chat_pipeline(
         yield _sse("narrative", {"start": True})
         try:
             async for token in _narrative_chunks(pipeline, memory_context=memory_ctx):
+                check_run_status()
                 narrative_parts.append(token)
                 yield _sse("narrative", {"t": token})
         except Exception:
@@ -517,6 +547,7 @@ async def _stream_chat_pipeline(
                 narrative_parts.append(piece)
                 yield _sse("narrative", {"t": piece})
 
+        check_run_status()
         assistant_content = "".join(narrative_parts)
         assistant_message: dict[str, object] = {
             "role": "assistant",
@@ -544,13 +575,24 @@ async def _stream_chat_pipeline(
             },
         )
         yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
+    except RunStopped as stopped:
+        yield _tracked_sse(
+            run_id,
+            "done",
+            {"run_id": run_id, "status": stopped.status},
+            node="paused" if stopped.status == "paused" else "cancelled",
+        )
     except asyncio.CancelledError:
-        chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")
+        current = chat_repo.get_run(run_id)
+        if current and current["status"] == "running":
+            chat_repo.update_run(run_id=run_id, status="cancelled", error="cancelled by client")
         raise
     except Exception as exc:
         error_text = f"分析遇到问题：{exc}"
         history.append({"role": "assistant", "content": error_text, "artifacts": None})
-        chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
+        current = chat_repo.get_run(run_id)
+        if current and current["status"] == "running":
+            chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id})
         yield _tracked_sse(run_id, "error", {"message": str(exc)})
         yield _tracked_sse(run_id, "done", {"run_id": run_id})
 
