@@ -8,14 +8,14 @@
 'use strict';
 
 const NAV = [
-  { key: 'index', path: '/app', label: '总览', hint: '待办、健康、趋势' },
-  { key: 'requirements', path: '/app/requirements', label: '需求工作台', hint: '需求库与档案' },
-  { key: 'intake', path: '/app/intake', label: '输入中心', hint: '文本 / 文件 / 渠道' },
-  { key: 'analysis', path: '/app/analysis', label: '智能分析', hint: 'Agent 运行与工具调用' },
-  { key: 'reviews', path: '/app/reviews', label: '审核中心', hint: '待审、裁决、历史' },
-  { key: 'versions', path: '/app/versions', label: '版本与变更', hint: '时间线、Diff、回滚' },
-  { key: 'knowledge', path: '/app/knowledge', label: '来源与知识', hint: '来源、文档、能力' },
-  { key: 'ops', path: '/app/ops', label: '系统运维', hint: '队列、Worker、模型、审计' },
+  { key: 'index', path: '/app', label: '全局视图', hint: '状态与流动' },
+  { key: 'requirements', path: '/app/requirements', label: '需求', hint: '正式需求' },
+  { key: 'versions', path: '/app/versions', label: '版本图谱', hint: '提交与 Diff' },
+  { key: 'knowledge', path: '/app/knowledge', label: '来源', hint: '证据与文档' },
+  { key: 'reviews', path: '/app/reviews', label: '审核', hint: '人工确认' },
+  { key: 'analysis', path: '/app/analysis', label: '分析', hint: '风险与关联' },
+  { key: 'intake', path: '/app/intake', label: '输入', hint: '文本与文件' },
+  { key: 'ops', path: '/app/ops', label: '运行', hint: '系统诊断' },
 ];
 
 function renderShell() {
@@ -28,12 +28,12 @@ function renderShell() {
   shell.replaceChildren(
     el('aside', { class: 'rail' }, [
       el('div', { class: 'rail-brand' }, [
-        el('div', { class: 'rail-title', text: '需求治理工作台' }),
-        el('div', { class: 'rail-sub', text: theme }),
+        el('a', { class: 'rail-title', href: '/app', text: '需求演进' }),
+        el('div', { class: 'rail-sub', text: '需求、证据与版本' }),
       ]),
       el('nav', { class: 'rail-nav' }, NAV.map((item) =>
         el('a', {
-          class: 'nav-item' + (item.key === current ? ' active' : ''),
+          class: 'nav-item' + (item.key === current ? ' active' : ''), title: item.hint,
           href: item.path,
         }, [
           el('span', { class: 'nav-label', text: item.label }),
@@ -41,8 +41,8 @@ function renderShell() {
         ]))),
       el('div', { class: 'rail-foot' }, [
         el('a', { class: 'nav-item nav-old', href: '/ui' }, [
-          el('span', { class: 'nav-label', text: '对话助手（旧界面）' }),
-          el('span', { class: 'nav-hint', text: '临时保留，逐页替换后删除' }),
+          el('span', { class: 'nav-label', text: '旧版对话' }),
+          el('span', { class: 'nav-hint', text: '保留访问' }),
         ]),
       ]),
     ]),

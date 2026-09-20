@@ -973,23 +973,20 @@ created_at  updated_at
 | `/reviews/{id}/detail` 没调用 | 后端有、前端没用（待办列表已带全量 `metadata`，所以可能确实不需要） |
 | 需求库筛选下拉是空的 | `departments`/`sensitivity_levels` 实测是 `[]`，下拉选项由当前结果集聚合而来（无 facets 接口）。见 `current-state.md` §三 遗留 7 |
 
-### T6 · 文档版本链的**写入路径**（🔴 会新增端点，契约要跟着改）
+### ~~T6 · 文档版本链写入与可恢复上传~~ ✅ 已完成（2026-09-18）
 
-**现状**：方案批次 1+2 已落地（`4f6bf0d`）—— `document_stream` 表、`document_asset` 的
-`stream_id/version_no/status`、分片的 `content_hash` + `plan_chunk_sync` 都在了。
-但 **HTTP 层一个字都没变**：`repositories/document.py` 的 `list_documents`/`get_document`
-是**显式列清单**，没有带新列 —— 实测响应里 `stream_id`/`version_no`/`status` **都不存在**。
+`POST /api/v1/documents/upload` 支持完整文件上传；同名同格式的新内容会在同一
+`document_stream` 中形成新版本，旧版本先置 `superseded`。`GET /api/v1/documents/{id}/versions`
+返回版本链，资产响应包含 `stream_id/version_no/status`。
 
-也就是说：**数据层已就位，但它对前端完全不可见，且上传路径还在按 checksum 建新资产。**
+大文件使用四步可恢复协议：
 
-**怎么做**（按 `docs/方案_文档版本链.md` 批次 3-5）：
-1. 批 3：改上传路径 —— 按 `(file_name, content_type)` 找 `document_stream`，
-   命中则 supersede 旧版本再插入新版本（**supersede 必须先于插入**，需求侧批次 3 在这里踩过）
-2. 批 4-5：加读取端点（文档版本列表 / 两版分片 diff），复用 `chunk_diff.plan_sync`
-3. 每加一个端点，**同步补进本文档 §3 或新增一节**，并把新增列加进 `_normalize_asset_row`
+1. `POST /api/v1/documents/uploads`：`{file_name, content_type, total_size, total_chunks, checksum}`，返回 `upload_id`
+2. `PUT /api/v1/documents/uploads/{upload_id}/chunks/{index}?checksum=<sha256>`：请求体为原始分片字节；同一 index 可安全重传覆盖
+3. `GET /api/v1/documents/uploads/{upload_id}`：返回 `received_chunks`，客户端据此续传
+4. `POST /api/v1/documents/uploads/{upload_id}/complete`：验证完整片序、总大小与全文件 SHA-256 后，创建版本并异步入队切片
 
-**怎么验**：同一文件名上传两次不同内容 → `document_stream` 仍 1 条、
-`document_asset` 变 2 行且只有一条 `status='current'`、两次响应的 `version_no` 不同。
+缺片、分片校验不符或上传已完成均返回 `409`；所有 ID 均为字符串。
 
 ### ~~T7 · F/G 批（版本链 DAG / revert + 乐观锁）~~ ✅ G 已完成（2026-09-16）
 

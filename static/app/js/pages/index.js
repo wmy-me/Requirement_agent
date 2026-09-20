@@ -11,8 +11,16 @@ function renderOverview() {
 
   page.replaceChildren(
     el('div', { class: 'page-toolbar' }, [
-      head('总览', '需求治理工作台的待办、风险、输入与运行健康'),
-      el('span', { class: 'data-note', text: '数据来自实时接口' }),
+      head('需求演进', '把来源、人工确认和版本提交放在同一条可追溯主线上。'),
+      el('div', { class: 'front-actions' }, [
+        el('a', { class: 'btn btn-primary', href: '/app/requirements', text: '浏览需求' }),
+        el('a', { class: 'btn', href: '/app/versions', text: '打开版本图谱' }),
+      ]),
+    ]),
+    el('div', { class: 'front-context' }, [
+      el('span', { text: '实时数据' }),
+      el('span', { text: '正式需求只经人工审核写入' }),
+      el('span', { text: '版本变更保留来源证据' }),
     ]),
     overview,
     el('div', { class: 'overview-grid' }, [health, pending, changes, incidents]),
