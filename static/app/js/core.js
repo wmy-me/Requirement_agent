@@ -193,6 +193,37 @@ const fmt = {
   },
 };
 
+/* ── 工具 ────────────────────────────────────────────────────────────── */
+
+/**
+ * UUID v4，用作客户端消息幂等键（断线重发时后端按它回放结果，不重复计算）。
+ *
+ * **不要直接调 `crypto.randomUUID()`。** 它只在安全上下文（HTTPS / localhost）里存在，
+ * 而这是内网工作台 —— 用户走 `http://内网IP:8888` 打开，那里 `crypto.randomUUID`
+ * 是 `undefined`，于是对话页在发消息那一行抛 `crypto.randomUUID is not a function`，
+ * 一条都发不出去。而 `crypto.getRandomValues` **不受**安全上下文限制，优先用它。
+ *
+ * 旧版前端 static/js/app.js 早就带了同样的守卫，新界面漏抄了 —— 所以这里做成
+ * 公共层，别再各页写一份。
+ */
+function uuidv4() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;   // 版本 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;   // 变体 10xx
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  // 最后兜底：连 crypto 都没有。这个分支的碰撞概率换的是「消息至少发得出去」。
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 /* ── DOM 构建（**安全的那一种**）─────────────────────────────────────── */
 
 /** 建元素。`text` 走 textContent，`children` 递归 —— 全程不碰 innerHTML。 */
