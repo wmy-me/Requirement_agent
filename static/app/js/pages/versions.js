@@ -161,6 +161,20 @@ function renderTimelineContent(key, items, traceVersions, selected, container, r
     ]),
     diffPanel,
   ]);
+  const revertFeedback = el('div');
+  const revertButton = el('button', { class: 'btn btn-danger', text: `回滚到 V${selectedVersion.version_no}`, disabled: selectedVersion.status === 'current', onclick: async () => {
+    if (selectedVersion.status === 'current') return;
+    if (!window.confirm(`确认创建新版本并回滚到 V${selectedVersion.version_no}？历史版本不会被删除。`)) return;
+    const comment = window.prompt('请输入回滚原因（可选）：', '') || null;
+    revertButton.disabled = true; revertFeedback.replaceChildren(state.loading('正在创建回滚版本…'));
+    try {
+      await api.requirements.revert(key, { target_version: Number(selectedVersion.version_no), comment, expected_current_version: Number((items.find((item) => item.status === 'current') || {}).version_no || 0) || null });
+      revertFeedback.replaceChildren(el('div', { class: 'notice notice-ok', text: '回滚已创建新的追加版本，正在刷新时间线。' }));
+      const refreshed = await api.requirements.versions(key);
+      const trace = await api.requirements.trace(key);
+      renderTimelineContent(key, refreshed.items || [], trace.versions || [], (refreshed.items.find((item) => item.status === 'current') || {}).version_no, container, reload);
+    } catch (error) { revertFeedback.replaceChildren(state.error(error, () => revertButton.click())); revertButton.disabled = false; }
+  } });
   container.replaceChildren(el('div', { class: 'version-layout' }, [
     section('版本时间线', versionTimeline(items, traceVersions, selectedVersion.version_no, choose)),
     el('div', { class: 'version-main' }, [
@@ -169,12 +183,12 @@ function renderTimelineContent(key, items, traceVersions, selected, container, r
       section(`V${selectedVersion.version_no} 的功能清单`, featuresPanel),
       diffSection,
     ]),
-    section('版本元数据', kv([
+      section('版本元数据', [kv([
       ['版本', `V${selectedVersion.version_no}`], ['状态', selectedVersion.status === 'current' ? badge('当前版本', 'ok') : badge('历史版本')],
       ['提交人', selectedVersion.created_by || '未提供'], ['审核人', selectedVersion.reviewed_by || '未提供'],
       ['提交时间', fmt.time(selectedVersion.created_at)], ['父版本', selectedVersion.parent_version_no == null ? '起始版本' : `V${selectedVersion.parent_version_no}`],
       ['来源数量', String(versionSourceCount(traceVersions, selectedVersion.version_no))],
-    ])),
+    ]), el('div', { class: 'version-actions' }, [revertButton, el('span', { class: 'tiny', text: selectedVersion.status === 'current' ? '当前版本不能回滚到自身' : '回滚会追加新版本，不改写历史' })]), revertFeedback]),
   ]));
   load(featuresPanel, () => api.requirements.features(key, { at_version: selectedVersion.version_no }), (data) => {
     const rows = Array.isArray(data.items) ? data.items : [];

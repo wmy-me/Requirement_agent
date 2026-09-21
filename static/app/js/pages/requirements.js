@@ -8,7 +8,7 @@ function requirementStatus(value) {
 }
 
 function unavailableCell(label = '后端暂未提供') {
-  return el('span', { class: 'unavailable', title: label, text: '—' });
+  return el('span', { class: 'unavailable', title: label, text: '未提供' });
 }
 
 function valuesCell(values) {
@@ -19,21 +19,23 @@ function valuesCell(values) {
 function requirementTable(items, open) {
   if (!items.length) return state.empty('没有符合筛选条件的需求', '可以调整筛选条件后重试。');
   const rows = items.map((item) => el('tr', { class: 'clickable', onclick: () => open(item) }, [
-    el('td', {}, [el('div', { class: 'mono', text: String(item.requirement_key || '—') }), el('div', { class: 'tiny', text: item.requirement_name || '未命名需求' })]),
+    el('td', {}, [el('div', { class: 'mono', text: String(item.requirement_key || '未提供') }), el('div', { class: 'tiny', text: item.requirement_name || '未命名需求' })]),
     el('td', {}, [el('div', { class: 'requirement-summary', text: item.final_requirement || '未提供需求描述' }), el('div', { class: 'tiny', text: (item.business_domains || []).join(' / ') || '业务域未提供' })]),
-    el('td', { text: `V${item.current_version ?? '—'}` }),
+    el('td', { text: `V${item.current_version ?? '未提供'}` }),
     el('td', {}, [requirementStatus(item.status)]),
     el('td', {}, [valuesCell(item.source_types)]),
     el('td', {}, [valuesCell(item.requester_names)]),
     el('td', {}, [valuesCell(item.business_domains)]),
-    el('td', { class: 'number-cell', text: item.feature_count == null ? '—' : String(item.feature_count) }),
+    el('td', {}, [valuesCell(item.departments)]),
+    el('td', {}, [valuesCell(item.sensitivity_levels)]),
+    el('td', { class: 'number-cell', text: item.feature_count == null ? '未提供' : String(item.feature_count) }),
     el('td', {}, [unavailableCell('需求列表响应没有来源总数')]),
     el('td', {}, [unavailableCell('需求列表响应没有需求级风险')]),
     el('td', {}, [unavailableCell('需求列表响应没有需求级冲突')]),
     el('td', {}, [el('span', { class: 'tiny', text: fmt.time(item.latest_source_submitted_at) }), el('div', { class: 'tiny', text: '最近来源时间' })]),
   ]));
   return el('div', { class: 'table-wrap requirements-table-wrap' }, [el('table', { class: 'grid requirements-table' }, [
-    el('thead', {}, [el('tr', {}, ['编号 / 标题', '需求描述 / 领域', '版本', '状态', '来源渠道', '输入人', '业务域', '功能数', '来源数', '风险', '冲突', '最近来源'].map((label) => el('th', { text: label })))]),
+    el('thead', {}, [el('tr', {}, ['编号 / 标题', '需求描述 / 领域', '版本', '状态', '来源渠道', '输入人', '业务域', '部门', '密级', '功能数', '来源数', '风险', '冲突', '最近来源'].map((label) => el('th', { text: label })))]),
     el('tbody', {}, rows),
   ])]);
 }
@@ -91,15 +93,28 @@ function sourceGroups(versions) {
 function relationRows(items) {
   if (!items.length) return state.empty('没有已记录的关联、冲突、依赖或重复关系。');
   const labels = { related: '关联', conflict: '冲突', depends: '依赖', duplicates_of: '疑似重复' };
-  return el('div', { class: 'relation-list' }, items.map((relation) => el('article', { class: 'relation-row' }, [
+  return el('div', { class: 'relation-list' }, items.map((relation) => {
+    const decision = el('span', { class: 'relation-decision' }, [statusBadge(relation.status)]);
+    const actions = relation.status === 'proposed' ? el('div', { class: 'relation-actions' }, [
+      el('button', { class: 'btn btn-small', text: '确认', onclick: async (event) => { event.stopPropagation(); await decideRelation(relation.id, 'confirmed', decision, actions); } }),
+      el('button', { class: 'btn btn-small', text: '驳回', onclick: async (event) => { event.stopPropagation(); await decideRelation(relation.id, 'dismissed', decision, actions); } }),
+    ]) : null;
+    return el('article', { class: 'relation-row' }, [
     badge(labels[relation.relation_type] || relation.relation_type || '未提供', relation.relation_type === 'conflict' ? 'bad' : relation.relation_type === 'duplicates_of' ? 'warn' : 'mute'),
     el('div', {}, [
       el('a', { class: 'mono', href: `/app/requirements/${encodeURIComponent(String(relation.other_requirement_key || ''))}`, text: String(relation.other_requirement_key || '未提供') }),
       el('div', { class: 'tiny', text: relation.other_requirement_name || '需求名称未提供' }),
     ]),
     el('div', { class: 'relation-reason', text: relation.reason || '未提供判定依据' }),
-    statusBadge(relation.status),
-  ])));
+    el('div', {}, [decision, actions]),
+  ]);
+  }));
+}
+
+async function decideRelation(relationId, status, target, actions) {
+  actions.replaceChildren(state.loading('提交中…'));
+  try { const result = await api.requirements.relationUpdate(String(relationId), { status }); target.replaceChildren(statusBadge(result.status || status)); actions.replaceChildren(); }
+  catch (error) { actions.replaceChildren(state.error(error)); }
 }
 
 function capabilityRows(data) {
@@ -184,10 +199,13 @@ function filterSelect(label, id, options) {
 function renderRequirements() {
   const page = document.getElementById('page');
   const query = filterInput('编号或关键词', 'req-q', 'search', '搜索需求编号、标题或正文');
+  const initialQuery = new URLSearchParams(window.location.search).get('q');
+  if (initialQuery) query.querySelector('input').value = initialQuery;
   const channel = filterInput('来源渠道', 'req-channel', 'text', '如 web / manual');
   const requester = filterInput('输入人', 'req-requester', 'text', '姓名或 requester_id');
   const department = filterInput('部门', 'req-department', 'text', '后端字段');
   const domain = filterInput('业务域', 'req-domain', 'text', '后端字段');
+  const sensitivity = filterInput('密级', 'req-sensitivity', 'text', '后端字段');
   const version = filterInput('版本 ≥', 'req-version', 'number', '1');
   const from = filterInput('提交开始', 'req-from', 'date');
   const to = filterInput('提交结束', 'req-to', 'date');
@@ -201,7 +219,7 @@ function renderRequirements() {
   const filters = () => queryParams({
     q: query.querySelector('input').value.trim(), channel: channel.querySelector('input').value.trim(),
     requester: requester.querySelector('input').value.trim(), department: department.querySelector('input').value.trim(),
-    business_domain: domain.querySelector('input').value.trim(), has_version_ge: version.querySelector('input').value.trim(),
+    business_domain: domain.querySelector('input').value.trim(), sensitivity_level: sensitivity.querySelector('input').value.trim(), has_version_ge: version.querySelector('input').value.trim(),
     status: status.querySelector('select').value, submitted_from: from.querySelector('input').value,
     submitted_to: to.querySelector('input').value ? `${to.querySelector('input').value}T23:59:59` : '',
   });
@@ -215,11 +233,15 @@ function renderRequirements() {
   };
   const renderList = () => load(results, () => api.requirements.list({ ...filters(), limit: 500 }), render);
   const apply = el('button', { class: 'btn btn-primary', text: '查询', onclick: () => { currentPage = 1; renderList(); } });
+  const exportButton = el('button', { class: 'btn', text: '导出 CSV', onclick: async () => {
+    try { const blob = await api.requirements.exportCsv({ ...filters(), limit: 5000 }); const url = URL.createObjectURL(blob); const link = el('a', { href: url, download: 'requirements.csv' }); link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    catch (error) { results.replaceChildren(state.error(error, () => exportButton.click())); }
+  } });
   const reset = el('button', { class: 'btn', text: '重置', onclick: () => { page.querySelectorAll('.filter-field input').forEach((input) => { input.value = ''; }); status.querySelector('select').value = ''; currentPage = 1; renderList(); } });
-  [query, channel, requester, department, domain, version, from, to].forEach((field) => field.querySelector('input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { currentPage = 1; renderList(); } }));
+  [query, channel, requester, department, domain, sensitivity, version, from, to].forEach((field) => field.querySelector('input').addEventListener('keydown', (event) => { if (event.key === 'Enter') { currentPage = 1; renderList(); } }));
   status.querySelector('select').addEventListener('change', () => { currentPage = 1; renderList(); });
 
-  page.replaceChildren(head('需求列表', '按编号、来源、输入人和版本条件检索正式需求主线'), el('div', { class: 'filter-panel' }, [el('div', { class: 'filter-grid' }, [query, channel, requester, department, domain, version, status, risk, from, to]), el('div', { class: 'toolbar filter-actions' }, [apply, reset])]), results);
+  page.replaceChildren(head('需求列表', '按契约字段检索、导出正式需求主线'), el('div', { class: 'filter-panel' }, [el('div', { class: 'filter-grid' }, [query, channel, requester, department, domain, sensitivity, version, status, risk, from, to]), el('div', { class: 'toolbar filter-actions' }, [apply, exportButton, reset])]), results);
   renderList();
 }
 

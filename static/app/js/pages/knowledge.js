@@ -23,6 +23,17 @@ function traceValue(value) {
   return String(value);
 }
 
+function vocabularyCard(title, result, fields) {
+  if (result.status === 'rejected') return section(title, state.error(result.reason));
+  const items = Array.isArray(result.value?.items) ? result.value.items : [];
+  if (!items.length) return section(title, state.empty('暂无词表数据。'));
+  return section(title, el('div', { class: 'vocabulary-list' }, items.map((item) => el('article', { class: 'vocabulary-row' }, [
+    el('div', { class: 'vocabulary-name', text: fields.name(item) }),
+    fields.status ? badge(fields.status(item) || '未提供', fields.status(item) === 'active' ? 'ok' : 'warn') : null,
+    el('div', { class: 'tiny', text: fields.meta(item) }),
+  ]))));
+}
+
 function renderSourceTrace(sourceId, content, reload) {
   content.replaceChildren(state.loading('正在加载来源链…'));
   api.sources.trace(sourceId).then((data) => {
@@ -53,9 +64,17 @@ function renderKnowledge() {
   const requester = el('input', { type: 'text', placeholder: '输入人', 'aria-label': '输入人' });
   const list = el('div');
   const open = (sourceId) => { history.replaceState(null, '', `/app/knowledge?source_id=${encodeURIComponent(sourceId)}`); renderSourceTrace(sourceId, content); };
-  const loadList = () => load(list, () => api.sources.list(queryParams({ source_type: sourceType.value.trim(), requester: requester.value.trim(), limit: 100 })), (data) => {
-    const items = Array.isArray(data.items) ? data.items : [];
-    return card('最近来源', items.length ? el('div', { class: 'source-center-list' }, items.map((item) => sourceRow(item, open))) : state.empty('没有符合条件的来源。'));
+  const loadList = () => load(list, () => Promise.allSettled([
+    api.sources.list(queryParams({ source_type: sourceType.value.trim(), requester: requester.value.trim(), limit: 100 })),
+    api.vocabulary.capabilities({ limit: 200 }), api.vocabulary.constraints({ limit: 200 }),
+  ]), (results) => {
+    const sources = results[0].status === 'fulfilled' ? results[0].value : { items: [] };
+    const items = Array.isArray(sources.items) ? sources.items : [];
+    return [
+      results[0].status === 'rejected' ? state.error(results[0].reason) : card('最近来源', items.length ? el('div', { class: 'source-center-list' }, items.map((item) => sourceRow(item, open))) : state.empty('没有符合条件的来源。')),
+      vocabularyCard('能力词表', results[1], { name: (item) => item.display_name || `${item.action || '未提供'} ${item.object || ''}`, status: (item) => item.status, meta: (item) => `${item.origin_source_id ? `来源 ${String(item.origin_source_id)}` : '无来源'} · ${item.created_by || '创建人未提供'}` }),
+      vocabularyCard('条件词表', results[2], { name: (item) => item.constraint_key || item.name || item.raw || '未提供', meta: (item) => Array.isArray(item.aliases) ? `${item.aliases.length} 个别名` : '别名未提供' }),
+    ];
   });
   const apply = el('button', { class: 'btn btn-primary', text: '筛选', onclick: loadList });
   const detailId = new URLSearchParams(window.location.search).get('source_id');

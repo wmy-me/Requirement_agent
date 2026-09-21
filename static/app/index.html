@@ -3,18 +3,51 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>总览 · 需求治理工作台</title>
+  <title>需求治理 Agent · 对话</title>
   <link rel="stylesheet" href="/static/app/css/app.css" />
   <!-- token 由服务端注入（api/app.py 的 _render_page）。每个页面都是独立文档，
        各自发请求，所以**每一页都要注入** —— 漏掉一页那一页就全是 401。 -->
   <!-- RA_UI_TOKEN_INJECT -->
 </head>
-<body data-page="index" data-title="待办、系统健康、趋势与分布">
-  <div id="shell"></div>
-  <main id="page"></main>
+<body data-page="index">
+  <div class="agent-app" id="agent-app">
+    <aside class="agent-sessions">
+      <div class="agent-brand"><a href="/app">需求治理 Agent</a><span>把需求说清楚，再写进版本库</span></div>
+      <button class="agent-new" id="new-chat" type="button">＋ 新建对话</button>
+      <div class="agent-caption">最近会话</div>
+      <div id="session-list" class="agent-session-list"><div class="agent-muted">暂无会话</div></div>
+      <!-- 完整导航由 chat.js 按 core.js 的 NAV 渲染：对话页没有左侧导航栏，
+           这里是它到达其余页面的通路 -->
+      <div class="agent-session-foot"></div>
+    </aside>
+    <main class="agent-chat">
+      <header class="agent-chat-head">
+        <div><strong>需求助手</strong><span id="agent-status">在线，可开始对话</span></div>
+        <span class="agent-chat-hint">输入文字，或在输入框中附加文档</span>
+        <!-- 只在 ≤1080px 出现：工作区收成覆盖式抽屉，否则小屏上
+             「待办 / 需求库 / 文档 / 运行」四个面板完全点不到 -->
+        <button class="agent-context-toggle" id="agent-context-toggle" type="button"
+                aria-expanded="false" aria-controls="agent-context">工作区</button>
+      </header>
+      <section id="agent-messages" class="agent-messages" role="log" aria-live="polite" aria-label="对话记录">
+        <div class="agent-welcome"><div class="agent-welcome-mark">✦</div><h1>把需求交给我</h1><p>描述业务目标、问题或变更。我会提炼正式需求，标出冲突和风险，并把来源和版本变化留在同一条对话里。</p><div class="agent-prompts"><button type="button" data-prompt="帮我整理这条需求，并指出缺少的验收条件">整理一条需求</button><button type="button" data-prompt="检查最近的待审核需求，告诉我哪些需要优先处理">检查待审核</button><button type="button" data-prompt="对比这个需求的当前版本和上一版本，说明新增和修改">查看版本变化</button></div></div>
+      </section>
+      <form id="agent-composer" class="agent-composer"><input id="agent-file" type="file" hidden multiple accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg" /><div id="agent-attachments" class="agent-attachments"></div><div class="agent-compose-row"><button class="agent-attach" id="agent-attach" type="button" title="附加需求文档或截图" aria-label="附加需求文档或截图">⌕</button><textarea id="agent-input" rows="1" placeholder="输入需求、问题或让 Agent 执行的动作…" aria-label="对话输入框"></textarea></div><div class="agent-compose-foot"><span>Enter 发送 · Shift + Enter 换行 · 支持文档和截图</span><button class="btn btn-primary" id="agent-send" type="submit">发送</button></div></form>
+    </main>
+    <div class="agent-context-scrim" id="agent-context-scrim"></div>
+    <aside class="agent-context" id="agent-context" aria-label="工作区">
+      <div class="agent-context-head"><strong>工作区</strong><span>随对话更新</span></div>
+      <nav class="agent-context-tabs" role="tablist" aria-label="工作区面板"><button class="active" role="tab" aria-selected="true" aria-controls="context-pane-pending" data-context-tab="pending" type="button">待办</button><button role="tab" aria-selected="false" aria-controls="context-pane-library" data-context-tab="library" type="button">需求库</button><button role="tab" aria-selected="false" aria-controls="context-pane-documents" data-context-tab="documents" type="button">文档</button><button role="tab" aria-selected="false" aria-controls="context-pane-ops" data-context-tab="ops" type="button">运行</button></nav>
+      <section class="agent-context-section context-pane active" id="context-pane-pending" role="tabpanel" data-context-pane="pending"><div class="agent-context-title">待审核 <a href="/app/reviews">查看全部</a></div><div id="agent-pending" class="agent-context-list"><div class="agent-muted">加载中</div></div></section>
+      <section class="agent-context-section context-pane" id="context-pane-library" role="tabpanel" data-context-pane="library"><div class="agent-context-title">需求主线 <a href="/app/requirements">打开需求库</a></div><div id="agent-recent" class="agent-context-list"><div class="agent-muted">加载中</div></div></section>
+      <section class="agent-context-section context-pane" id="context-pane-documents" role="tabpanel" data-context-pane="documents"><div class="agent-context-title">最近文档 <a href="/app/knowledge">查看来源</a></div><div id="agent-documents" class="agent-context-list"><div class="agent-muted">加载中</div></div></section>
+      <section class="agent-context-section context-pane" id="context-pane-ops" role="tabpanel" data-context-pane="ops"><div class="agent-context-title">运行状态 <a href="/app/ops">打开运行记录</a></div><div id="agent-ops" class="agent-context-list"><div class="agent-muted">加载中</div></div></section>
+      <section class="agent-side-summary"><div class="agent-context-title">这条对话会经过</div><div class="agent-flow"><div><b>01</b><span>理解输入</span></div><div><b>02</b><span>检索相似需求</span></div><div><b>03</b><span>分析冲突与风险</span></div><div><b>04</b><span>等待人工审核</span></div></div></section>
+      <section class="agent-quick"><div class="agent-context-title">快捷入口</div><a href="/app/reviews">处理待审核需求</a><a href="/app/versions">查看版本 Diff</a><a href="/app/knowledge">追踪来源证据</a></section>
+    </aside>
+  </div>
 
   <script src="/static/app/js/core.js"></script>
-  <script src="/static/app/js/shell.js"></script>
-  <script src="/static/app/js/pages/index.js"></script>
+  <script src="/static/app/js/pages/chat.js"></script>
 </body>
 </html>

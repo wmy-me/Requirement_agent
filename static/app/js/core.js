@@ -19,7 +19,7 @@
 const TOKEN = document.querySelector('meta[name="ra-ui-token"]')?.content || '';
 
 /** 带鉴权头的 fetch 包装。**所有请求都要经过它**（否则就是那一页 401）。 */
-async function request(path, { method = 'GET', body, params, timeoutMs = 12000, signal } = {}) {
+async function request(path, { method = 'GET', body, params, timeoutMs = 12000, signal, responseType = 'json' } = {}) {
   let url = path;
   if (params) {
     const qs = new URLSearchParams();
@@ -53,7 +53,7 @@ async function request(path, { method = 'GET', body, params, timeoutMs = 12000, 
     });
   } catch (err) {
     if (controller.signal.aborted && controller.signal.reason === 'timeout') {
-      const timeoutError = new Error('请求超时（12 秒）—— 请检查服务状态后重试。');
+      const timeoutError = new Error('请求超时（12 秒）。请检查服务状态后重试。');
       timeoutError.code = 'timeout';
       throw timeoutError;
     }
@@ -69,6 +69,7 @@ async function request(path, { method = 'GET', body, params, timeoutMs = 12000, 
     throw httpError;
   }
   if (resp.status === 204) return null;
+  if (responseType === 'blob') return resp.blob();
   return resp.json();
 }
 
@@ -83,16 +84,16 @@ async function describeError(resp) {
   } catch (e) { /* 响应不是 JSON，用状态码兜底 */ }
 
   if (resp.status === 401) {
-    return '未通过鉴权（401）—— 页面里没拿到 API token。这是服务端配置问题，' +
+    return '未通过鉴权（401）。页面里没拿到 API token。这是服务端配置问题，' +
            '检查 .env 的 API_AUTH_TOKEN。';
   }
   if (resp.status === 403) {
-    return '权限不足（403）—— ' + (detail || '当前 token 的角色没有这一档权限。') +
+    return '权限不足（403）。' + (detail || '当前 token 的角色没有这一档权限。') +
            ' 这不是登录失效，换 token 也没用。';
   }
-  if (resp.status === 404) return '找不到（404）—— ' + (detail || '对象不存在或已被删除。');
-  if (resp.status === 409) return '状态冲突（409）—— ' + (detail || '别处已经改过它了，刷新后再试。');
-  if (resp.status === 422) return '参数不合法（422）—— ' + (detail || '检查筛选条件。');
+  if (resp.status === 404) return '找不到（404）。' + (detail || '对象不存在或已被删除。');
+  if (resp.status === 409) return '状态冲突（409）。' + (detail || '别处已经改过它了，刷新后再试。');
+  if (resp.status === 422) return '参数不合法（422）。' + (detail || '检查筛选条件。');
   return `请求失败（${resp.status}）` + (detail ? '：' + detail : '');
 }
 
@@ -124,10 +125,18 @@ const api = {
     relations: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/relations`),
     capabilities: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/capabilities`),
     titles: (key) => request(`/api/v1/requirements/${encodeURIComponent(key)}/titles`),
+    exportCsv: (params) => request('/api/v1/requirements/export', { params, responseType: 'blob' }),
+    revert: (key, payload) => request(`/api/v1/requirements/${encodeURIComponent(key)}/revert`, { method: 'POST', body: payload }),
+    relationUpdate: (relationId, payload) => request(`/api/v1/requirements/relations/${encodeURIComponent(String(relationId))}`, { method: 'PATCH', body: payload }),
   },
   sources: {
     list: (params) => request('/api/v1/sources', { params }),
     trace: (sourceId) => request(`/api/v1/sources/${encodeURIComponent(String(sourceId))}/trace`),
+  },
+  vocabulary: {
+    capabilities: (params) => request('/api/v1/capabilities', { params }),
+    constraints: (params) => request('/api/v1/constraints', { params }),
+    streams: (id, params) => request(`/api/v1/capabilities/${encodeURIComponent(String(id))}/streams`, { params }),
   },
   intake: {
     submit: (payload) => request('/api/v1/requirements/submit/async', { method: 'POST', body: payload }),
@@ -149,7 +158,7 @@ const api = {
 const fmt = {
   /** ISO → `MM-DD HH:mm`。空值给 `—`，不给空字符串（表格里空着看不出是没值还是没渲染）。 */
   time(iso) {
-    if (!iso) return '—';
+    if (!iso) return '未提供';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return String(iso);
     const p = (x) => String(x).padStart(2, '0');
@@ -157,9 +166,9 @@ const fmt = {
   },
   /** 相对时间。列表里比绝对时间好读。 */
   rel(iso) {
-    if (!iso) return '—';
+    if (!iso) return '未提供';
     const ms = Date.now() - new Date(iso).getTime();
-    if (Number.isNaN(ms)) return '—';
+    if (Number.isNaN(ms)) return '未提供';
     const m = Math.floor(ms / 60000);
     if (m < 1) return '刚刚';
     if (m < 60) return `${m} 分钟前`;
@@ -167,7 +176,16 @@ const fmt = {
     if (h < 24) return `${h} 小时前`;
     return `${Math.floor(h / 24)} 天前`;
   },
-  num(v) { return v === null || v === undefined ? '—' : String(v); },
+  num(v) { return v === null || v === undefined ? '未提供' : String(v); },
+  /** 字节数 → `1.2 MB`。文档列表里比原始字节数好读；取不到值给 `null`，让调用方略过这一段。 */
+  size(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0; let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  },
   /** 截断长文本。列表里不渲染全文。 */
   cut(s, n = 60) {
     const t = String(s ?? '');
@@ -282,15 +300,31 @@ function statusKind(s) {
 }
 
 function statusBadge(s) {
-  return badge(STATUS_LABEL[s] || s || '—', statusKind(s));
+  return badge(STATUS_LABEL[s] || s || '未提供', statusKind(s));
 }
 
 /** 风险等级徽标。 */
 function levelBadge(level) {
   const kind = level === 'high' ? 'bad' : level === 'medium' ? 'warn' : level === 'low' ? 'ok' : 'mute';
-  const text = { high: '高', medium: '中', low: '低' }[level] || level || '—';
+  const text = { high: '高', medium: '中', low: '低' }[level] || level || '未提供';
   return badge(text, kind);
 }
+
+/**
+ * 工作台导航表。**放公共层是因为有两个消费者**：外壳页（shell.js 渲染成左侧栏）
+ * 和对话页（chat.js 渲染成侧栏底部的一组链接）。各写一份的话，
+ * 「新加一个页面，对话页漏了入口」这种事一定会发生。
+ */
+const NAV = [
+  { key: 'index', path: '/app', label: '需求仓库', hint: '总览与入口' },
+  { key: 'requirements', path: '/app/requirements', label: '需求列表', hint: '正式需求' },
+  { key: 'versions', path: '/app/versions', label: '版本图谱', hint: '提交与 Diff' },
+  { key: 'knowledge', path: '/app/knowledge', label: '来源证据', hint: '消息与文档' },
+  { key: 'reviews', path: '/app/reviews', label: '审核队列', hint: '人工确认' },
+  { key: 'analysis', path: '/app/analysis', label: 'AI 分析', hint: '风险与关联' },
+  { key: 'intake', path: '/app/intake', label: '新建输入', hint: '文本与文件' },
+  { key: 'ops', path: '/app/ops', label: '运行记录', hint: '系统诊断' },
+];
 
 /** 页面标题。 */
 function head(title, desc) {
