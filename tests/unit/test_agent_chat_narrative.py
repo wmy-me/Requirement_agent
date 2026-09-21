@@ -84,3 +84,13 @@ def test_narrative_invocation_keeps_run_id_inside_background_thread(monkeypatch)
         }]
     finally:
         set_recorder(None)
+
+
+def test_casual_chat_is_not_requirement_intent() -> None:
+    assert agent_chat._looks_like_casual_chat("你好你是谁")
+    assert agent_chat._conversation_title_from_message("你好你是谁") == "了解需求助手"
+
+
+def test_requirement_like_text_still_goes_to_pipeline() -> None:
+    assert not agent_chat._looks_like_casual_chat("新增审批导出功能，支持按部门筛选")
+    assert not agent_chat._looks_like_casual_chat("你好，帮我整理这条需求")

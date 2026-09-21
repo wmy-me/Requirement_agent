@@ -353,7 +353,7 @@ const NAV = [
   { key: 'knowledge', path: '/app/knowledge', label: '来源证据', hint: '消息与文档' },
   { key: 'reviews', path: '/app/reviews', label: '审核队列', hint: '人工确认' },
   { key: 'analysis', path: '/app/analysis', label: 'AI 分析', hint: '风险与关联' },
-  { key: 'intake', path: '/app/intake', label: '新建输入', hint: '文本与文件' },
+  { key: 'intake', path: '/app/intake', label: '录入需求', hint: '文本与文件' },
   { key: 'ops', path: '/app/ops', label: '运行记录', hint: '系统诊断' },
 ];
 

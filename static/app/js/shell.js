@@ -36,7 +36,7 @@ function renderShell() {
           el('span', { class: 'nav-hint', text: item.hint }),
         ]))),
       el('div', { class: 'rail-foot' }, [
-        el('a', { class: 'btn btn-primary shell-create', href: '/app/intake', text: '新建输入' }),
+        el('a', { class: 'btn btn-primary shell-create', href: '/app/intake', text: '录入需求' }),
         el('a', { class: 'nav-item nav-old', href: '/ui' }, [
           el('span', { class: 'nav-label', text: '旧版对话' }),
           el('span', { class: 'nav-hint', text: '保留访问' }),

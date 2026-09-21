@@ -1,4 +1,4 @@
-/* F8 输入中心：文本提交与真实 multipart 导入。 */
+/* 需求材料录入：文本提交与真实 multipart 导入。 */
 'use strict';
 
 function intakeResult(target, result) {
@@ -35,8 +35,8 @@ function renderIntake() {
     finally { ingest.disabled = false; }
   });
 
-  page.replaceChildren(head('输入中心', '从文本或文档创建待审核来源。提交后不会直接成为正式需求。'), el('div', { class: 'intake-grid' }, [
-    card('文本输入', [el('div', { class: 'form-grid' }, [el('label', {}, [el('span', { text: '来源渠道' }), sourceType]), el('label', {}, [el('span', { text: '输入人' }), requester])]), text, submit]),
+  page.replaceChildren(head('需求材料录入', '只用于提交待分析的需求材料。普通聊天请回到对话页。'), el('div', { class: 'intake-grid' }, [
+    card('文本需求', [el('div', { class: 'form-grid' }, [el('label', {}, [el('span', { text: '来源渠道' }), sourceType]), el('label', {}, [el('span', { text: '输入人' }), requester])]), text, submit]),
     card('文档导入', [el('p', { class: 'tiny', text: '后端当前提供文本、Markdown、DOCX、PDF 的 multipart 导入；截图识别接口暂未提供。' }), file, fileText, ingest]),
   ]), feedback);
 }

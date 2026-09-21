@@ -463,7 +463,7 @@ dl.kv dd { margin: 0; }
 .analysis-reasoning { margin: 0; color: var(--text-2); line-height: 1.6; white-space: pre-wrap; }
 .event-list { margin: 0; padding-left: 24px; }
 .event-list li { display: grid; grid-template-columns: 90px 100px minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
-/* ── F8 输入中心 ───────────────────────────────────────────────────── */
+/* ── F8 需求材料录入 ───────────────────────────────────────────────── */
 .intake-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .intake-grid textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 9px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--panel); color: var(--text); font: inherit; }
 .intake-grid input[type="file"] { width: 100%; padding: 10px 0; }
@@ -673,7 +673,7 @@ dl.kv dd { margin: 0; }
 .shell-search input { width: 100%; height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--panel); color: var(--text); font: inherit; font-size: 12px; }
 .shell-search input:focus { outline: 2px solid rgba(49,92,222,.18); border-color: var(--accent); }
 /* align-content:start + min-height:0：网格行默认会拉伸铺满，`flex:1` 一给，
-   导航项就被扯开铺满整列，底部「新建输入」还会被顶出视口。 */
+   导航项就被扯开铺满整列，底部「录入需求」还会被顶出视口。 */
 .rail-nav { display: grid; align-content: start; flex: 1 1 auto; min-height: 0; gap: 3px; padding: 0; overflow-y: auto; }
 .nav-item { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 8px 10px; border-radius: var(--r-ctl); color: var(--text-2); }
 .nav-item:hover { background: var(--panel-2); color: var(--text); }

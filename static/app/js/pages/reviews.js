@@ -2,6 +2,10 @@
 'use strict';
 
 function reviewMeta(detail) {
+  if (!detail || !detail.metadata) return {};
+  if (typeof detail.metadata === 'string') {
+    try { return JSON.parse(detail.metadata); } catch (error) { return {}; }
+  }
   return detail.metadata || {};
 }
 
@@ -143,6 +147,12 @@ function decisionForm(detail, requirements, onComplete) {
 }
 
 async function openReview(item, refresh) {
+  if (item && item.source_id) {
+    const url = new URL(window.location.href);
+    url.pathname = '/app/reviews/detail';
+    url.searchParams.set('source_id', String(item.source_id));
+    window.history.replaceState(null, '', url);
+  }
   openDrawer(`审核来源 ${item.source_id}`, async (body) => {
     try {
       const [detail, requirements] = await Promise.all([
@@ -211,12 +221,17 @@ function renderReviews() {
   const page = document.getElementById('page');
   const queue = el('div');
   const history = el('div');
+  const params = new URLSearchParams(window.location.search);
+  const sourceId = params.get('source_id');
   const refresh = () => {
     load(queue, () => api.reviews.pending(), (data) => card('待审队列', [queueTable(data.items || [], (item) => openReview(item, refresh))]));
     load(history, () => api.reviews.history({ limit: 50 }), (data) => card('审核历史', [historyTable(data.items || [])]));
   };
   page.replaceChildren(head('审核中心', '核对来源、查看分析依据，并提交可追溯的审核裁决'), queue, history);
   refresh();
+  if (sourceId) {
+    openReview({ source_id: sourceId }, refresh);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', renderReviews);

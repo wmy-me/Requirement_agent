@@ -54,6 +54,23 @@ RISK_KEYS = (
     ("技术影响", "technical_impact_risk"),
 )
 
+CASUAL_REPLY = (
+    "你好，我是需求助手。我可以陪你聊，也可以帮你把业务想法整理成可审核的需求，"
+    "包括提炼标题、补齐验收条件、检查重复和风险。普通问题我会直接回答；只有明确像需求材料时，"
+    "才会进入需求分析和审核流程。"
+)
+
+_CASUAL_HINTS = (
+    "你好", "您好", "你是谁", "你是誰", "你能做什么", "你会什么", "你可以做什么",
+    "在吗", "在么", "hi", "hello", "嗨", "谢谢", "感谢",
+)
+
+_REQUIREMENT_HINTS = (
+    "需求", "功能", "验收", "用户可以", "用户能够", "支持", "新增", "修改", "优化",
+    "导出", "导入", "审批", "权限", "接口", "页面", "流程", "字段", "数据", "报表",
+    "提醒", "通知", "bug", "缺陷", "作为", "我想要", "我需要", "希望系统", "必须",
+)
+
 # 单个文档送入分析管线的正文上限（字符），防止长文档超 token / 拖慢响应
 MAX_FILE_CHARS = 6000
 
@@ -82,6 +99,49 @@ def _sse(name: str, payload: object, *, seq: int | None = None) -> str:
     """
     head = f"id: {seq}\n" if seq is not None else ""
     return f"{head}event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _compact_text(text: str | None) -> str:
+    return " ".join(str(text or "").split()).strip()
+
+
+def _looks_like_casual_chat(message: str, *, has_files: bool = False, requirement_text: str | None = None) -> bool:
+    """保守区分闲聊与需求材料。
+
+    这里故意只放行非常明确的短闲聊：宁可让边界不清的业务描述继续走分析，也不能把真实需求漏掉。
+    带附件或显式 requirement_text 时，一律视为待分析材料。
+    """
+    if has_files or requirement_text:
+        return False
+    text = _compact_text(message)
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(hint in lowered for hint in _REQUIREMENT_HINTS):
+        return False
+    return len(text) <= 40 and any(hint in lowered for hint in _CASUAL_HINTS)
+
+
+def _conversation_title_from_message(message: str) -> str:
+    """用首条用户问题生成稳定标题，避免新会话都叫“新对话”。"""
+    text = _compact_text(message)
+    lowered = text.lower()
+    if "你是谁" in text or "你是誰" in text or "who are you" in lowered:
+        return "了解需求助手"
+    if any(word in lowered for word in ("hi", "hello")) or any(word in text for word in ("你好", "您好", "嗨")):
+        if len(text) <= 8:
+            return "打招呼"
+    prefixes = ("请帮我", "帮我", "麻烦", "请", "我想要", "我想", "我需要", "能不能", "可以帮我")
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip(" ，。,.：:")
+            break
+    if not text:
+        return "新对话"
+    first = text.split("。", 1)[0].split("？", 1)[0].split("?", 1)[0].strip()
+    if "这条需求" in first and len(first) <= 18:
+        return "整理需求"
+    return (first[:18] + "…") if len(first) > 18 else first
 
 
 # SSE 事件名 → 运行事件的类型。**没在这张表里的事件不落库**：
@@ -281,13 +341,27 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
     """以 SSE 事件驱动完整 Agent 管线：状态 → 自然语言总结 → 结构化卡片（纯文本）。"""
     actor_id = actor_id_or_default(payload.actor_id)
     session_id, client_message_id, history = await _resolve_chat_context(
-        session_id=payload.session_id, client_message_id=payload.client_message_id, actor_id=actor_id
+        session_id=payload.session_id,
+        client_message_id=payload.client_message_id,
+        actor_id=actor_id,
+        seed_message=payload.message,
     )
 
     # —— 已完成 run 重放：同一 client_message_id 重试/断连不再重算，直接回放落库结果 ——
     replayed = await _try_replay(session_id, client_message_id)
     if replayed:
         async for frame in replayed:
+            yield frame
+        return
+
+    if _looks_like_casual_chat(payload.message, requirement_text=payload.requirement_text):
+        async for frame in _stream_casual_chat(
+            session_id=session_id,
+            actor_id=actor_id,
+            client_message_id=client_message_id,
+            message=payload.message,
+            history=history,
+        ):
             yield frame
         return
 
@@ -313,16 +387,57 @@ async def _resolve_chat_context(
     session_id: str | None,
     client_message_id: str | None,
     actor_id: str,
+    seed_message: str | None = None,
 ) -> tuple[str, str, list[dict[str, object]]]:
     """解析并确保会话存在，返回 (session_id, client_message_id, history)。"""
     resolved_session = session_id or uuid4().hex
     conversation = chat_repo.get_conversation(resolved_session, actor_id=actor_id)
     if conversation is None:
-        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
+        conversation = chat_repo.create_conversation(
+            actor_id=actor_id,
+            title=_conversation_title_from_message(seed_message or ""),
+        )
         resolved_session = str(conversation["id"])
+    elif conversation.get("title") == "新对话" and seed_message:
+        chat_repo.update_conversation(
+            resolved_session,
+            title=_conversation_title_from_message(seed_message),
+            actor_id=actor_id,
+        )
     resolved_client = client_message_id or uuid4().hex
     history = chat_sessions.setdefault(resolved_session, [])
     return resolved_session, resolved_client, history
+
+
+async def _stream_casual_chat(
+    *,
+    session_id: str,
+    actor_id: str,
+    client_message_id: str,
+    message: str,
+    history: list[dict[str, object]],
+) -> AsyncIterator[str]:
+    """普通聊天：只落会话消息，不创建 Agent run，不产出需求 artifacts。"""
+    chat_repo.upsert_user_message(
+        conversation_id=session_id,
+        content=message,
+        actor_id=actor_id,
+        client_message_id=client_message_id,
+        meta={"intent": "casual_chat"},
+    )
+    history.append({"role": "user", "content": message, "client_message_id": client_message_id})
+    history.append({"role": "assistant", "content": CASUAL_REPLY, "artifacts": None})
+    chat_repo.append_assistant_message(
+        conversation_id=session_id,
+        content=CASUAL_REPLY,
+        artifacts={"intent": "casual_chat"},
+        run_id=None,
+    )
+    yield _sse("session", {"session_id": session_id, "intent": "casual_chat"})
+    yield _sse("step", {"step": "reply", "label": "正在回复…"})
+    for i in range(0, len(CASUAL_REPLY), 10):
+        yield _sse("narrative", {"t": CASUAL_REPLY[i : i + 10]})
+    yield _sse("done", {"run_id": "", "intent": "casual_chat"})
 
 
 async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[str] | None:
@@ -729,7 +844,10 @@ async def _chat_stream_files_events(
     """「多文件 + 文字」组合流式聊天：解析文件并合并正文与文字，交给共享管线。"""
     actor_id = actor_id_or_default(None)
     resolved_session, resolved_client, history = await _resolve_chat_context(
-        session_id=session_id, client_message_id=client_message_id, actor_id=actor_id
+        session_id=session_id,
+        client_message_id=client_message_id,
+        actor_id=actor_id,
+        seed_message=message,
     )
 
     # 已完成 run 重放：同一 client_message_id 重试/断连不再重算
@@ -742,6 +860,16 @@ async def _chat_stream_files_events(
     run_text, files_meta = await _collect_files(message, files)
     # 纯文件提问时 message 为空，历史里展示文件摘要即可
     user_content = message or (f"📎 已上传 {len(files_meta)} 个文档" if files_meta else "")
+    if _looks_like_casual_chat(user_content, has_files=bool(files_meta)):
+        async for frame in _stream_casual_chat(
+            session_id=resolved_session,
+            actor_id=actor_id,
+            client_message_id=resolved_client,
+            message=user_content,
+            history=history,
+        ):
+            yield frame
+        return
     history.append({"role": "user", "content": user_content, "client_message_id": resolved_client})
     async for frame in _stream_chat_pipeline(
         session_id=resolved_session,
@@ -774,11 +902,39 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
     session_id = payload.session_id or str(uuid4())
     conversation = chat_repo.get_conversation(session_id, actor_id=actor_id)
     if conversation is None:
-        conversation = chat_repo.create_conversation(actor_id=actor_id, title="新对话")
+        conversation = chat_repo.create_conversation(
+            actor_id=actor_id,
+            title=_conversation_title_from_message(payload.message),
+        )
         session_id = str(conversation["id"])
+    elif conversation.get("title") == "新对话":
+        chat_repo.update_conversation(
+            session_id,
+            title=_conversation_title_from_message(payload.message),
+            actor_id=actor_id,
+        )
 
     history = chat_sessions.setdefault(session_id, [])
     history.append({"role": "user", "content": payload.message})
+
+    client_message_id = payload.client_message_id or str(uuid4())
+    if _looks_like_casual_chat(payload.message, requirement_text=payload.requirement_text):
+        chat_repo.upsert_user_message(
+            conversation_id=session_id,
+            content=payload.message,
+            actor_id=actor_id,
+            client_message_id=client_message_id,
+            meta={"intent": "casual_chat"},
+        )
+        assistant_message = {"role": "assistant", "content": CASUAL_REPLY, "artifacts": {"intent": "casual_chat"}}
+        history.append(assistant_message)
+        chat_repo.append_assistant_message(
+            conversation_id=session_id,
+            content=CASUAL_REPLY,
+            artifacts={"intent": "casual_chat"},
+            run_id=None,
+        )
+        return {"session_id": session_id, "message": assistant_message, "history": chat_repo.get_messages(session_id)}
 
     run_text = payload.requirement_text or payload.message
     pipeline = await run_agent_pipeline(
@@ -799,7 +955,6 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
     assistant_message = {"role": "assistant", "content": answer, "artifacts": pipeline}
     history.append(assistant_message)
 
-    client_message_id = payload.client_message_id or str(uuid4())
     chat_repo.upsert_user_message(
         conversation_id=session_id,
         content=payload.message,

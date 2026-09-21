@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -41,6 +43,57 @@ def test_chat_messages_do_not_create_requirement_drafts_or_sources() -> None:
             assert session.execute(text("SELECT count(*) FROM requirement_source")).scalar_one() == before
     finally:
         _cleanup(conversation_id)
+
+
+def _sse_events(text_body: str) -> list[tuple[str, dict[str, object]]]:
+    events: list[tuple[str, dict[str, object]]] = []
+    for block in text_body.strip().split("\n\n"):
+        name = "message"
+        payload: dict[str, object] = {}
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                payload = json.loads(line.split(":", 1)[1].strip() or "{}")
+        if block:
+            events.append((name, payload))
+    return events
+
+
+def test_stream_casual_chat_does_not_start_requirement_pipeline() -> None:
+    client = TestClient(app, headers={"Authorization": "Bearer test-api-token"})
+    conversation_id = ""
+    try:
+        with SessionLocal() as session:
+            before_sources = session.execute(text("SELECT count(*) FROM requirement_source")).scalar_one()
+
+        response = client.post(
+            "/api/v1/agent/chat/stream",
+            json={"message": "你好你是谁", "actor_id": "draft-test", "client_message_id": "casual-1"},
+        )
+
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        session_event = next(payload for name, payload in events if name == "session")
+        conversation_id = str(session_event["session_id"])
+        assert session_event["intent"] == "casual_chat"
+        assert not any(name == "artifacts" for name, _ in events)
+        assert "只有明确像需求材料时" in response.text
+
+        conversation = chat_repo.get_conversation(conversation_id, actor_id="draft-test")
+        assert conversation is not None
+        assert conversation["title"] == "了解需求助手"
+        assert chat_repo.list_requirement_drafts(conversation_id) == []
+
+        with SessionLocal() as session:
+            assert session.execute(text("SELECT count(*) FROM requirement_source")).scalar_one() == before_sources
+            assert session.execute(
+                text("SELECT count(*) FROM agent_run WHERE conversation_id = CAST(:id AS UUID)"),
+                {"id": conversation_id},
+            ).scalar_one() == 0
+    finally:
+        if conversation_id:
+            _cleanup(conversation_id)
 
 
 def test_three_drafts_revision_and_explicit_submit() -> None:
