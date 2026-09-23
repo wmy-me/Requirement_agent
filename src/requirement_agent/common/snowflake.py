@@ -114,7 +114,7 @@ def to_sid(value: object) -> str | None:
 
     **为什么按字段做，而不是挂一个全局 JSON 编码器**：编码器只能按「值大不大」判断，
     于是同一个字段在小 id 时是 number、大 id 时是 string —— 那正是
-    `docs/api-contract.md` §8.1 警告过的「同一数组里两种元素形状」。类型必须由
+    `docs/History/api-contract.md` §8.1 警告过的「同一数组里两种元素形状」。类型必须由
     **字段语义**决定，所以在调用点显式声明哪些字段是 id。
 
     接受 int 与 str（幂等）；空串与空白归一为 None。

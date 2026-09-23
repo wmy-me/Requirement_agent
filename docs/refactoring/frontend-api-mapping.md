@@ -8,13 +8,13 @@
 
 ## 0. 这份文档怎么产生的（先说方法，再说结论）
 
-沿用契约文档 `docs/api-contract.md` §9 的方法，并补上它没覆盖的部分：
+沿用契约文档 `docs/History/api-contract.md` §9 的方法，并补上它没覆盖的部分：
 
 | 证据等级 | 做法 | 覆盖范围 |
 |---|---|---|
 | **A · 实测** | `TestClient` 打**真实库**，记录 status / 顶层形状 / item 键 / 每个 id 类字段的 JSON 类型 | 全部 **GET** 端点（23 个），见 §4 |
 | **B · 源码取证** | 读路由 + Pydantic schema + repository 的 `_normalize_*` / SQL SELECT | 全部端点，**含写端点**（写端点不能在真实库上打） |
-| **C · 契约文档** | `docs/api-contract.md`（989 行） | 已记录的 50 个路径 |
+| **C · 契约文档** | `docs/History/api-contract.md`（989 行） | 已记录的 50 个路径 |
 
 三条硬规则（来自本次任务要求 §三）：
 
@@ -60,7 +60,7 @@
 
 ## 2. 页面 → 端点映射总表
 
-按实施顺序排列（与 `docs/方案_前端工作台.md` §七 的 F 批次一致）。
+按实施顺序排列（与 `docs/History/方案_前端工作台.md` §七 的 F 批次一致）。
 
 就绪度图例：**✅ 实测通过** · **🔶 仅源码取证**（写端点，未在真实库上执行） · **⛔ 无后端支撑，不接入**
 
@@ -990,7 +990,7 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 | 3 | **Run 详情页的模型调用**走哪条路 | 阶段 8 | ✅ **已定并实现** —— `/ops/models` 加 `run_id` 参数，见 §3.17 |
 | 4 | **409 的三种签名**要不要读 `detail` | 阶段 6 | ✅ **已定** —— 先按状态码分支，409 内弱匹配前缀，读不到按最安全的处理。见 §3.6 |
 | 5 | **三个空形状**要不要先造数据 | 阶段 11 | ✅ **已定：先造** |
-| 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `docs/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
+| 6 | ~~**方案文档的「已定 React + TS + Vite」**~~ | 全局 | ✅ **已改** —— `../History/方案_前端工作台.md` §6.1/§6.2/§9 已更正为原生 ES Modules + 新目录结构 |
 | 7 | ~~**SPEC 只覆盖 13 个端点**~~ | 全局 | ✅ **已补到 43 条 + 覆盖率闸门**，见 §5.6 / §5.7 |
 | 8 | ~~**`POST /requirements/submit` 同步阻塞 26 秒**~~ | 阶段 9 | ✅ 新工作台用 `POST /requirements/submit/async`（202 + outbox） |
 | 9 | ~~**幂等键用 `requester_id`，表单只有 `requester_name`**~~ | 阶段 9 | ✅ 缺 requester_id 时以 requester_name 参与幂等键 |
@@ -1019,7 +1019,7 @@ SQL 排除 `status='deleted'`，按 `importance` 倒序。
 
 ---
 
-## 8. 与 `docs/api-contract.md` 的差异清单
+## 8. 与 `../History/api-contract.md` 的差异清单
 
 本次盘点**新发现**、契约尚未记录的：
 

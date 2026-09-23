@@ -50,7 +50,7 @@
 > ### ⚠️ 这个路径现在住着**另一个** `tools` 包，恢复不能照旧命令抄
 >
 > 2026-09-16 在**同一路径** `src/requirement_agent/tools/` 落地了**新的 Agent 工具层**
-> （方案 `docs/方案_Agent工具层.md`）：`base.py` / `registry.py` / 13 个只读工具模块。
+> （方案 `docs/History/方案_Agent工具层.md`）：`base.py` / `registry.py` / 13 个只读工具模块。
 > 与被删掉的那个包（MCP 时代的 `health.py` / `requirements.py` / `reviews.py` / `_deps.py`）
 > **只共享路径，没有任何继承关系** —— 新包甚至就是因为它才被写出来的。
 >

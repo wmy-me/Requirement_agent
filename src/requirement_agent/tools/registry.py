@@ -109,7 +109,7 @@ def register(cls: type[BaseTool]) -> type[BaseTool]:
     if getattr(cls, "read_only", True) is not True:
         raise ValueError(
             f"工具 `{name}` 声明了 read_only=False。L3 层**没有写工具** —— "
-            "正式写入必须经人工评审（docs/流程_需求从提交到入库.md §8）"
+            "正式写入必须经人工评审（docs/History/流程_需求从提交到入库.md §8）"
         )
     if not (getattr(cls, "description", "") or "").strip():
         raise ValueError(f"工具 `{name}` 没有 description —— 消费方无法判断何时该用它")

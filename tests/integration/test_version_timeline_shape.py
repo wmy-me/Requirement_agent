@@ -74,7 +74,7 @@ def test_trace_versions_carry_sources() -> None:
     """**时间轴上的「← 来源 #…」是这条链唯一的真实跨实体关系。**
 
     注意：不是「版本合并了另一个 REQ 的版本」——本系统的合并是「来源 → REQ」，
-    待合并的东西还不是 REQ（详见 `docs/方案_对话状态机与Git式版本管理.md` §3.3 的落地说明）。
+    待合并的东西还不是 REQ（详见 `docs/History/方案_对话状态机与Git式版本管理.md` §3.3 的落地说明）。
     真实的溯源是「版本 ← 来源」，也就是这里。
     """
     rows = _trace_versions()

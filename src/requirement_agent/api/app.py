@@ -1,6 +1,6 @@
 """requirement_agent.api.app —— 统一 FastAPI 应用入口（目标命名空间）。
 
-当前行为与根 `main.py` 保持一致（应用名/版本/描述/路由 /health /ui /static、安全响应头、
+当前行为与根 `main.py` 保持一致（应用名/版本/描述/路由 /health /app /static、安全响应头、
 lifespan outbox 消费循环）。根 `main.py` 为薄包装转发到 `app = create_app()`，**不产生第二个 FastAPI app、不重复注册路由**；
 后台 Worker 入口在 `requirement_agent.workers.tasks:app`。
 """
@@ -36,7 +36,7 @@ STATIC_DIR = PROJECT_ROOT / "static"
 # 前端每 30 秒轮询两个 health 端点（`app.js` 的 loadStatus），不跳过会把日志刷满，
 # 真正出问题时反而淹没在噪声里。
 _LOG_SKIP_PREFIXES = ("/static", "/api/v1/health", "/favicon.ico")
-_LOG_SKIP_PATHS = {"/", "/ui", "/health", "/docs", "/redoc", "/openapi.json"}
+_LOG_SKIP_PATHS = {"/", "/app", "/health", "/docs", "/redoc", "/openapi.json"}
 
 #: 新工作台的页面白名单（`static/app/<name>.html`）。**不从 URL 拼路径** ——
 #: 见 `workbench_page` 的说明。
@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
         )
         # 前端资源不缓存重验证，避免浏览器沿用旧版 JS
         path = request.url.path
-        if path == "/ui" or path.endswith(".js") or path.endswith(".css"):
+        if path == "/app" or path.startswith("/app/") or path.endswith(".js") or path.endswith(".css"):
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
@@ -231,11 +231,6 @@ def create_app() -> FastAPI:
             return HTMLResponse(html.replace(marker, snippet))
         logger.warning("event=ui_token_marker_missing path=%s", path)
         return HTMLResponse(html.replace("</head>", snippet + "</head>", 1))
-
-    @app.get("/ui", include_in_schema=False)
-    async def ui_page() -> HTMLResponse:
-        """旧工作台（对话为中心）。**保留不动** —— 新工作台逐页替换它。"""
-        return _render_page(STATIC_DIR / "index.html")
 
     @app.get("/app", include_in_schema=False)
     @app.get("/app/{page}", include_in_schema=False)

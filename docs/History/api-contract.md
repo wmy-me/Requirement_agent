@@ -56,7 +56,7 @@
 > 它写的 `224103804432285696` 末尾有 27 个 0、**本来就能被 double 精确表示**，
 > 不构成证据。真正会失败的是上面那个。（注释已一并更正。）
 
-**覆盖范围**（`scripts/verify_api_contract.py` 会逐端点核对）：
+**覆盖范围**（`../../scripts/verify_api_contract.py` 会逐端点核对）：
 
 - URL 路径参数：`relations.id`、`capabilities.id`、`documents.id`、`dead_letters[].id`、
   `requirement-titles/{id}`、`reviews/{source_id}`
@@ -856,7 +856,7 @@ created_at  updated_at
 
 验证脚本的思路（不依赖浏览器）：
 
-1. 从 `static/js/app.js` **提取实际读取的字段**（按渲染函数 grep `x.field`），
+1. 从 `../../static/js/app.js` **提取实际读取的字段**（按渲染函数 grep `x.field`），
    **不要凭记忆列** —— 凭记忆就是自证循环
 2. 用 `TestClient` 打真实库，逐个端点核对那些字段是否存在
 3. 覆盖**每个分支的形状**（如 `matched: true/false` 两种条目）
@@ -866,7 +866,7 @@ created_at  updated_at
 实测下来这一步能抓到「字段名对不上」「同一数组两种形状」「文档写错了事件名」这类问题，
 而它们**在浏览器里才表现为空白或 undefined**，定位成本高得多。
 
-> ✅ **已经固化：`scripts/verify_api_contract.py`**（2026-09-16）。用法：
+> ✅ **已经固化：`../../scripts/verify_api_contract.py`**（2026-09-16）。用法：
 >
 > ```bash
 > python scripts/verify_api_contract.py            # 全量核对
@@ -903,7 +903,7 @@ created_at  updated_at
 三条当时没预见到、实施中才浮出来的：
 
 1. **口径从「只改会回传的」放宽到「全部」**。原因：只改窄的话，
-   `scripts/verify_api_contract.py` 会**一直红**（仍有 13 个 id 类字段是 number），
+   `../../scripts/verify_api_contract.py` 会**一直红**（仍有 13 个 id 类字段是 number），
    而且 `source_id` 这个**同一个字段名在不同端点上两种类型**的分裂不会消失。
 2. **存储型 JSON 必须在读时转，不能在写入时转**。`diff_payload.source_id` 与
    `metadata.capability_match.*.capability_id` 是落在库里的 JSON —— 改写入只影响新行，
@@ -917,11 +917,11 @@ created_at  updated_at
 正好抵消 T1，而且这条路径（PATCH 定位一行）恰恰是 T1 要保护的。已改为原样透传
 （后端 schema 是 `int`，pydantic 会把数字字符串转回去）。
 
-**怎么验的**：`tests/integration/test_id_serialization.py`（12 条）——
+**怎么验的**：`../../tests/integration/test_id_serialization.py`（12 条）——
 逐端点断言 id 字段是字符串（含嵌套的 `provenance[].source_id` 与 `diff_payload.source_id`），
 外加一条**端到端往返**：取出 id → 原样回传 → 命中同一行；以及一条**反证**，
 把「为什么不能 `Number()` 回去」写成可执行断言。
-`scripts/verify_api_contract.py` 的类型表现在全是 `string`、退出码 0。
+`../../scripts/verify_api_contract.py` 的类型表现在全是 `string`、退出码 0。
 
 **连带更正**：`repositories/requirement.py` 注释里那个事故例子（`224103804432285696`）
 末尾有 27 个 0、本来就能被 double 精确表示，**不构成证据**。真正的反例是库里的
@@ -929,7 +929,7 @@ created_at  updated_at
 
 ### ~~T2 · 把验证脚本固化进仓库~~ ✅ 已完成（2026-09-16）
 
-`scripts/verify_api_contract.py` 已进仓库，见 §9 的说明。**改动契约时同步改它的 `SPEC`**，
+`../../scripts/verify_api_contract.py` 已进仓库，见 §9 的说明。**改动契约时同步改它的 `SPEC`**，
 否则它会红 —— 这正是它的用途。挂进 CI 只需跑 `python scripts/verify_api_contract.py`
 （退出码非 0 即失败）。**尚未挂 CI**（仓库当前没有 CI 配置）。
 
@@ -995,7 +995,7 @@ created_at  updated_at
 届时 §3 的 trace 小节要再改一次。
 
 > 实施中发现方案 §3.4 漏了一步（「历史功能内容可复原」），已一并补上：
-> 见 `docs/方案_对话状态机与Git式版本管理.md` §3.4 的落地说明。
+> 见 `方案_对话状态机与Git式版本管理.md` §3.4 的落地说明。
 
 ---
 

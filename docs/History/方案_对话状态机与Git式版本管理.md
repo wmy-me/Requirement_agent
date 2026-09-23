@@ -319,7 +319,7 @@ ALTER TABLE requirement_version
 
 后端**不需要为新字段改任何东西** —— `/trace` 早就返回了 `sources[]`。
 唯一补的是一个**契约与实现不符的缺口**：`/versions` 与 `/trace` 都**没返回 `status`**，
-而 `docs/api-contract.md` §8.5 早就要求前端「用 `status === 'current'` 判断当前版」。
+而 `api-contract.md` §8.5 早就要求前端「用 `status === 'current'` 判断当前版」。
 两个端点都已补上。
 
 #### (c) 顺带修掉两个小缺陷

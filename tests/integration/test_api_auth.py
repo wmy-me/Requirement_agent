@@ -128,7 +128,7 @@ def test_classification_of_representative_writes() -> None:
 @pytest.mark.parametrize("path", [
     "/api/v1/channels/feishu/webhook",  # 走飞书自身验签，不能要求本系统 token
     "/api/v1/health", "/api/v1/health/db", "/api/v1/health/llm",
-    "/static/js/app.js", "/ui", "/health", "/openapi.json",
+    "/static/app/js/core.js", "/app", "/health", "/openapi.json",
 ])
 def test_exempt_paths(path: str) -> None:
     assert is_exempt(path) is True
@@ -146,9 +146,9 @@ def test_health_is_reachable_without_token() -> None:
     assert anonymous.get("/health").status_code == 200
 
 
-def test_ui_page_is_reachable_without_token() -> None:
+def test_workbench_page_is_reachable_without_token() -> None:
     """页面本身要能打开（否则连登录界面都出不来）；它的 API 调用再各自 401。"""
-    assert anonymous.get("/ui").status_code == 200
+    assert anonymous.get("/app").status_code == 200
 
 
 # ── 401：没凭证 / 凭证无效 / 服务端没配 ───────────────────────────────────

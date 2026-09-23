@@ -1,6 +1,6 @@
 -- 014: 需求模块 —— requirement_feature 增加模块标签
 --
--- 方案 §3.1（docs/方案_对话状态机与Git式版本管理.md）：
+-- 方案 §3.1（docs/History/方案_对话状态机与Git式版本管理.md）：
 -- 「模块」在业务上就是 feature 的分组（一条 REQ 的正文 = active features 拼接）。
 -- 抽取阶段模型天然会输出模块结构（实测形如 {"module": "登录", "items": [...]}），
 -- 但此前被 _flatten_item 糊成了一条字符串，模块信息丢失。

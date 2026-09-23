@@ -158,7 +158,7 @@ static/js/app.js        1997 行   全部逻辑（含 7 个 renderXxx 函数）
 
 ### 5.1 技术选型：方案文档写的是 React，本次要求是原生
 
-`docs/方案_前端工作台.md`：
+`docs/History/方案_前端工作台.md`：
 
 - **§6.1**：「技术选型（**已定：React + TypeScript + Vite**）」
 - **§6.1 注**：明确判断方案 C（纯静态 vanilla）「**本方案要的规模下会失控**」「**C 不可行**」

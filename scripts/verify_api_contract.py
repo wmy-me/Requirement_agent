@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""契约验证：核对 `docs/api-contract.md` 描述的东西与**真实响应**是否一致。
+"""契约验证：核对 `docs/History/api-contract.md` 描述的东西与**真实响应**是否一致。
 
 **为什么要有这个脚本。** 2026-09-16 复跑契约时抓到三处「文档写错了」——
 §1 说「雪花 ID 一律字符串」（只有审核端点是这样）、需求库列表少写 4 个字段、
@@ -7,7 +7,7 @@
 （它们不是代码的错，是文档与代码脱节），却会让照文档重写的前端「实现完跑不通」。
 所以把 §9 描述的那套方法固化成可执行的脚本：**能跑、会红、可挂 CI**。
 
-它做三件事（对应 `docs/api-contract.md` §9 的四步）：
+它做三件事（对应 `docs/History/api-contract.md` §9 的四步）：
 
 1. **逐端点核对字段存在**：`SPEC` 里列的字段（= 契约承诺的响应形状）必须在真实响应里，
    缺一个就报错并让进程以非 0 退出码结束。
@@ -199,7 +199,7 @@ EXCLUDED_ROUTES: dict[tuple[str, str], str] = {
 }
 
 
-# 这份清单是**契约的机器可读副本**：字段名的唯一来源仍是 `docs/api-contract.md`，
+# 这份清单是**契约的机器可读副本**：字段名的唯一来源仍是 `docs/History/api-contract.md`，
 # 这里只是把它变成可执行的断言。改契约就要改这里，否则脚本会红——这正是目的。
 SPEC: tuple[Endpoint, ...] = (
     Endpoint(
@@ -948,7 +948,7 @@ def main() -> int:
         print("=" * 78)
         for problem in problems:
             print(f"  · {problem}")
-        print("\n契约与实现已脱节：改代码就同步改 docs/api-contract.md，反之亦然。")
+        print("\n契约与实现已脱节：改代码就同步改 docs/History/api-contract.md，反之亦然。")
         return 1
 
     if imprecise and number_id_fields:
@@ -959,7 +959,7 @@ def main() -> int:
             print(f"  · {field}")
         print(
             "\n  只要上述任一端点将来发出一个低位不为 0 的 ID，前端拿到的就是错的值。"
-            "\n  修法见 docs/api-contract.md §10-T1（把雪花 ID 序列化成字符串）。"
+            "\n  修法见 docs/History/api-contract.md §10-T1（把雪花 ID 序列化成字符串）。"
         )
         return 1
 

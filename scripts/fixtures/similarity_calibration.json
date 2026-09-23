@@ -305,7 +305,7 @@
       "length": "short",
       "a": "导出 Excel 报表",
       "b": "导出员工数据",
-      "note": "★ 红区：同动词「导出」，对象不同 —— 见 docs/方案_需求主线与能力模型.md:129 的同款警告"
+      "note": "★ 红区：同动词「导出」，对象不同 —— 见 docs/History/方案_需求主线与能力模型.md:129 的同款警告"
     },
     {
       "group": "same_capability_diff_object",

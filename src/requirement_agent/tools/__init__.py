@@ -1,6 +1,6 @@
 """L3 层：需求主线的**只读**工具。
 
-分层依据 `docs/分析_工具分层现状与越层调用.md`，本包是其中的 **L3 内部只读 Query/Tool 层**：
+分层依据 `docs/History/分析_工具分层现状与越层调用.md`，本包是其中的 **L3 内部只读 Query/Tool 层**：
 
 ```
 L1 Repository           数据访问（本包**不直接碰**）
@@ -13,7 +13,7 @@ L4 模型 Adapter         ⬜ 未建（需要时才做）
 **三条硬约束，都由 `registry.register()` 在注册时校验，不靠纪律：**
 
 1. **只读** —— `read_only=False` 的工具**注册不进去**。需求治理里一切正式写入必须经
-   人工评审（`docs/流程_需求从提交到入库.md` §8），L3 不允许有写工具。
+   人工评审（`docs/History/流程_需求从提交到入库.md` §8），L3 不允许有写工具。
 2. **裁决类名字不许出现** —— `approve_review` / `commit_requirement` 之类，
    哪怕实现成只读转发也不给注册（名字本身会误导读者）。
 3. **必须有 input_model** —— Pydantic 模型是输入校验与 JSON Schema 的唯一事实源。

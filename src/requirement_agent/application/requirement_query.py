@@ -11,7 +11,7 @@ Repository 是数据访问边界，不是「查询用例」的边界。它缺了
 
 **这一层是只读的 —— 一个写方法都没有，测试会断言这一点。**
 需求主线的正式写入只有一条路：人工审核 → `ReviewService.submit_decision` →
-`commit_requirement_node`（见 `docs/流程_需求从提交到入库.md`）。
+`commit_requirement_node`（见 `docs/History/流程_需求从提交到入库.md`）。
 
 **它不返回 ORM 对象、不返回 session、不返回原始行** —— 一律是普通 dict / list，
 可以被直接序列化进模型上下文。
@@ -303,7 +303,7 @@ class RequirementQueryService:
         """这条需求的每一版**从哪些来源来**（渠道、发起人、原文摘要）。
 
         这是本系统里真实存在的跨实体关系（合并是「来源 → REQ」，见
-        `docs/流程_需求从提交到入库.md`）。回滚产生的版本**没有来源**，其 `sources` 为空。
+        `docs/History/流程_需求从提交到入库.md`）。回滚产生的版本**没有来源**，其 `sources` 为空。
         """
         trace = self.version_repo.trace_by_requirement_key(requirement_key)
         if trace is None:

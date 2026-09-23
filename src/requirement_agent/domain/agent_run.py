@@ -177,7 +177,7 @@ def stringify_run_meta(payload: Any) -> dict[str, Any]:
 
     **为什么在读时做而不是写入时**：`meta` 是**存储型 JSON**，改写入只影响新行，
     老行会保持 number —— 同一个字段在新旧数据上两种类型，正是
-    `docs/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
+    `docs/History/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
     什么时候写的，类型都一样」。
 
     **为什么必须做**：`meta.assistant_message_id` 是消息表的雪花 id。实测

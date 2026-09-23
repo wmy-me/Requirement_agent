@@ -4,7 +4,7 @@
 > 只留一行汇总）。当天落地了 T1/T2（雪花 ID 序列化统一 + 契约验证脚本）与 F 批（版本链可视化）。
 > 用途：接手本项目时的**第一份文档**。记录真实进度与当前未决事项。
 >
-> ⚠️ **`docs/refactoring/archive/` 下的进度表写于各阶段施工期间，已过时，勿据此排期。**
+> ⚠️ **`../refactoring/archive` 下的进度表写于各阶段施工期间，已过时，勿据此排期。**
 > 那里面的「阶段 1 进行中（约 35%）」「映射表 ⏳ 待迁移」等状态均与代码不符，
 > 归档仅为保留施工过程与决策依据。
 
@@ -14,7 +14,7 @@
 
 | 阶段 | 状态 | 代表提交 |
 |---|---|---|
-| 0. 代码盘点与测试基线 | ✅ 完成 | 报告见 `docs/refactoring/archive/phase-0-baseline-report.md` |
+| 0. 代码盘点与测试基线 | ✅ 完成 | 报告见 `../refactoring/archive/phase-0-baseline-report.md` |
 | 1. 项目结构重组（src-layout） | ✅ 完成 | `df44749` → `1f88419` → `180578b` → `5d2d551` → `17379f4` → `dc91f43` |
 | 1′. 收尾：`apps/` 并入、死代码清理 | ✅ 完成 | `d67fe0c`、`9ae7b2d` |
 | 2. LLM / Agent / Prompt / Skill / Embedding 整改 | ✅ 完成 | `c554fd5`、`6343d18`、`f03f664`、`0a13127`、`3c99293`、`c1226b6` |
@@ -29,7 +29,7 @@
 **阶段 2 六项明细**：P1-1 Prompt 去重 ✅ ｜ P1-2 配置卫生 ✅ ｜ P1-3 `analysis_mode` 接线 ✅
 ｜ P2-1 模型参数透传 ✅ ｜ P2-2 LLM 可观测性 ✅ ｜ P2-3 向量维度决策与守卫 ✅
 
-**★ 七批明细**（方案见 `docs/方案_对话状态机与Git式版本管理.md`）：A 并发隔离 ✅ ｜ B 断点落库 ✅
+**★ 七批明细**（方案见 `方案_对话状态机与Git式版本管理.md`）：A 并发隔离 ✅ ｜ B 断点落库 ✅
 ｜ C 续跑 ✅ ｜ D 模块化 ✅ ｜ E 合并闭环 ✅ ｜ **F 版本链可视化 ✅** ｜ **G revert + 乐观锁 ✅**（F/G 均为 2026-09-16）。
 
 > ⚠️ **F 批实施时发现方案 §3.3 的 `merged_from_*` 前提不成立**（合并是「来源 → REQ」、
@@ -41,8 +41,8 @@
 > 本文先后写过 73（阶段 2 结束）→ 194 → 251（E 批）→ 311（能力模型六批）→ 393（G 批）→ 412（T1/T2 与 F 批）→ 434（工具层批次 1）→ 412（批次 1 回退后）→ 466（按四层重建的批 1）→ 505（批 2）→ **535**（B1 鉴权）。
 > 每次加批次都会涨，**以最新一次实测为准**。
 
-**当前结构**：业务代码全部在 `src/requirement_agent/`（导入名 `requirement_agent.*`），
-入口 `main.py`（薄壳 → `requirement_agent.api.app`），`src/` 顶层只剩该包。
+**当前结构**：业务代码全部在 `../../src/requirement_agent`（导入名 `requirement_agent.*`），
+入口 `../../main.py`（薄壳 → `requirement_agent.api.app`），`../../src` 顶层只剩该包。
 `apps/`、`src/interfaces/`、MCP 均已删除（可从 git 历史恢复）。
 
 ---
@@ -58,10 +58,10 @@
 ### 📍 接续点（2026-09-16 收工）
 
 **最近动了什么**（都已提交、测试 **412 绿**）：
-1. **T1/T2** —— 雪花 ID 全端点一律字符串化；`scripts/verify_api_contract.py` 进仓库
+1. **T1/T2** —— 雪花 ID 全端点一律字符串化；`../../scripts/verify_api_contract.py` 进仓库
 2. **F 批** —— 版本链可视化（溯源时间轴 + 每版来源链 + diff 版本选择）。⚠️ **发现方案 §3.3
    的 `merged_from` 前提不成立**，改成了溯源，详见方案 §3.3(a)
-3. **流程文档 + 分层分析** —— `docs/流程_需求从提交到入库.md`、`docs/分析_工具分层现状与越层调用.md`
+3. **流程文档 + 分层分析** —— `流程_需求从提交到入库.md`、`分析_工具分层现状与越层调用.md`
 4. **工具层批次 1 已回退** —— 旧版分层错了（封装 Repository 而非 Service），已删除。
    现按「严格四层」重建，**待你定分析文档 §6 的三处**，然后开工批 1
 
@@ -92,15 +92,15 @@
 
 **A1 · ~~鉴权到底什么时候做~~ —— ✅ 已完成（2026-09-17，B1）**
 
-原状：`require_api_auth()` 全仓零调用方，`main.py` 绑 `0.0.0.0:8888`，**全部写端点裸奔**。
+原状：`require_api_auth()` 全仓零调用方，`../../main.py` 绑 `0.0.0.0:8888`，**全部写端点裸奔**。
 
 现已落地（`api/auth.py` + `api/app.py` 中间件）：
 **六个权限档次**（read / analyze / submit / review / revert / ops）×
 **三个角色**（admin / reviewer / system_worker），**角色由服务端从 token 解析、不可伪造**；
 401 与 403 分开且带 `request_id` + `required_scope`；飞书 webhook 与探活/静态/文档豁免；
-**没配 token = 全部 401（默认拒绝）**。契约见 `docs/api-contract.md` §1.2。
+**没配 token = 全部 401（默认拒绝）**。契约见 `api-contract.md` §1.2。
 
-⚠️ **部署时必须在 `.env` 配 `API_AUTH_TOKENS`**（或沿用旧的 `API_AUTH_TOKEN`），
+⚠️ **部署时必须在 `../../.env` 配 `API_AUTH_TOKENS`**（或沿用旧的 `API_AUTH_TOKEN`），
 否则前端全部拿到 401 —— 这是刻意的，见契约 §1.2 的说明。
 
 **A2 · `/health` 重复注册 + OpenAPI tags 双层重复**
@@ -111,10 +111,10 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 `tags=["requirements"]`，实测叠加成 `['requirements','requirements']`（影响 40 条路由）。
 **修正会变更 OpenAPI，需明确授权后再动。**
 
-**A3 · 根目录 `需求管理Agent.yml`（87KB，仍被 git 跟踪）去留**
+**A3 · 根目录 `../../需求管理Agent.yml`（87KB，仍被 git 跟踪）去留**
 
 它是一份 Dify 应用 DSL 导出（`mode: advanced-chat`，含两个模型节点），与代码库零引用。
-保留 / 删除 / 移入 `docs/`？（删除可从 git 恢复，零风险。）
+保留 / 删除 / 移入 `..`？（删除可从 git 恢复，零风险。）
 
 > ~~Docker 部署是否保留~~ —— **已决（2026-09-14）：`deploy/docker-compose.yml` 已删除，
 > Docker 不作为部署目标。** 该文件的构建链本来就是断的（引用的 `Dockerfile` 与
@@ -129,7 +129,7 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 | B1 | **阶段 5 · 影响分析的传播计算** | ⚠️ **卡在业务定义** | 不是缺表：**没有 `depends` 边的生产者**，现有边全是「相似 / 冲突」、无方向可传播。要先定「依赖关系在业务上由谁产生」 |
 | B2 | **阶段 6 · 剩余三项** | 部分就位 | RBAC（等 A1）／**数据保留**（零实现，六张表无限增长）／**渠道输出闭环**（`FeishuClient` **只有入站方法**，`app_id`/`app_secret` 存了却从未被读取 —— 不是「接线」，是要新写发送能力） |
 | B3 | **阶段 7 · 完整回归 + 生产验收** | — | 建议放最后；`tests/e2e/` 仍为空 |
-| B4 | **契约 T3 · 补齐没覆盖的端点** | ✅ 可直接开工 | 11 组端点（health / conversations / documents / memory / audit / sources / 审查详情 / 提交 / 对话非流式 / 运维死信 / 飞书 webhook）列在 `docs/api-contract.md` §10-T3，扩 `SPEC` 即可 |
+| B4 | **契约 T3 · 补齐没覆盖的端点** | ✅ 可直接开工 | 11 组端点（health / conversations / documents / memory / audit / sources / 审查详情 / 提交 / 对话非流式 / 运维死信 / 飞书 webhook）列在 `api-contract.md` §10-T3，扩 `SPEC` 即可 |
 | B5 | **契约 T4 · 三个「空的形状」造数据验证** | 🟡 **卡在数据** | `/constraints`（词表 0 行）、`capability_match.constraints.matched`、`titles.highlight` 四种 kind —— **形状从未被运行时验证过**。拿到实测前**前端别照文档示例写死** |
 | B6 | **契约 T5 · 前端接线缺口** | 看前端排期 | `analysis.suggestion` 后端出了、前端没渲染；`/requirements/{key}/titles` 前端 0 调用（数据也 0 行）；需求库筛选下拉为空（`departments`/`sensitivity_levels` 实测是 `[]`） |
 | B7 | **回滚端点的前端入口** | ✅ 可直接开工 | `POST /requirements/{key}/revert` **只有后端**（G 批做的），前端要走这条路径得先有入口 |
@@ -155,8 +155,8 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 
 **N1 · Agent 工具层** —— 你想做的那件。**已重新定调为「严格四层设计」。**
 
-- **方案**：`docs/方案_Agent工具层.md`（CowAgent 结构调研 + 契约/注册表设计 + 分批）
-- **现状盘点**：`docs/分析_工具分层现状与越层调用.md`（分层映射 + 越层调用清单 + 与你四层规则的逐条比对）
+- **方案**：`方案_Agent工具层.md`（CowAgent 结构调研 + 契约/注册表设计 + 分批）
+- **现状盘点**：`分析_工具分层现状与越层调用.md`（分层映射 + 越层调用清单 + 与你四层规则的逐条比对）
 - **⚠️ 2026-09-16：批次 1 的代码已回退。** 那一版实现成「薄封装 **Repository**」，
   而四层设计要求只读工具封装 **Application Service / Query Service** —— **分层错了**。
   同时它「看起来被测着、实际没有」：11 条单测只覆盖注册表与 schema，
@@ -200,9 +200,9 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 |---|---|---|
 | 能力 / 条件模型（**六批全完成**） | 2026-09-15 | 能力词表、抽取匹配、版本快照、按能力反查、人工裁决、存量回填 |
 | ★ 对话状态机 / Git 式版本管理（**A–G 七批全完成**） | 2026-09-16 | 并发隔离、断点续跑、模块化、合并闭环、**revert + 乐观锁**、**版本链可视化** |
-| **T1 + T2**（雪花 ID 序列化统一 + 契约验证脚本） | 2026-09-16 | ID 一律字符串；`scripts/verify_api_contract.py` 进仓库、可挂 CI |
-| 死代码清理 | 2026-09-16 | 删除从未接线的 `src/requirement_agent/tools/` 整个包（盘点见 `deprecated-modules.md`） |
-| 能力模型的 4 条设计歧义 | 2026-09-15 | 已拍板并落地，结论见 `docs/方案_需求主线与能力模型.md` §9 |
+| **T1 + T2**（雪花 ID 序列化统一 + 契约验证脚本） | 2026-09-16 | ID 一律字符串；`../../scripts/verify_api_contract.py` 进仓库、可挂 CI |
+| 死代码清理 | 2026-09-16 | 删除从未接线的 `../../src/requirement_agent/tools` 整个包（盘点见 `deprecated-modules.md`） |
+| 能力模型的 4 条设计歧义 | 2026-09-15 | 已拍板并落地，结论见 `方案_需求主线与能力模型.md` §9 |
 
 ---
 
@@ -212,19 +212,19 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 |---|---|---|
 | 1 | **飞书渠道代码已就绪，但未与真实飞书应用联调** | 端点 `POST /api/v1/channels/feishu/webhook`（`api/routes/channels.py`）；协议实现见 `infrastructure/channels/feishu_client.py`。**未验证项**：解密/签名按官方文档实现但无官方测试向量，单测是自洽回环；URL 校验、加密回调、签名头是否与真实飞书一致，需要配一个测试应用实测。 |
 | 1b | **`source_type` 对外枚举未放宽** | `api/schemas/agent.py:15,53` 与 `api/schemas/requirements.py:20` 仍为 `web/email/meeting/manual`。渠道入库走 service 不经该校验，所以**功能上不阻塞**；但若要让 `feishu` 能经 `/requirements/submit` 等端点提交，需放宽（属对外契约变更，需授权）。 |
-| 2 | **E2E 测试为空**（**部分缓解**） | `tests/` 下只有 `unit/` 与 `integration/`，原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有进 pytest 的前端测试**。2026-09-16 起有了一条替代路径：无头 Chrome + CDP 驱动页面自己的函数、读回 DOM 并截图（F 批首次使用，见 §五）。**但它还是一次性脚本、没固化**（→ §二 B9）。 |
+| 2 | **E2E 测试为空**（**部分缓解**） | `../../tests` 下只有 `unit/` 与 `integration/`，原本的 `tests/e2e/` 已在 `9ae7b2d` 删除。**没有进 pytest 的前端测试**。2026-09-16 起有了一条替代路径：无头 Chrome + CDP 驱动页面自己的函数、读回 DOM 并截图（F 批首次使用，见 §五）。**但它还是一次性脚本、没固化**（→ §二 B9）。 |
 | 3 | **worker 未部署**（B5 起**可独立运行**：`python -m requirement_agent.workers` 自带消费循环 + `/health`/`/stats`；生产编排仍未配） | `workers/tasks.py` 提供了独立的 FastAPI 入口（`python -m requirement_agent.workers`，:8200，含 `/tasks/embedding/process`、`/tasks/document-chunk/process`、`/tasks/requirement-analysis/process`、`/tasks/dead-letter`），但没有任何编排或部署配置。当前 outbox 消费由 API 进程的 lifespan 承担（`api/app.py`）。**注意有两个 `worker` 包**：`infrastructure/worker/`（任务实现 + outbox，被引用的那个）与 `workers/`（仅 HTTP 入口薄壳 + `__main__.py`）。 |
 | 4 | **`requirements/ingest` 与 `memory` 路由未下沉 service** | `api/routes/requirements_write.py` 直接调 `object_storage.upload`；`api/routes/memory.py` 内联 `embedding_service.embed`；`api/routes/conversations.py` 的 finalize 内联 `summarize_text` / `memory_extractor`。`complex-routes-analysis.md` 曾要求先下沉再迁移，实际是整文件搬移。 |
 | 5 | 无共享 HTTP client | `openai_provider` 每次调用直接 `httpx.post`，未复用连接池。 |
 | 7 | **需求库筛选下拉的候选项来自当前结果集** | 无 facets 接口，选项由返回行聚合而来；只在「无筛选」时刷新，避免一筛选项就只剩当前命中值。代价：**首次加载前**（或结果为空时）下拉是空的。要彻底解决需加一个 distinct 值接口。 |
 | 8 | **`/api/v1/ops/*` 的死信重投/放弃没有鉴权** | 与现有全部写端点处境相同（阶段 6 的鉴权批次尚未做），**不是新增暴露面**，但接入鉴权时必须一并纳入保护范围。 |
-| 9 | ~~相似度阈值仍是粗校准~~ → **已改为「两把锁」相对判定（2026-09-17，B4 批 1+2）** | 原绝对值 0.80/0.72/0.60 的问题不是「拍低了」而是**分不开**：52 对构造语料实测，真重复 P05 **0.8948**、无关 P95 **0.8120**（这两类分得开），但**同能力异对象**（「导出 Excel 报表」vs「导出员工数据」）P95 **0.9496** > 真重复 P05 —— 与真重复完全重叠，旧阈值下 **10/10 全被误判成重复**。真正可分的是**落差**（同一 query 内 top1 − median(其余)）：真重复 0.110~0.229、红区 0.021~0.133、无关 0.027~0.131。判定因此改为 `relevance ∧ contrast` 两把锁，阈值由 `scripts/calibrate_similarity.py` 实测推出、写进 `settings`。⚠️ **阈值只对 `Doubao-embedding` 有效**，换模型必须重跑校准（`settings.similarity_calibration_is_stale()` 会检出）。<br>**遗留**：① 落差是查询级统计量，库里只有 4 条需求时方差很大 —— 同一条真重复两次走查分别落到 `related` 与 `duplicate`，待数据量上来后复校；② 基线随文本长度漂移 **0.0973**（short 中位 0.7958 / long 0.7045），单一 baseline 对短需求是高估，本批次只报告未按档拆分。 |
+| 9 | ~~相似度阈值仍是粗校准~~ → **已改为「两把锁」相对判定（2026-09-17，B4 批 1+2）** | 原绝对值 0.80/0.72/0.60 的问题不是「拍低了」而是**分不开**：52 对构造语料实测，真重复 P05 **0.8948**、无关 P95 **0.8120**（这两类分得开），但**同能力异对象**（「导出 Excel 报表」vs「导出员工数据」）P95 **0.9496** > 真重复 P05 —— 与真重复完全重叠，旧阈值下 **10/10 全被误判成重复**。真正可分的是**落差**（同一 query 内 top1 − median(其余)）：真重复 0.110~0.229、红区 0.021~0.133、无关 0.027~0.131。判定因此改为 `relevance ∧ contrast` 两把锁，阈值由 `../../scripts/calibrate_similarity.py` 实测推出、写进 `settings`。⚠️ **阈值只对 `Doubao-embedding` 有效**，换模型必须重跑校准（`settings.similarity_calibration_is_stale()` 会检出）。<br>**遗留**：① 落差是查询级统计量，库里只有 4 条需求时方差很大 —— 同一条真重复两次走查分别落到 `related` 与 `duplicate`，待数据量上来后复校；② 基线随文本长度漂移 **0.0973**（short 中位 0.7958 / long 0.7045），单一 baseline 对短需求是高估，本批次只报告未按档拆分。 |
 | 10 | `apps/mcp` 删除后 IDE 里残留失效运行配置 | 个人配置未入库，手动删即可。 |
-| 11 | **`/features?at_version=N` 对越界版本静默返回当前功能集** | 2026-09-16 做工具层时实测发现：REQ-000015 当前是 V3，传 `at_version=99` **返回 16 条（= 当前）**，看起来像「v99 长这样」。根因在仓储的 SQL 判据 `origin_version_no <= N AND (removed_version_no IS NULL OR > N)` —— 对**未来版本**它对所有当前行都成立，所以仓储本身自洽，是**接口没做范围校验**。工具层已在自己的 `get_features` 里拦住；**接口层未修**（改法是读 `current_version` 越界返回 404 或 409，**属语义决策**）。详见 `docs/方案_Agent工具层.md` §7.4 |
+| 11 | **`/features?at_version=N` 对越界版本静默返回当前功能集** | 2026-09-16 做工具层时实测发现：REQ-000015 当前是 V3，传 `at_version=99` **返回 16 条（= 当前）**，看起来像「v99 长这样」。根因在仓储的 SQL 判据 `origin_version_no <= N AND (removed_version_no IS NULL OR > N)` —— 对**未来版本**它对所有当前行都成立，所以仓储本身自洽，是**接口没做范围校验**。工具层已在自己的 `get_features` 里拦住；**接口层未修**（改法是读 `current_version` 越界返回 404 或 409，**属语义决策**）。详见 `方案_Agent工具层.md` §7.4 |
 
 > 已在本轮或此前修复、无需再追的：分片参数双标（已统一 600/120）、`analysis_mode` 死参数、
-> `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `.env.example`、
-> **`src/requirement_agent/tools/` 整个包（2026-09-16 删除）**、
+> `OPENAI_*` 误导、prompts 内联重复、snowflake 三文件未提交、sandbox 缺失的 `../../.env.example`、
+> **`../../src/requirement_agent/tools` 整个包（2026-09-16 删除）**、
 > **`/requirements/features/search` 每次 500（2026-09-16 修复）**、
 > **雪花 ID 精度风险（2026-09-16 修复，原 6 条）**。
 >
@@ -232,13 +232,13 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 > 后来授权做了（T1）—— 而且**不是只改审核端点，是全部端点一律字符串**，
 > 连同前端那处 `Number(id)` 的写法一起改掉（不然正好抵消）。当时已经有真实反例躺在库里：
 > `outbox_event.id = 225548242094391297`，`int(float())` 变成 `...296`。
-> 现在由 `scripts/verify_api_contract.py` 的数据库级扫描守着。
+> 现在由 `../../scripts/verify_api_contract.py` 的数据库级扫描守着。
 >
 > 最后一条值得记一句：它是 MCP 移除时「逐字保留」下来的 7 个工具方法，此后**从未接线**——
 > 包外零引用、启动不加载、零测试。`TOOL_ACTOR_ID` 也随之作废并已删除。
 > **§四 原写的「内部入口 `tools.ingest_channel_event()`」是错的**：那个名字不在任何 `__all__` 里，
 > 根本 import 不到；已在 §四 指向真实的 `ChannelIngestService.ingest()`。盘点见
-> `docs/refactoring/archive/deprecated-modules.md`。
+> `../refactoring/archive/deprecated-modules.md`。
 
 ---
 
@@ -261,13 +261,13 @@ tags 重复：`api/router.py:32`（`rest_router`）与 `:51`（`router`）两级
 签名校验与 Verification Token（`FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`，
 至少配一个，否则端点直接返回 503）。**将来上全局鉴权中间件（阶段 6）必须把本路径豁免。**
 
-配置见 `.env.example` 的「飞书渠道」段。
+配置见 `../../.env.example` 的「飞书渠道」段。
 
 ---
 
 ## 五、对话状态机 / 并发隔离 / 版本管理 —— 能力与验证
 
-> 实施方案见 `docs/方案_对话状态机与Git式版本管理.md`。**七批（A–G）全部完成**，
+> 实施方案见 `方案_对话状态机与Git式版本管理.md`。**七批（A–G）全部完成**，
 > 对应迁移 `012`/`013`/`014`（**E/F/G 三批无迁移**）。下个接手的人想知道
 > 「这些能力还能不能用」，照这个清单验。
 >
@@ -588,7 +588,7 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 | ~~版本时刻的内容复原~~ | ✅ **已做**（2026-09-16）：`domain/feature_history.py` 沿 `feature_changes` 反向回放。**顺带修好了 `/diff` 的 `modified` 恒空** —— 它此前用同一条 SQL 取 diff 两端、两边都是当前值，所以 `before != after` 永远为假 |
 | ~~版本链可视化~~ | ✅ **已做**（2026-09-16，F 批）：溯源时间轴 + 每版来源链 + diff 版本选择。⚠️ **方案原本要的「合流虚线」没做也不该做** —— 见下方说明 |
 | **多个候选标题** | 一条需求只有一个标题；「同一需求的不同视角入口」不存在（**后端已做、前端未接、数据 0 行**） |
-| **文档版本链** | `document_asset` 只有 checksum 去重，**没有版本概念**；同名同格式文档改一个字会变成两个互不相干的资产。**方案已写：`docs/方案_文档版本链.md`**（批 1–2 已落地，写入路径未动） |
+| **文档版本链** | `document_asset` 只有 checksum 去重，**没有版本概念**；同名同格式文档改一个字会变成两个互不相干的资产。**方案已写：`方案_文档版本链.md`**（批 1–2 已落地，写入路径未动） |
 | ~~主线判定建议~~ | ✅ **已做**（`a85ee9f`）：分析输出 `suggestion{action,target,confidence,reason}`，**只出建议、人工确认** |
 | **行内高亮** | diff 只到「功能条目」粒度，没有内容片段级对比 |
 
@@ -602,7 +602,7 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 > **它还没有 `requirement_key`**，所以 `diff_payload.target_requirement_key` **永远等于
 > 版本自己所属的 REQ**，那两列会恒等于自指、画出来就是实线的重复。
 > 真实存在的跨实体关系是「**版本 ← 来源**」（`requirement_version_source`），
-> 时间轴画的就是它。详见 `docs/方案_对话状态机与Git式版本管理.md` §3.3(a)。
+> 时间轴画的就是它。详见 `方案_对话状态机与Git式版本管理.md` §3.3(a)。
 
 ---
 
@@ -610,18 +610,18 @@ v1 的「被谁取代」为空，它是迁移回填时标 superseded 的，那�
 
 | 文档 | 用途 |
 |---|---|
-| `docs/current-state.md`（本文） | 真实进度 + **§二 统一的待办任务清单** —— **先看这个** |
-| `docs/方案_需求主线与能力模型.md` | **能力 / 条件 / 需求主线**的设计方案：现状分析、现有模型映射、迁移方案、8 条设计歧义（**§9 的 4 条卡住 schema，待拍板**） |
-| `docs/方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（**A–G 已全部落地**）。⚠️ §3.3 的 `merged_from` 前提不成立，已在该节标注替代做法 |
-| `docs/History/需求规格.md` | 需求规格原稿 |
-| `docs/History/数据模型与实施史.md` | 数据模型的演进与实施记录 |
-| `docs/History/工程史附录.md` | 工程史附录 |
-| `docs/方案_Agent工具层.md` | **Agent 工具层**的方案（**未动工**）：现状、三个必答问题、契约与注册表、第一批 10 个工具、三层防护、分三批、4 条待拍板 |
-| `docs/方案_文档版本链.md` | **文档侧版本链**的方案：现状、三个卡点、分批、4 条待拍板。**批 1–2 已落地**（数据层 + 分片哈希），**批 3–5 未动**（改上传路径，有风险 → §二 B8） |
-| `docs/分析_工具分层现状与越层调用.md` | **工具分层的现状盘点** —— 四层映射、越层调用清单（路由直调仓储 86 处 / 仓储默认自建 session 43 处）、与「严格四层」规则的逐条比对。**动工具层之前先看这个** |
-| `docs/流程_需求从提交到入库.md` | **一条需求从提交到入库的完整链路** —— 谁做什么、模型在哪、人在哪、每次写入落在哪张表。**想搞清「为什么模型不写库」先看这个** |
-| `docs/api-contract.md` | **前端接口契约** —— 每个端点的字段名与形状（实测核对过）。**重写前端前先看这个**；§10 是还没做完的清单 |
-| `scripts/verify_api_contract.py` | **契约验证脚本** —— 逐端点核对字段 + 清点大整数 JSON 类型 + 查库找精度风险。改契约就要同步改它的 `SPEC` |
-| `README.md` | 环境搭建、常用接口、目录结构 |
+| `current-state.md`（本文） | 真实进度 + **§二 统一的待办任务清单** —— **先看这个** |
+| `方案_需求主线与能力模型.md` | **能力 / 条件 / 需求主线**的设计方案：现状分析、现有模型映射、迁移方案、8 条设计歧义（**§9 的 4 条卡住 schema，待拍板**） |
+| `方案_对话状态机与Git式版本管理.md` | 对话状态机/并发隔离/Git 版本管理的**完整设计方案与批次**（**A–G 已全部落地**）。⚠️ §3.3 的 `merged_from` 前提不成立，已在该节标注替代做法 |
+| `需求规格.md` | 需求规格原稿 |
+| `数据模型与实施史.md` | 数据模型的演进与实施记录 |
+| `工程史附录.md` | 工程史附录 |
+| `方案_Agent工具层.md` | **Agent 工具层**的方案（**未动工**）：现状、三个必答问题、契约与注册表、第一批 10 个工具、三层防护、分三批、4 条待拍板 |
+| `方案_文档版本链.md` | **文档侧版本链**的方案：现状、三个卡点、分批、4 条待拍板。**批 1–2 已落地**（数据层 + 分片哈希），**批 3–5 未动**（改上传路径，有风险 → §二 B8） |
+| `分析_工具分层现状与越层调用.md` | **工具分层的现状盘点** —— 四层映射、越层调用清单（路由直调仓储 86 处 / 仓储默认自建 session 43 处）、与「严格四层」规则的逐条比对。**动工具层之前先看这个** |
+| `流程_需求从提交到入库.md` | **一条需求从提交到入库的完整链路** —— 谁做什么、模型在哪、人在哪、每次写入落在哪张表。**想搞清「为什么模型不写库」先看这个** |
+| `api-contract.md` | **前端接口契约** —— 每个端点的字段名与形状（实测核对过）。**重写前端前先看这个**；§10 是还没做完的清单 |
+| `../../scripts/verify_api_contract.py` | **契约验证脚本** —— 逐端点核对字段 + 清点大整数 JSON 类型 + 查库找精度风险。改契约就要同步改它的 `SPEC` |
+| `../../README.md` | 环境搭建、常用接口、目录结构 |
 | `docs/refactoring/archive/*` | 阶段 0/1 施工快照与决策依据（**进度信息已过时**） |
-| `migrations/README.md` | 迁移清单 + 向量维度与索引的决策 |
+| `../../migrations/README.md` | 迁移清单 + 向量维度与索引的决策 |

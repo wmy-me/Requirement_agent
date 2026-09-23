@@ -15,7 +15,7 @@
 
 ## ⚠️ 关于「降级」的一条重要判断
 
-`docs/Requirement_agent后端任务与前端重构规划.docx` §三 B3 要求「统一处理异常、超时、
+`docs/History/Requirement_agent后端任务与前端重构规划.docx` §三 B3 要求「统一处理异常、超时、
 重试和**降级**」。本层把前三样做了（异常与超时在 `BaseTool.run` 里兜，
 重试交给 outbox 的既有机制），但**降级不在这里做，也不该无条件做**：
 

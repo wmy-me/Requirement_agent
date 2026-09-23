@@ -339,7 +339,7 @@ class RequirementSourceRepository:
                 # 例子举错会让人低估风险（"这些数看着都很大但没事"），所以换掉。
                 #
                 # 2026-09-16 起，这条规则从「审核端点专用」推广到**所有**雪花 ID 字段
-                # （见 `common.snowflake.to_sid` 与 `docs/api-contract.md` §1.1）。
+                # （见 `common.snowflake.to_sid` 与 `docs/History/api-contract.md` §1.1）。
                 "source_id": to_sid(row["id"]),
                 "source_type": row["source_type"],
                 "source_event_id": row["source_event_id"],
@@ -548,7 +548,7 @@ def _stringify_diff_payload(payload: object) -> dict[str, object]:
 
     **为什么在读时做而不是写入时**：这是**存储型 JSON**，改写入只能影响新行，
     老行会保持 number —— 同一个字段在新旧数据上两种类型，正是
-    `docs/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
+    `docs/History/api-contract.md` §8.1 警告过的形状。读时统一才能保证「无论哪一行、
     什么时候写的，类型都一样」。
     """
     data = dict(payload) if isinstance(payload, Mapping) else {}
@@ -1382,4 +1382,3 @@ class RequirementVersionRepository:
             },
             "versions": list(versions_by_id.values()),
         }
-

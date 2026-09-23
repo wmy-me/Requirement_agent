@@ -79,7 +79,7 @@ cd /home/wangmengyang/Software/Requirement_agent/Requirement_agent
 访问地址：
 
 - API: http://127.0.0.1:8888
-- 前端 UI: http://127.0.0.1:8888/ui
+- 前端工作台: http://127.0.0.1:8888/app
 - 健康检查: http://127.0.0.1:8888/health
 
 ## 常用接口

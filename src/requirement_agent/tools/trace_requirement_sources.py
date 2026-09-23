@@ -24,7 +24,7 @@ class TraceRequirementSourcesInput(ToolInput):
 @register
 class TraceRequirementSourcesTool(BaseTool):
     """**这是本系统里真实存在的跨实体关系** —— 合并是「来源 → REQ」，
-    不是「REQ → REQ」（后者不存在，见 `docs/方案_对话状态机与Git式版本管理.md` §3.3(a)）。"""
+    不是「REQ → REQ」（后者不存在，见 `docs/History/方案_对话状态机与Git式版本管理.md` §3.3(a)）。"""
 
     name = "trace_requirement_sources"
     description = (

@@ -1,6 +1,6 @@
 # 方案：Agent Run 与事件输出（B2.1）
 
-> 依据 `docs/Requirement_agent后端追加实施文档.docx` §三、§八.1。
+> 依据 `Requirement_agent后端追加实施文档.docx` §三、§八.1。
 > **本文件是 B2.1 的第一步产出（只读扫描 + 方案），尚未改动任何业务代码。**
 > §8.1 原话：「先只读扫描……然后输出迁移方案、数据表方案、接口方案、文件清单、
 > 测试清单和兼容风险。**暂时不要修改业务代码。**」
@@ -58,7 +58,7 @@
 但**没有任何迁移放宽过 CHECK**，全仓也没有 pause 的测试 —— 它从来没跑通过。
 
 **已按决策删除**（而不是放宽 CHECK）：`paused` 不在追加文档 §3.3 的枚举里，
-而删除只影响一个从未生效的端点（前端用的是 `resume`，已核对 `static/` 零命中）。
+而删除只影响一个从未生效的端点（前端用的是 `resume`，已核对 `../../static` 零命中）。
 `migrations/012` 索引谓词里的 `'paused'` 保留 —— 那是个**永不可能出现**的值，
 索引实际只覆盖 `running`，行为正确；已在 `chat.py:18` 注明。
 
@@ -235,12 +235,12 @@ def _sse(name, payload, *, seq=None):        # seq 为 None 时行为与现在�
 
 | 文件 | 内容 |
 |---|---|
-| `migrations/021_agent_run_tracking.sql` | §3 全部 DDL |
+| `../../migrations/021_agent_run_tracking.sql` | §3 全部 DDL |
 | `domain/agent_run.py` | `AgentRun` / `AgentRunEvent` / `ToolInvocation` 领域对象 + 枚举 |
 | `infrastructure/db/repositories/agent_run.py` | 新仓储：`create_run` / `append_events`（批量、带序号分配）/ `list_events(after_seq)` / `finish_run` / `record_tool_invocations` |
 | `application/run_tracking.py` | Application Service：把 state 里的事件通道落库、把 `tool_call_record` 转成 `tool_invocation` |
 | `workflows/event_nodes.py` | **事件适配器**：包一层现有节点，产出事件到 state 通道（不改节点本体） |
-| `tests/integration/test_agent_run_tracking.py` | 见 §6 |
+| `../../tests/integration/test_agent_run_tracking.py` | 见 §6 |
 
 ### 修改
 
@@ -253,8 +253,8 @@ def _sse(name, payload, *, seq=None):        # seq 为 None 时行为与现在�
 | `api/routes/agent_chat.py` | `_sse` 加 `id:`；事件带 `run_id`/`sequence`；`save_progress` 同步落事件 | **中**：SSE 是前端唯一实时通道 |
 | `api/routes/agent.py` | `POST /agent/run` 建 run + 手工产事件（它不走图） | 低 |
 | `api/auth.py` | 新 GET 端点无需改（GET 一律 read） | — |
-| `docs/api-contract.md` §6 | 补 `id:`/`run_id`/`sequence`；写明 narrative 不逐字回放 | — |
-| `scripts/verify_api_contract.py` | SPEC 补新端点 | 低 |
+| `api-contract.md` §6 | 补 `id:`/`run_id`/`sequence`；写明 narrative 不逐字回放 | — |
+| `../../scripts/verify_api_contract.py` | SPEC 补新端点 | 低 |
 
 ### ⚠️ 实施时相对本方案的两处偏离（2026-09-17）
 
@@ -265,7 +265,7 @@ def _sse(name, payload, *, seq=None):        # seq 为 None 时行为与现在�
   一条独立的内联管线（`routes/agent.py`），根本不经过图。而 `run_analysis` 的
   生产调用方**只有一个**（`requirement_service`），所以把生命周期放在调用方不是重复劳动。
 - 让图建 run 会把 `run_analysis` 变成写库的，而分析图节点在 B3 就定下「纯计算，不写库」
-  的纪律；更实际的是 `tests/unit/test_requirement_graph.py` 有三处**直接调 `run_analysis`**，
+  的纪律；更实际的是 `../../tests/unit/test_requirement_graph.py` 有三处**直接调 `run_analysis`**，
   图一旦写库，那三条纯图测试每跑一次就往库里写一行。
 
 于是分工改成：**图产出事件（进 state 的 `run_events` 通道），Application 层管 run 的生死与落库。**
