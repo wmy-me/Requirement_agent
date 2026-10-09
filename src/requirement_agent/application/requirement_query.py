@@ -265,6 +265,31 @@ class RequirementQueryService:
             )
         return result
 
+    def list_requirements_by_module(
+        self,
+        module_name: str | None,
+        *,
+        page: int = 1,
+        limit: int = 10,
+        status: str = "active",
+    ) -> dict[str, object]:
+        """List requirement masters for a feature module with stable pagination."""
+        normalized_module = (module_name or "").strip() or None
+        capped_limit = _clamp(limit, MAX_LIST_LIMIT)
+        normalized_page = max(1, page)
+        total, rows = self.feature_repo.list_requirement_summaries_by_module(
+            normalized_module, page=normalized_page, limit=capped_limit, status=status
+        )
+        return {
+            "module_name": normalized_module,
+            "scope": "unclassified_features" if normalized_module is None else "module",
+            "total": total,
+            "page": normalized_page,
+            "limit": capped_limit,
+            "has_more": normalized_page * capped_limit < total,
+            "items": rows,
+        }
+
 
     # ── 关系 ──────────────────────────────────────────────────────────────
 

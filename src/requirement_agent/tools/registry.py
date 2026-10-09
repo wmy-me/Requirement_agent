@@ -73,7 +73,6 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    _LOADED = True
     import importlib
     import pkgutil
 
@@ -82,12 +81,15 @@ def _ensure_loaded() -> None:
     # **扫目录，不维护手写清单** —— 手写清单是个会过期的第二事实源：
     # 第一版我凭印象列了两条早已不存在的模块名（`find_streams_by_capability` /
     # `get_capabilities`，那是**上一版**工具包的），一调用就 ModuleNotFoundError。
-    # 排除本包的支撑模块（契约 / 注册表 / 调用入口），其余都是工具。
+    # 排除本包的支撑模块（契约 / 注册表 / 调用入口），其余都是工具或工具子包。
     support = {"base", "registry", "invoker", "__init__"}
     for info in pkgutil.iter_modules(package.__path__):
         if info.name in support:
             continue
         importlib.import_module(f"requirement_agent.tools.{info.name}")
+    # Only mark complete after every module imported.  Otherwise an optional
+    # adapter import failure would permanently hide its tools for this process.
+    _LOADED = True
 
 
 def get_class(name: str) -> type[BaseTool] | None:

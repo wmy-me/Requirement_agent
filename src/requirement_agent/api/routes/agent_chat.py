@@ -43,6 +43,12 @@ from requirement_agent.api.dependencies import (
 )
 from requirement_agent.api.schemas import AgentChatRequest, AgentRunRequest
 from requirement_agent.agents.extract_agent import ExtractedRequirement
+from requirement_agent.application.chat_checkpoint import (
+    invalidate_for_supplement, pack as pack_checkpoint, unpack as unpack_checkpoint,
+)
+from requirement_agent.application.intent_service import IntentService
+from requirement_agent.agents.assistant_agent import RequirementAssistantAgent
+from requirement_agent.workflows.graphs import stream_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +58,6 @@ RISK_KEYS = (
     ("质量", "quality_risk"),
     ("变更", "change_risk"),
     ("技术影响", "technical_impact_risk"),
-)
-
-CASUAL_REPLY = (
-    "你好，我是需求助手。我可以陪你聊，也可以帮你把业务想法整理成可审核的需求，"
-    "包括提炼标题、补齐验收条件、检查重复和风险。普通问题我会直接回答；只有明确像需求材料时，"
-    "才会进入需求分析和审核流程。"
 )
 
 _CASUAL_HINTS = (
@@ -84,6 +84,12 @@ NARRATIVE_SYSTEM_PROMPT = (
     "4) 结尾给出建议：manual_review 时建议补充澄清并进入人工评审，can_commit 时可作为独立需求继续处理。"
     "要求：总字数不超过 300 字；不要使用 markdown 标题、代码块或 JSON；不要罗列字段名；不要以反问句结尾。"
 )
+
+ANSWER_SYSTEM_PROMPT = (
+    "你是需求治理助手。直接、准确地回答用户的问题；不要把普通问答伪装成需求分析，"
+    "也不要声称执行过未发生的检索或写入。回答使用中文，控制在 300 字内。"
+)
+ANSWER_FALLBACK = "当前问答模型暂不可用，暂时只能协助整理需求；请稍后重试或提交明确需求材料。"
 
 
 def _sse(name: str, payload: object, *, seq: int | None = None) -> str:
@@ -337,6 +343,40 @@ async def _narrative_chunks(
         await asyncio.sleep(0.05)
 
 
+async def _answer_chunks(question: str, *, run_id: str | None = None) -> AsyncIterator[str]:
+    """普通问答的真实模型流；模型不可用时明确降级，不返回伪装成答案的模板。"""
+    provider = LLMProvider()
+    provider.task_type = "answer"
+    if not provider.is_configured():
+        yield ANSWER_FALLBACK
+        return
+    queue: Queue[tuple[str, str]] = Queue()
+
+    def _pump() -> None:
+        try:
+            with bind_run_id(run_id):
+                for chunk in provider.generate_stream(question, system_prompt=ANSWER_SYSTEM_PROMPT):
+                    queue.put(("t", chunk))
+            queue.put(("done", ""))
+        except Exception as exc:  # pragma: no cover - depends on provider
+            queue.put(("err", str(exc)))
+
+    asyncio.get_running_loop().run_in_executor(None, _pump)
+    while True:
+        try:
+            kind, value = queue.get_nowait()
+        except Empty:
+            await asyncio.sleep(0.05)
+            continue
+        if kind == "t":
+            yield value
+        elif kind == "done":
+            return
+        else:
+            yield ANSWER_FALLBACK
+            return
+
+
 async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
     """以 SSE 事件驱动完整 Agent 管线：状态 → 自然语言总结 → 结构化卡片（纯文本）。"""
     actor_id = actor_id_or_default(payload.actor_id)
@@ -354,7 +394,8 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
             yield frame
         return
 
-    if _looks_like_casual_chat(payload.message, requirement_text=payload.requirement_text):
+    decision = IntentService().classify(payload.message, mode=payload.mode)
+    if decision.intent == "casual":
         async for frame in _stream_casual_chat(
             session_id=session_id,
             actor_id=actor_id,
@@ -364,9 +405,41 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         ):
             yield frame
         return
+    if decision.intent == "operation_request":
+        async for frame in _stream_operation_blocked(
+            session_id=session_id,
+            actor_id=actor_id,
+            client_message_id=client_message_id,
+            message=payload.message,
+            history=history,
+        ):
+            yield frame
+        return
+    if decision.intent in {"library_query", "compare_explain", "external_research"}:
+        async for frame in _stream_library_assistant(
+            session_id=session_id,
+            actor_id=actor_id,
+            client_message_id=client_message_id,
+            message=payload.message,
+            history=history,
+            allow_external=payload.web_policy == "on"
+            or (payload.web_policy == "auto" and decision.intent == "external_research"),
+            intent=decision.intent,
+        ):
+            yield frame
+        return
 
     history.append({"role": "user", "content": payload.message, "client_message_id": client_message_id})
     run_text = payload.requirement_text or payload.message
+    resume: dict[str, object] | None = None
+    pending = chat_repo.find_clarification_run(session_id)
+    if pending:
+        prior_state, error = unpack_checkpoint(dict(pending.get("checkpoint") or {}))
+        if prior_state is not None:
+            run_text = f"{prior_state.get('source_text') or ''}\n\n【补充信息】\n{run_text}".strip()
+            resume = {"state": invalidate_for_supplement(prior_state, run_text), "parent_run_id": str(pending["run_id"])}
+        else:
+            logger.warning("event=clarification_checkpoint_invalid run_id=%s error=%s", pending["run_id"], error)
     async for frame in _stream_chat_pipeline(
         session_id=session_id,
         actor_id=actor_id,
@@ -377,7 +450,7 @@ async def _chat_stream_events(payload: AgentChatRequest) -> AsyncIterator[str]:
         source_type=payload.source_type,
         requester_name=payload.requester_name,
         analysis_mode=payload.analysis_mode,
-        history=history,
+        history=history, resume=resume,
     ):
         yield frame
 
@@ -417,7 +490,11 @@ async def _stream_casual_chat(
     message: str,
     history: list[dict[str, object]],
 ) -> AsyncIterator[str]:
-    """普通聊天：只落会话消息，不创建 Agent run，不产出需求 artifacts。"""
+    """普通聊天：只落会话消息，不创建 Agent run，不产出需求 artifacts。
+
+    这条兼容快捷路径不参与需求分析图，但回答本身仍必须来自已配置的问答模型；
+    不能以固定欢迎词冒充模型输出。
+    """
     chat_repo.upsert_user_message(
         conversation_id=session_id,
         content=message,
@@ -426,18 +503,130 @@ async def _stream_casual_chat(
         meta={"intent": "casual_chat"},
     )
     history.append({"role": "user", "content": message, "client_message_id": client_message_id})
-    history.append({"role": "assistant", "content": CASUAL_REPLY, "artifacts": None})
-    chat_repo.append_assistant_message(
-        conversation_id=session_id,
-        content=CASUAL_REPLY,
-        artifacts={"intent": "casual_chat"},
-        run_id=None,
-    )
     yield _sse("session", {"session_id": session_id, "intent": "casual_chat"})
     yield _sse("step", {"step": "reply", "label": "正在回复…"})
-    for i in range(0, len(CASUAL_REPLY), 10):
-        yield _sse("narrative", {"t": CASUAL_REPLY[i : i + 10]})
+    yield _sse("narrative", {"start": True})
+    content = ""
+    async for token in _answer_chunks(message):
+        content += token
+        yield _sse("narrative", {"t": token})
+    history.append({"role": "assistant", "content": content, "artifacts": None})
+    chat_repo.append_assistant_message(
+        conversation_id=session_id,
+        content=content,
+        artifacts={"intent": "casual_chat", "answer_mode": "llm"},
+        run_id=None,
+    )
     yield _sse("done", {"run_id": "", "intent": "casual_chat"})
+
+
+async def _stream_operation_blocked(
+    *,
+    session_id: str,
+    actor_id: str,
+    client_message_id: str,
+    message: str,
+    history: list[dict[str, object]],
+) -> AsyncIterator[str]:
+    """Operations never become model tools; direct users to the reviewed API flow."""
+    content = "正式需求的批准、合并、删除和回退只能通过人工审核流程执行，助手不能直接操作。"
+    chat_repo.upsert_user_message(
+        conversation_id=session_id, content=message, actor_id=actor_id,
+        client_message_id=client_message_id, meta={"intent": "operation_request"},
+    )
+    chat_repo.append_assistant_message(
+        conversation_id=session_id, content=content,
+        artifacts={"intent": "operation_request", "blocked": True}, run_id=None,
+    )
+    history.extend([
+        {"role": "user", "content": message, "client_message_id": client_message_id},
+        {"role": "assistant", "content": content, "artifacts": {"intent": "operation_request"}},
+    ])
+    yield _sse("session", {"session_id": session_id, "intent": "operation_request"})
+    yield _sse("narrative", {"start": True})
+    yield _sse("narrative", {"t": content})
+    yield _sse("done", {"run_id": "", "intent": "operation_request"})
+
+
+async def _stream_library_assistant(
+    *,
+    session_id: str,
+    actor_id: str,
+    client_message_id: str,
+    message: str,
+    history: list[dict[str, object]],
+    allow_external: bool,
+    intent: str,
+) -> AsyncIterator[str]:
+    """Persist a bounded read-only assistant run and expose only public events."""
+    chat_repo.upsert_user_message(
+        conversation_id=session_id, content=message, actor_id=actor_id,
+        client_message_id=client_message_id, meta={"intent": intent, "web_policy": "on" if allow_external else "off"},
+    )
+    try:
+        run = chat_repo.create_run(
+            conversation_id=session_id,
+            client_message_id=client_message_id,
+            status="running",
+            meta={"task_type": "assistant", "execution_version": "assistant_v1", "intent": intent,
+                  "actor_id": actor_id, "web_policy": "on" if allow_external else "off"},
+        )
+    except ConversationBusyError:
+        yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE})
+        yield _sse("done", {"run_id": ""})
+        return
+    run_id = str(run["run_id"])
+    yield _sse("session", {"session_id": session_id, "run_id": run_id, "intent": intent})
+    yield _tracked_sse(run_id, "step", {"step": "assistant", "label": "正在查询需求库…"}, node="assistant")
+    try:
+        with bind_run_id(run_id):
+            result = await run_in_threadpool(
+                RequirementAssistantAgent().answer, message, allow_external=allow_external
+            )
+        run_tracking.record_events(run_id, result.events)
+        run_tracking.record_tool_calls(run_id, result.tool_calls)
+        for event in result.events:
+            if event["event_type"] == "tool_started":
+                yield _tracked_sse(
+                    run_id, "step",
+                    {"step": "tool", "label": "正在查询资料…", "tool": event["payload"]["tool"]},
+                    node="assistant",
+                )
+        artifacts = {
+            "intent": intent,
+            "status": result.status,
+            "sources": result.sources(),
+            "tool_calls": result.tool_calls,
+            "incomplete_reason": result.incomplete_reason,
+        }
+        assistant = chat_repo.append_assistant_message(
+            conversation_id=session_id, content=result.content, artifacts=artifacts, run_id=run_id,
+        )
+        history.extend([
+            {"role": "user", "content": message, "client_message_id": client_message_id},
+            {"role": "assistant", "content": result.content, "artifacts": artifacts},
+        ])
+        # Budget exhaustion is a completed, explicitly incomplete response; it is
+        # not a failed query and must remain replayable like any other final answer.
+        final_status = "failed" if result.status == "failed" else "completed"
+        chat_repo.update_run(
+            run_id=run_id, status=final_status,
+            error=result.incomplete_reason if final_status == "failed" else None,
+            meta={"conversation_id": session_id, "assistant_message_id": assistant["id"], "intent": intent},
+            stage="done",
+            checkpoint={"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources()},
+        )
+        yield _sse("artifacts", {"artifacts": artifacts})
+        yield _sse("narrative", {"start": True})
+        for index in range(0, len(result.content), 10):
+            yield _sse("narrative", {"t": result.content[index:index + 10]})
+        if final_status == "failed":
+            yield _tracked_sse(run_id, "error", {"message": result.content}, node="assistant")
+        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": final_status}, node="assistant")
+    except (RuntimeError, ValueError) as exc:
+        chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id}, stage="failed")
+        yield _tracked_sse(run_id, "error", {"message": str(exc)}, node="assistant")
+        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": "failed"}, node="assistant")
 
 
 async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[str] | None:
@@ -463,7 +652,7 @@ async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[
     return _replay()
 
 
-async def _stream_chat_pipeline(
+async def _stream_chat_pipeline_legacy(
     *,
     session_id: str,
     actor_id: str,
@@ -726,6 +915,134 @@ async def _stream_chat_pipeline(
         yield _tracked_sse(run_id, "done", {"run_id": run_id})
 
 
+_APPEND_STATE_KEYS = {"completed_steps", "route_history", "run_events", "tool_calls", "errors"}
+_STEP_LABELS = {
+    "extract": "正在理解你的需求…", "retrieve": "正在检索相似需求…",
+    "analyze": "正在分析冲突与重复…", "risk": "正在评估风险…",
+    "prepare_review": "正在准备待审分析…", "answer": "正在回复…", "clarify": "正在确认缺失信息…",
+}
+
+
+def _merge_graph_update(state: dict[str, object], update: dict[str, object]) -> None:
+    for key, value in update.items():
+        if key in _APPEND_STATE_KEYS:
+            state[key] = [*(state.get(key) or []), *(value or [])]
+        else:
+            state[key] = value
+
+
+async def _stream_chat_pipeline(
+    *, session_id: str, actor_id: str, client_message_id: str, user_content: str,
+    user_meta: dict[str, object] | None, run_text: str, source_type: str,
+    requester_name: str | None, analysis_mode: Literal["strict", "balanced", "broad"],
+    history: list[dict[str, object]], resume: dict[str, object] | None = None,
+) -> AsyncIterator[str]:
+    """SSE 对动态图的适配器；每个节点完成后将同一 state 包写入 agent_run.checkpoint。"""
+    # 旧 checkpoint 没有 state/version，只可走原四段兼容恢复，避免把历史断点误解释。
+    if resume and "state" not in resume:
+        async for frame in _stream_chat_pipeline_legacy(
+            session_id=session_id, actor_id=actor_id, client_message_id=client_message_id,
+            user_content=user_content, user_meta=user_meta, run_text=run_text, source_type=source_type,
+            requester_name=requester_name, analysis_mode=analysis_mode, history=history, resume=resume,
+        ):
+            yield frame
+        return
+
+    chat_repo.upsert_user_message(conversation_id=session_id, content=user_content, actor_id=actor_id,
+                                  client_message_id=client_message_id, meta=user_meta)
+    try:
+        run = chat_repo.create_run(conversation_id=session_id, client_message_id=client_message_id,
+                                   status="running", meta={"source_type": source_type, "requester_name": requester_name,
+                                                           "checkpoint_format": "dynamic-v1"})
+    except ConversationBusyError:
+        yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": ""}); return
+    run_id = str(run["run_id"])
+    # 补充消息创建了新的 run 后，旧澄清 run 不再是可继续任务；保留其 checkpoint 审计。
+    if resume and resume.get("parent_run_id"):
+        parent = chat_repo.get_run(str(resume["parent_run_id"]))
+        if parent and parent["status"] == "waiting_clarification":
+            chat_repo.update_run(
+                run_id=str(parent["run_id"]), status="cancelled",
+                error=f"superseded by clarification response {run_id}", meta=parent["meta"],
+                stage=parent["stage"], checkpoint=parent["checkpoint"],
+            )
+    state: dict[str, object] = dict((resume or {}).get("state") or {})
+    state.update({"source_text": run_text, "source_type": source_type, "requester_name": requester_name,
+                  "conversation_mode": True})
+    if not state.get("intent"):
+        state["intent"] = None
+
+    def persist(stage: str, status_value: str = "running") -> None:
+        current = chat_repo.get_run(run_id)
+        status_now = str(current.get("status") if current else "cancelled")
+        if status_now in {"paused", "cancelled"}:
+            raise RunStopped(status_now)
+        chat_repo.update_run(run_id=run_id, status=status_value, error=None,
+                             meta=(current or run).get("meta") or {}, stage=stage,
+                             checkpoint=pack_checkpoint(state))
+
+    try:
+        yield _sse("session", {"session_id": session_id, "run_id": run_id})
+        for update_group in stream_analysis(state):
+            node, output = next(iter(update_group.items()))
+            _merge_graph_update(state, dict(output))
+            for event in output.get("run_events") or []:
+                run_tracking.record_one(run_id, event)
+            if node == "router":
+                action = str(state.get("route_action") or "finish")
+                if action != "finish":
+                    yield _tracked_sse(run_id, "step", {"step": action, "label": _STEP_LABELS.get(action, "正在处理…"),
+                                                          "reason": state.get("route_reason")}, node="router")
+                persist("routing")
+                continue
+            persist("clarifying" if node == "clarify" else node)
+
+        pipeline: dict[str, object] = {
+            "status": "ok", "steps": list(state.get("completed_steps") or []), "source_type": source_type,
+            "requester_name": requester_name, "analysis_mode": analysis_mode,
+            "extracted": state.get("extracted") or {}, "candidates": state.get("candidates") or [],
+            "analysis": state.get("analysis") or {}, "risk": state.get("risk") or {},
+            "next_action": state.get("next_action"), "routing": {key: state.get(key) for key in
+                ("intent", "route_history", "route_reason", "missing_information", "error_state")},
+        }
+        if state.get("clarification_question"):
+            content = str(state["clarification_question"])
+            chat_repo.append_assistant_message(conversation_id=session_id, content=content, artifacts=pipeline, run_id=run_id)
+            history.append({"role": "assistant", "content": content, "artifacts": pipeline})
+            chat_repo.update_run(run_id=run_id, status="waiting_clarification", stage="clarifying",
+                                 meta={"conversation_id": session_id}, checkpoint=pack_checkpoint(state))
+            yield _sse("artifacts", {"artifacts": pipeline})
+            yield _sse("narrative", {"start": True})
+            for i in range(0, len(content), 10): yield _sse("narrative", {"t": content[i:i + 10]})
+            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": "waiting_clarification"}, node="clarify")
+            return
+        if state.get("answer"):
+            content = ""
+            yield _sse("artifacts", {"artifacts": pipeline}); yield _sse("narrative", {"start": True})
+            async for token in _answer_chunks(run_text, run_id=run_id):
+                content += token; yield _sse("narrative", {"t": token})
+        else:
+            with bind_run_id(run_id): memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
+            content = ""
+            yield _sse("artifacts", {"artifacts": pipeline}); yield _sse("narrative", {"start": True})
+            async for token in _narrative_chunks(pipeline, memory_context=memory_ctx, run_id=run_id):
+                content += token; yield _sse("narrative", {"t": token})
+            if not content: content = _fallback_narrative(pipeline)
+        assistant = chat_repo.append_assistant_message(conversation_id=session_id, content=content, artifacts=pipeline, run_id=run_id)
+        history.append({"role": "assistant", "content": content, "artifacts": pipeline})
+        chat_repo.update_run(run_id=run_id, status="completed", stage="done",
+                             meta={"conversation_id": session_id, "assistant_message_id": assistant["id"]}, checkpoint=pack_checkpoint(state))
+        yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
+    except RunStopped as stopped:
+        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": stopped.status}, node=stopped.status)
+    except Exception as exc:
+        current = chat_repo.get_run(run_id)
+        if current and current["status"] == "running":
+            chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta=current["meta"], stage=current["stage"], checkpoint=current["checkpoint"])
+        yield _tracked_sse(run_id, "error", {"message": str(exc)})
+        yield _tracked_sse(run_id, "done", {"run_id": run_id})
+
+
 async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
     """从 run 的断点继续分析管线，产出与首跑一致的 SSE（C 批：续跑）。
 
@@ -736,8 +1053,9 @@ async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
     session_id = str(run["conversation_id"])
     client_message_id = run["client_message_id"]
     checkpoint = run["checkpoint"] or {}
-    extracted = checkpoint.get("extracted") or {}
-    run_text = str(extracted.get("raw_text") or "")
+    dynamic_state, checkpoint_error = unpack_checkpoint(dict(checkpoint))
+    extracted = (dynamic_state or checkpoint).get("extracted") or {}
+    run_text = str((dynamic_state or {}).get("source_text") or extracted.get("raw_text") or "")
     meta = run["meta"] or {}
     source_type = str(meta.get("source_type") or "web")
     requester_name = meta.get("requester_name")
@@ -759,7 +1077,7 @@ async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:
         requester_name=requester_name,
         analysis_mode="strict",
         history=history,
-        resume={"stage": run["stage"], "checkpoint": checkpoint},
+        resume=( {"state": dynamic_state} if dynamic_state is not None else {"stage": run["stage"], "checkpoint": checkpoint}),
     ):
         yield frame
 
@@ -871,6 +1189,13 @@ async def _chat_stream_files_events(
             yield frame
         return
     history.append({"role": "user", "content": user_content, "client_message_id": resolved_client})
+    resume: dict[str, object] | None = None
+    pending = chat_repo.find_clarification_run(resolved_session)
+    if pending:
+        prior_state, _error = unpack_checkpoint(dict(pending.get("checkpoint") or {}))
+        if prior_state is not None:
+            run_text = f"{prior_state.get('source_text') or ''}\n\n【补充信息】\n{run_text}".strip()
+            resume = {"state": invalidate_for_supplement(prior_state, run_text), "parent_run_id": str(pending["run_id"])}
     async for frame in _stream_chat_pipeline(
         session_id=resolved_session,
         actor_id=actor_id,
@@ -881,7 +1206,7 @@ async def _chat_stream_files_events(
         source_type="web",
         requester_name=requester_name,
         analysis_mode=analysis_mode,
-        history=history,
+        history=history, resume=resume,
     ):
         yield frame
 
@@ -926,12 +1251,18 @@ async def chat_with_agent(payload: AgentChatRequest) -> dict[str, object]:
             client_message_id=client_message_id,
             meta={"intent": "casual_chat"},
         )
-        assistant_message = {"role": "assistant", "content": CASUAL_REPLY, "artifacts": {"intent": "casual_chat"}}
+        content = ""
+        async for token in _answer_chunks(payload.message):
+            content += token
+        assistant_message = {
+            "role": "assistant", "content": content,
+            "artifacts": {"intent": "casual_chat", "answer_mode": "llm"},
+        }
         history.append(assistant_message)
         chat_repo.append_assistant_message(
             conversation_id=session_id,
-            content=CASUAL_REPLY,
-            artifacts={"intent": "casual_chat"},
+            content=content,
+            artifacts={"intent": "casual_chat", "answer_mode": "llm"},
             run_id=None,
         )
         return {"session_id": session_id, "message": assistant_message, "history": chat_repo.get_messages(session_id)}
@@ -1153,7 +1484,7 @@ async def get_agent_run(run_id: str) -> dict[str, object]:
 @router.get("/api/v1/agent/runs")
 async def list_agent_runs(
     source_id: int | None = Query(default=None, gt=0),
-    status: Literal["queued", "running", "paused", "waiting_review", "completed", "failed", "cancelled", "retrying"] | None = None,
+    status: Literal["queued", "running", "paused", "waiting_clarification", "waiting_review", "completed", "failed", "cancelled", "retrying"] | None = None,
     run_type: Literal["conversation", "analysis"] | None = None,
     limit: int = Query(default=20, ge=1, le=200),
 ) -> dict[str, object]:

@@ -54,6 +54,8 @@ class AgentChatRequest(BaseModel):
     requester_name: str | None = Field(default=None, max_length=120)
     actor_id: str | None = Field(default=None, max_length=120)
     analysis_mode: Literal["strict", "balanced", "broad"] = "strict"
+    mode: Literal["auto", "ask_library", "draft_requirement", "research"] = "auto"
+    web_policy: Literal["off", "auto", "on"] = "off"
 
     @field_validator("message", "session_id", "client_message_id", "requirement_text", "requester_name", "actor_id", mode="before")
     @classmethod

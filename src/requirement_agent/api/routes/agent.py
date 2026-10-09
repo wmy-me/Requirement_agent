@@ -24,16 +24,12 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from requirement_agent.application.decision_rules import next_action_for as decision_next_action
-from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.api.dependencies import (
-    analyze_agent,
-    extract_agent,
-    retrieval_service,
-    risk_agent,
     run_tracking,
 )
 from requirement_agent.api.schemas import AgentRunRequest
+from requirement_agent.workflows.graphs import run_analysis
+from requirement_agent.infrastructure.llm.invocation import bind_run_id
 
 router = APIRouter()
 
@@ -45,60 +41,29 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         source_id=None,  # ad-hoc 分析，不绑来源 —— 它不是「某条来源的分析」
         meta={"source_type": payload.source_type, "entrypoint": "POST /agent/run"},
     )
-    events: list[dict[str, Any]] = []
-
-    def _step(node: str) -> None:
-        events.append({"event_type": "node_started", "node": node, "payload": {}})
-
-    def _done(node: str, summary: dict[str, Any]) -> None:
-        events.append({"event_type": "node_completed", "node": node, "payload": summary})
-
     try:
-        _step("extract")
-        extracted = extract_agent.extract(
-            payload.original_text,
-            source_type=payload.source_type,
-            requester_name=payload.requester_name,
-        )
-        extracted_payload = extracted.model_dump(mode="python")
-        _done("extract", {"business_domain": extracted_payload.get("business_domain")})
-
-        _step("retrieve")
-        candidates = retrieval_service.search(extracted.summary or payload.original_text, limit=5)
-        _done("retrieve", {"candidate_count": len(candidates)})
-
-        _step("analyze")
-        analysis = analyze_agent.analyze(extracted, candidates)
-        analysis_payload = analysis.model_dump(mode="python")
-        _done(
-            "analyze",
-            {
-                "duplicate": analysis_payload.get("duplicate"),
-                "related": analysis_payload.get("related"),
-                "conflict": analysis_payload.get("conflict"),
-            },
-        )
-
-        _step("risk")
-        risk = risk_agent.assess(extracted)
-        risk_payload = risk.model_dump(mode="python")
-        _done("risk", {"quality_risk": risk_payload.get("quality_risk")})
+        with bind_run_id(run_id):
+            result = run_analysis(
+                source_text=payload.original_text, source_type=payload.source_type,
+                requester_name=payload.requester_name,
+            )
     except Exception as exc:  # noqa: BLE001 —— 记下已发生的事件再上抛，不吞
-        run_tracking.record_events(run_id, events)
-        run_tracking.fail(run_id, error=exc, node=events[-1]["node"] if events else None)
+        run_tracking.fail(run_id, error=exc, node=getattr(exc, "node", None))
         raise
 
-    run_tracking.record_events(run_id, events)
+    run_tracking.record_events(run_id, list(result.get("run_events") or []))
+    run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
     run_tracking.finish(run_id, current_node="review_decision")
 
     return {
         "status": "ok",
         "run_id": run_id,
-        "steps": ["extract", "retrieve", "analyze", "risk", "review_decision"],
-        "extracted": extracted_payload,
-        "candidates": candidates,
-        "analysis": analysis_payload,
-        "risk": risk_payload,
-        "review_required": decision_review_required(analysis_payload, risk_payload),
-        "next_action": decision_next_action(analysis_payload, risk_payload),
+        "steps": list(result.get("completed_steps") or []),
+        "extracted": result.get("extracted") or {},
+        "candidates": result.get("candidates") or [],
+        "analysis": result.get("analysis") or {},
+        "risk": result.get("risk") or {},
+        "review_required": result.get("decision") == "manual_review",
+        "next_action": result.get("next_action"),
+        "routing": {key: result.get(key) for key in ("intent", "route_history", "route_reason", "missing_information", "error_state")},
     }

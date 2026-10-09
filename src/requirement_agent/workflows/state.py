@@ -31,6 +31,24 @@ class RequirementState(TypedDict, total=False):
     # —— 决策（由 decision_rules 产出）——
     decision: str  # manual_review | can_commit
     next_action: str
+    route_action: str  # 图内部条件边动作；next_action 保留既有决策 API 语义
+
+    # —— 动态编排（只保留下一跳和恢复所需的紧凑信息）——
+    # intent: general_question | requirement | unclear；action 是受限枚举，绝不直接执行模型文本。
+    intent: str
+    completed_steps: Annotated[list[str], add]
+    missing_information: list[str]
+    candidate_evidence: list[dict[str, Any]]
+    route_reason: str
+    route_count: int
+    route_history: Annotated[list[dict[str, Any]], add]
+    error_state: dict[str, Any]
+    answer: str
+    clarification_question: str
+    max_routes: int
+    started_at: float
+    conversation_mode: bool
+    invalidation_history: Annotated[list[dict[str, Any]], add]
 
     # —— 审核/落库（决策图使用）——
     review: dict[str, Any]

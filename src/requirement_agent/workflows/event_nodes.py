@@ -111,6 +111,10 @@ def _summary(name: str, output: dict[str, Any]) -> dict[str, Any]:
         }
     if name == "decide":
         return {"decision": output.get("decision")}
+    if name == "router":
+        return {"action": output.get("route_action"), "reason": output.get("route_reason")}
+    if name == "clarify":
+        return {"missing_count": len(output.get("clarification_question") or "")}
     return {}
 
 

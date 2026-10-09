@@ -50,8 +50,8 @@ __all__ = [
 ]
 
 #: 任务类型。与追加文档 §4.2 的表一一对应。
-TASK_TYPES: Final = ("extract", "analyze", "risk", "narrative", "embedding", "vision")
-TaskType = Literal["extract", "analyze", "risk", "narrative", "embedding", "vision"]
+TASK_TYPES: Final = ("extract", "analyze", "risk", "narrative", "assistant", "embedding", "vision")
+TaskType = Literal["extract", "analyze", "risk", "narrative", "assistant", "embedding", "vision"]
 
 SUPPORTED_PROVIDERS: Final = ("deepseek", "openai")
 

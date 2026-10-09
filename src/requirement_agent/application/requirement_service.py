@@ -183,6 +183,13 @@ class RequirementService:
         metadata["analysis"] = analysis
         metadata["risk"] = risk
         metadata["extracted"] = extracted
+        # 动态图的审计轨迹随待审来源保存；正式写入仍只可能发生在 ReviewService 的人工事务。
+        metadata["routing"] = {
+            "intent": result.get("intent"),
+            "history": list(result.get("route_history") or []),
+            "reason": result.get("route_reason"),
+            "error": result.get("error_state"),
+        }
         # —— 降级标记（B3.1b）——
         # ⚠️ 追加实施文档 §4.5：「**风险和冲突判断降级后必须标记，不得静默当作确定结果**」。
         #

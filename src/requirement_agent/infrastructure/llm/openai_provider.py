@@ -46,6 +46,21 @@ class _CallResult(NamedTuple):
     duration_ms: float
 
 
+class ToolCall(NamedTuple):
+    """一个模型请求的结构化工具调用，不解析文本形式的 Action。"""
+
+    id: str
+    name: str
+    arguments: str
+
+
+class ChatCompletion(NamedTuple):
+    """一次非流式 chat completion 的可消费部分。"""
+
+    content: str
+    tool_calls: tuple[ToolCall, ...]
+
+
 # 进程内 LLM 调用计量。单实例部署（本项目当前形态）够用；
 # 多实例或需要历史趋势时应换成真正的指标系统。
 _LLM_CALL_STATS: dict[str, float] = {
@@ -162,6 +177,58 @@ class LLMProvider:
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         return payload
+
+    def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ChatCompletion:
+        """以 OpenAI-compatible tool calling 完成一轮对话。
+
+        工具定义和调用结果均保留为结构化消息；调用方不需要、也不得从模型文本中
+        解析 Thought/Action。旧 ``generate`` 接口继续保留给已有 Skill。
+        """
+        if not self.is_configured():
+            raise RuntimeError(f"{self.provider_name} is not configured. Set API key and base URL first.")
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "tools": [{"type": "function", "function": tool} for tool in tools],
+            "tool_choice": "auto",
+        }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        result = self._request_with_retry(
+            lambda: self._http_post(
+                f"{self.base_url}/chat/completions",
+                payload,
+                self._headers(self.api_key),
+                self.timeout,
+            ),
+            op="chat",
+            model=self.model,
+        )
+        body = result.response.json()
+        prompt_tokens, completion_tokens = self._usage_tokens(body)
+        self._observe(
+            op="chat",
+            model=self.model,
+            outcome="ok",
+            duration_ms=result.duration_ms,
+            attempts=result.attempts,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        message = (body.get("choices") or [{}])[0].get("message") or {}
+        calls: list[ToolCall] = []
+        for item in message.get("tool_calls") or []:
+            function = item.get("function") or {}
+            call_id = str(item.get("id") or "")
+            name = str(function.get("name") or "")
+            arguments = function.get("arguments")
+            if call_id and name and isinstance(arguments, str):
+                calls.append(ToolCall(call_id, name, arguments))
+        return ChatCompletion(str(message.get("content") or ""), tuple(calls))
 
     @staticmethod
     def _headers(api_key: str) -> dict[str, str]:

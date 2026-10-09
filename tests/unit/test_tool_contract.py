@@ -33,6 +33,7 @@ EXPECTED_TOOLS = {
     "get_requirement_features",
     "get_requirement_versions",
     "list_requirements",
+    "list_requirements_by_module",
     # 批 2
     "compare_requirement_versions",
     "get_requirement_risks",
@@ -45,6 +46,9 @@ EXPECTED_TOOLS = {
     # B2 第二批（只加确定性的两个）
     "match_capabilities",
     "preview_merge_impact",
+    # Tavily MCP public read-only tools
+    "web_search",
+    "read_web_page",
 }
 
 WRITE_PREFIXES = ("save", "create", "update", "delete", "commit", "insert", "upsert", "sync")
@@ -153,7 +157,8 @@ def test_consumers_filter_works() -> None:
     analysis = {cls.name for cls in for_consumer("analysis")}
     assistant = {cls.name for cls in for_consumer("assistant")}
     assert analysis <= EXPECTED_TOOLS
-    assert len(assistant) <= len(analysis)
+    assert assistant <= EXPECTED_TOOLS
+    assert analysis <= assistant
     assert len(llm_schemas("analysis")) == len(analysis)
 
 

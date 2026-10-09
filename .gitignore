@@ -4,7 +4,18 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+coverage.xml
+.coverage.*
 .idea/
+.claude/
+.cursor/
+.vscode/settings.json
+.vscode/tasks.json
 docs/docx/
 .env
 .env.*
@@ -13,6 +24,11 @@ docs/docx/
 .DS_Store
 .coverage
 htmlcov/
+
+# 前端依赖与构建产物（当前静态资源目录本身仍需入库）
+node_modules/
+dist/
+build/
 
 # 本地数据库导出（含真实数据，勿入库）
 *.dump

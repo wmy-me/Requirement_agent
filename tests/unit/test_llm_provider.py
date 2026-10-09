@@ -114,6 +114,42 @@ def test_stream_payload_sets_stream_flag(provider: LLMProvider) -> None:
     assert provider._chat_payload("你好", None, stream=True)["stream"] is True
 
 
+def test_complete_with_tools_preserves_structured_tool_call_ids(provider: LLMProvider) -> None:
+    seen: list[dict] = []
+
+    def fake_post(_url, payload, _headers, _timeout):
+        seen.append(payload)
+        return _response(
+            200,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "list_requirements", "arguments": '{"limit":2}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    provider._http_post = fake_post
+    result = provider.complete_with_tools(
+        [{"role": "user", "content": "有哪些需求？"}],
+        [{"name": "list_requirements", "description": "list", "parameters": {"type": "object"}}],
+    )
+
+    assert seen[0]["tools"][0]["type"] == "function"
+    assert result.tool_calls[0].id == "call-1"
+    assert result.tool_calls[0].arguments == '{"limit":2}'
+
+
 def test_blank_temperature_env_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     # .env 里写 `LLM_TEMPERATURE=` 是常见写法，不应导致启动时 ValidationError
     monkeypatch.setenv("LLM_TEMPERATURE", "")

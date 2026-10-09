@@ -25,7 +25,7 @@ def extract_node(state: dict[str, Any]) -> dict[str, Any]:
         source_type=state.get("source_type", "web"),
         requester_name=state.get("requester_name"),
     )
-    return {"extracted": extracted.model_dump(mode="python")}
+    return {"extracted": extracted.model_dump(mode="python"), "completed_steps": ["extract"]}
 
 
 # 与 `tools/search_requirements.py` 的 schema 上限一致。
@@ -76,8 +76,10 @@ def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
     candidates = list(result.result or [])
     return {
         "candidates": candidates,
+        "candidate_evidence": candidates,
         "tool_calls": [record],
         "retrieval": _retrieval_record(query_text, limit, candidates, mode, source_type),
+        "completed_steps": ["retrieve"],
     }
 
 
@@ -164,14 +166,14 @@ def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
     extracted = _extracted_model(state)
     candidates = state.get("candidates") or []
     analysis = AnalyzeAgent().analyze(extracted, candidates)
-    return {"analysis": analysis.model_dump(mode="python")}
+    return {"analysis": analysis.model_dump(mode="python"), "completed_steps": ["analyze"]}
 
 
 def risk_node(state: dict[str, Any]) -> dict[str, Any]:
     """评估质量/变更/技术影响风险（恒在决策前执行）。"""
     extracted = _extracted_model(state)
     risk = RiskAgent().assess(extracted)
-    return {"risk": risk.model_dump(mode="python")}
+    return {"risk": risk.model_dump(mode="python"), "completed_steps": ["risk"]}
 
 
 def decide_node(state: dict[str, Any]) -> dict[str, Any]:

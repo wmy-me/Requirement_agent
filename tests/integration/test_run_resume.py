@@ -229,6 +229,8 @@ def test_pipeline_preserves_pause_requested_during_a_stage(monkeypatch) -> None:
             session_id=conv, actor_id="cooperative-pause", client_message_id="cooperative",
             user_content="请暂停", user_meta=None, run_text="请暂停", source_type="web",
             requester_name=None, analysis_mode="strict", history=[],
+            # 旧 checkpoint 仍须可协作暂停；新动态 checkpoint 由 test_dynamic_chat_checkpoint 覆盖。
+            resume={"stage": "queued", "checkpoint": {}},
         )))
         final = chat_repo.get_run(str(created_run["run_id"]))
         assert final is not None

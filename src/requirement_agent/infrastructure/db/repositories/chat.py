@@ -500,6 +500,17 @@ class ChatRepository:
             ).mappings().first()
         return self._normalize_run_row(row) if row else None
 
+    def find_clarification_run(self, conversation_id: str) -> dict[str, object] | None:
+        """最近等待补充的动态图 run；补充消息会复制其已完成 state 到一个新 run。"""
+        with SessionLocal() as session:
+            row = session.execute(text("""
+                SELECT id, run_id, conversation_id, client_message_id, status, error, meta, stage, checkpoint, created_at, updated_at
+                FROM agent_run WHERE conversation_id = CAST(:conversation_id AS UUID)
+                  AND status = 'waiting_clarification' AND checkpoint::text <> '{}'
+                ORDER BY updated_at DESC LIMIT 1
+            """), {"conversation_id": conversation_id}).mappings().first()
+        return self._normalize_run_row(row) if row else None
+
     def get_assistant_message_for_run(self, run_id: str) -> dict[str, object] | None:
         """返回某次 run 的 assistant 消息（用于断连后重放落库结果，避免重算/重复）。"""
         with SessionLocal() as session:

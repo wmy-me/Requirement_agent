@@ -53,6 +53,29 @@ def test_streaming_narrative_handles_empty_stream(monkeypatch) -> None:
     assert _collect([], monkeypatch) == []
 
 
+def test_question_answer_is_streamed_from_model(monkeypatch) -> None:
+    """普通问答与需求叙事一样，必须逐段转发模型生成内容。"""
+    monkeypatch.setattr(agent_chat, "LLMProvider", lambda: FakeStreamProvider(["我是", "模型回答"]))
+
+    async def run() -> list[str]:
+        return [token async for token in agent_chat._answer_chunks("你是谁", run_id="answer-test")]
+
+    assert asyncio.run(run()) == ["我是", "模型回答"]
+
+
+def test_question_answer_uses_explicit_unavailable_message(monkeypatch) -> None:
+    class UnconfiguredProvider(FakeStreamProvider):
+        def is_configured(self) -> bool:
+            return False
+
+    monkeypatch.setattr(agent_chat, "LLMProvider", lambda: UnconfiguredProvider([]))
+
+    async def run() -> list[str]:
+        return [token async for token in agent_chat._answer_chunks("你是谁")]
+
+    assert asyncio.run(run()) == [agent_chat.ANSWER_FALLBACK]
+
+
 def test_narrative_invocation_keeps_run_id_inside_background_thread(monkeypatch) -> None:
     """手工 executor 线程不会自动继承 ContextVar，叙事必须显式重新绑定。"""
     records: list[dict[str, object]] = []

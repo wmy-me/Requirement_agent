@@ -66,6 +66,7 @@ RUN_STATUSES: Final = (
     "queued",
     "running",
     "paused",
+    "waiting_clarification",
     "waiting_review",
     "completed",
     "failed",
@@ -73,7 +74,7 @@ RUN_STATUSES: Final = (
     "retrying",
 )
 RunStatus = Literal[
-    "queued", "running", "paused", "waiting_review", "completed", "failed", "cancelled", "retrying"
+    "queued", "running", "paused", "waiting_clarification", "waiting_review", "completed", "failed", "cancelled", "retrying"
 ]
 
 #: 到了就不该再被推进。
@@ -82,7 +83,7 @@ TERMINAL_STATUSES: Final = frozenset({"completed", "failed", "cancelled"})
 #: 「占着位置、还没跑完」—— 同一来源/同一对话同时只允许一个。
 #: ⚠️ `waiting_review` 在这里但**不在** `TERMINAL_STATUSES`：分析跑完等人审时，
 #: 不该被再跑一遍，但它也不是「完成」。
-ACTIVE_STATUSES: Final = frozenset({"queued", "running", "paused", "retrying", "waiting_review"})
+ACTIVE_STATUSES: Final = frozenset({"queued", "running", "paused", "waiting_clarification", "retrying", "waiting_review"})
 
 NODE_STATUSES: Final = ("pending", "running", "completed", "failed", "skipped")
 NodeStatus = Literal["pending", "running", "completed", "failed", "skipped"]

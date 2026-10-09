@@ -78,7 +78,9 @@ def test_stream_casual_chat_does_not_start_requirement_pipeline() -> None:
         conversation_id = str(session_event["session_id"])
         assert session_event["intent"] == "casual_chat"
         assert not any(name == "artifacts" for name, _ in events)
-        assert "只有明确像需求材料时" in response.text
+        answer = "".join(str(payload.get("t") or "") for name, payload in events if name == "narrative")
+        assert answer
+        assert "只有明确像需求材料时" not in answer
 
         conversation = chat_repo.get_conversation(conversation_id, actor_id="draft-test")
         assert conversation is not None

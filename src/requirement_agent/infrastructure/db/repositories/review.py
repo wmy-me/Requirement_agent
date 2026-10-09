@@ -112,6 +112,73 @@ class RequirementFeatureRepository:
             session.close()
         return [self._row_to_feature(row) for row in rows]
 
+    def list_requirement_summaries_by_module(
+        self,
+        module_name: str | None,
+        *,
+        page: int,
+        limit: int,
+        status: str = "active",
+    ) -> tuple[int, list[dict[str, object]]]:
+        """Page master requirements by their active feature module.
+
+        Module ownership belongs to ``requirement_feature`` (migration 014), not to
+        the requirement title.  A master is returned once even if it has several
+        features in the module; ``matched_feature_count`` preserves that context.
+        ``module_name=None`` explicitly means unclassified features.
+        """
+        predicates = ["f.status = 'active'"]
+        params: dict[str, object] = {
+            "limit": limit,
+            "offset": (page - 1) * limit,
+            "status": status,
+        }
+        if module_name is None:
+            predicates.append("f.module_key IS NULL")
+        else:
+            predicates.append("f.module_name = :module_name")
+            params["module_name"] = module_name
+        if status:
+            predicates.append("m.status = :status")
+        where = " AND ".join(predicates)
+        with SessionLocal() as session:
+            total = session.execute(
+                text(
+                    f"""
+                    SELECT COUNT(DISTINCT m.id)
+                    FROM requirement_master m
+                    JOIN requirement_feature f ON f.requirement_id = m.id
+                    WHERE {where}
+                    """
+                ),
+                params,
+            ).scalar_one()
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT m.requirement_key, m.requirement_name, m.current_version, m.status,
+                           COUNT(f.id) AS matched_feature_count
+                    FROM requirement_master m
+                    JOIN requirement_feature f ON f.requirement_id = m.id
+                    WHERE {where}
+                    GROUP BY m.id, m.requirement_key, m.requirement_name, m.current_version, m.status
+                    ORDER BY m.updated_at DESC, m.id DESC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            ).mappings().all()
+        return int(total), [
+            {
+                "requirement_key": row["requirement_key"],
+                "requirement_name": row["requirement_name"],
+                "current_version": int(row["current_version"] or 0),
+                "status": row["status"],
+                "matched_feature_count": int(row["matched_feature_count"] or 0),
+            }
+            for row in rows
+        ]
+
     def create_features(
         self,
         requirement_id: int,
@@ -1082,4 +1149,3 @@ class RequirementFeatureRepository:
             "module_key": row.get("module_key"),
             "module_name": row.get("module_name"),
         }
-

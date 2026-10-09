@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -20,14 +22,25 @@ from requirement_agent.workflows.commit_nodes import (
     route_decision,
 )
 from requirement_agent.workflows.event_nodes import traced
+from requirement_agent.workflows.router import (
+    answer_node,
+    clarify_node,
+    prepare_review_node,
+    router_node,
+)
 from requirement_agent.workflows.state import RequirementState
 
 
-def build_analysis_graph():
-    """分析图：抽取 → 检索 → 冲突/重复分析 → 风险 → 是否需要人工审核。
+def _route(state: RequirementState) -> str:
+    """条件边的唯一出口；动作来自已校验的 router_node。"""
+    return str(state.get("route_action") or "finish")
 
-    顺序固定：先召回候选，再做关系分析；风险永远在 decide 前执行，
-    保证前端与审核队列拿到的是完整分析面板。
+
+def build_analysis_graph():
+    """动态分析图：router 根据意图和产物决定下一跳。
+
+    `prepare_review` 有硬前置条件（extract/retrieve/analyze/risk），因此即使模型
+    建议跳步也会被 router 的 Python 校验回退。图仍保持纯计算，不写正式需求。
 
     **每个节点外面包了事件适配器**（`event_nodes.traced`，B2.1）—— 包装只发生在
     建图这一层，`agents_nodes.py` 的节点本体一行不动（追加文档 §3.5 的要求）。
@@ -35,17 +48,30 @@ def build_analysis_graph():
     **纯计算、不写库**。
     """
     graph = StateGraph(RequirementState)
+    # router 自己产出 route_selected；不伪装成业务执行节点，保持历史 node_started 时间线兼容。
+    graph.add_node("router", router_node)
+    graph.add_node("answer", traced("answer", answer_node))
+    graph.add_node("clarify", traced("clarify", clarify_node))
     graph.add_node("extract", traced("extract", extract_node))
     graph.add_node("retrieve", traced("retrieve", retrieve_node))
     graph.add_node("analyze", traced("analyze", analyze_node))
     graph.add_node("risk", traced("risk", risk_node))
     graph.add_node("decide", traced("decide", decide_node))
-    graph.add_edge(START, "extract")
-    graph.add_edge("extract", "retrieve")
-    graph.add_edge("retrieve", "analyze")
-    graph.add_edge("analyze", "risk")  # 风险恒在决策前执行
-    graph.add_edge("risk", "decide")
-    graph.add_edge("decide", END)
+    graph.add_node("prepare_review", prepare_review_node)
+    graph.add_edge(START, "router")
+    graph.add_conditional_edges("router", _route, {
+        "answer": "answer", "clarify": "clarify", "extract": "extract", "retrieve": "retrieve",
+        "analyze": "analyze", "risk": "risk", "prepare_review": "prepare_review", "finish": END,
+    })
+    graph.add_edge("extract", "router")
+    graph.add_edge("retrieve", "router")
+    graph.add_edge("analyze", "router")
+    graph.add_edge("risk", "router")
+    # 保留历史 decide 节点的产物和事件语义，prepare_review 只负责护栏。
+    graph.add_edge("prepare_review", "decide")
+    graph.add_edge("decide", "router")
+    graph.add_edge("answer", END)
+    graph.add_edge("clarify", END)
     return graph.compile()
 
 
@@ -73,6 +99,12 @@ analysis_graph = build_analysis_graph()
 decision_graph = build_decision_graph()
 
 
+def stream_analysis(initial: dict[str, Any]) -> Iterator[dict[str, dict[str, Any]]]:
+    """逐节点产生动态图增量，供 SSE 适配器在每个安全点写 PostgreSQL checkpoint。"""
+    seeded = {**initial, "started_at": time.monotonic(), "max_routes": int(initial.get("max_routes") or 12)}
+    yield from analysis_graph.stream(seeded, config={"recursion_limit": 32}, stream_mode="updates")
+
+
 def run_analysis(
     *,
     source_id: int | None = None,
@@ -82,6 +114,8 @@ def run_analysis(
     standardized_text: str | None = None,
     segments: list[dict[str, Any]] | None = None,
     normalized_fields: dict[str, Any] | None = None,
+    conversation_mode: bool = False,
+    intent: str | None = "requirement",
 ) -> RequirementState:
     """便捷入口：跑一遍分析图并返回最终 state。
 
@@ -92,14 +126,20 @@ def run_analysis(
         "source_text": source_text,
         "source_type": source_type,
         "requester_name": requester_name,
+        "started_at": time.monotonic(),
+        "max_routes": 12,
+        "conversation_mode": conversation_mode,
     }
+    if intent:
+        initial["intent"] = intent
     if standardized_text:
         initial["standardized_text"] = standardized_text
     if segments:
         initial["segments"] = segments
     if normalized_fields:
         initial["normalized_fields"] = normalized_fields
-    return analysis_graph.invoke(initial)
+    # 路由上限是业务护栏；给图略高于该上限的递归预算，避免 LangGraph 自身先报错。
+    return analysis_graph.invoke(initial, config={"recursion_limit": 32})
 
 
 def run_decision(ctx: dict[str, Any]) -> RequirementState:
