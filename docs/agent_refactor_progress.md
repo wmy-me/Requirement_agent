@@ -171,3 +171,23 @@
 - `.venv/bin/python -m pytest -q tests/unit/test_assistant_agent.py tests/unit/test_tavily_mcp.py tests/unit/test_risk_skill_robustness.py tests/unit/test_extract_agent.py tests/unit/test_analyze_skill_consistency.py`：27 passed。
 - `.venv/bin/python -m py_compile ...`（本轮修改的助手、MCP、工具包装、工作流与目录生成脚本）：通过；`git diff --check`：通过。
 - `tests/integration/test_workflow_tool_wiring.py` 在本机数据库连接池已失效时失败（`psycopg.OperationalError: connection is bad`）；这不是通过结果，待使用隔离可用数据库重跑。
+
+## 13. 第二版：统一执行与可恢复调查（部分完成）
+
+已完成：
+- 交付完整性修复已提交为 `6afa4d3`：遗漏的三个结构化分析工具、注册表生成的工具目录、生成脚本及隔离接线测试均已进入 Git；未包含 `.env`、凭据或业务数据。
+- 新增 `AgentExecutionService` 的最小生命周期内核，以及 `agent_run` 原子 `claim_run`、仅当 `running` 时才可终结的 `finish_if_running`。`/api/v1/agent/run` 已切换到该服务，保存事件、工具调用和 v2 checkpoint；双认领只有一个成功，取消后迟到完成不会覆盖终态。
+- 新增 `028_agent_run_execution_lease.sql`，仅添加可恢复状态索引，无破坏性迁移。
+- 专用空库 `requirement_agent_codex_20261010` 已完整执行迁移，新增工具包装及分析图节点接线测试在该库、无真实模型/业务样本条件下通过。
+
+部分完成：
+- 聊天助手仍使用 ChatRepository 的兼容生命周期；其工具事件已即时落库，但 SSE 仍未改为跨线程实时转发。Worker/RequirementService 仍经 RunTracking 兼容路径，尚未改用 AgentExecutionService。
+- assistant checkpoint 现保存工具调用和 sources，但未逐回合保存完整模型消息、工具原始返回、预算快照，尚不能保证进程中断后按保存结果续跑且不重置预算。
+
+未完成：
+- 三个入口统一到 AgentExecutionService；SSE 实时订阅/断线后后台继续；跨入口恢复和租约过期处理。
+- 证据 ID 完整闭环（把服务端 ID 注入模型 tool result、版本/文档/web locator 完整持久化）及独立的引用定位模型。
+- documents/memory 实际工具、Proposal 持久化与审批绑定（本版明确不扩展）。
+
+第二版当前验证：
+- 在专用迁移库运行 `DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:5432/requirement_agent_codex_20261010 API_AUTH_TOKEN=test-api-token TAVILY_MCP_ENABLED=false .venv/bin/python -m pytest -q tests/integration/test_analysis_tool_wiring_isolated.py`：3 passed（注册、实际执行、工作流接线、原子双认领/条件终态）。

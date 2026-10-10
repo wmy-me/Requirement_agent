@@ -137,6 +137,38 @@ class AgentRunRepository:
             ).mappings().first()
         return _normalize_run_row(dict(row) if row else None)
 
+    def claim_run(self, run_id: str, *, allowed_statuses: tuple[str, ...] = ("queued", "paused", "retrying")) -> dict[str, object] | None:
+        """Atomically acquire a resumable run.
+
+        The status predicate is the ownership fence: concurrent resume callers
+        race on one UPDATE and exactly one observes a returned row.
+        """
+        with SessionLocal() as session:
+            row = session.execute(text(f"""
+                UPDATE agent_run
+                SET status = 'running', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND status = ANY(CAST(:statuses AS TEXT[]))
+                RETURNING {_RUN_COLUMNS}
+            """), {"r": run_id, "statuses": list(allowed_statuses)}).mappings().first()
+            session.commit()
+        return _normalize_run_row(dict(row) if row else None)
+
+    def finish_if_running(self, run_id: str, *, status: str, error: str | None = None, current_node: str | None = None) -> bool:
+        """Write a terminal outcome only while this executor still owns running.
+
+        A concurrent pause/cancel changes the status first and wins; a late
+        success/failure update then affects zero rows instead of resurrecting it.
+        """
+        with SessionLocal() as session:
+            result = session.execute(text("""
+                UPDATE agent_run
+                SET status = :status, error = :error, current_node = COALESCE(:node, current_node),
+                    ended_at = NOW(), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND status = 'running'
+            """), {"r": run_id, "status": status, "error": error, "node": current_node})
+            session.commit()
+        return result.rowcount == 1
+
     def list_by_source(self, source_id: int, limit: int = 50) -> list[dict[str, object]]:
         """某条来源的全部运行记录（新→旧）。同一条来源可以被分析多次。"""
         with SessionLocal() as session:
@@ -231,6 +263,10 @@ class AgentRunRepository:
                 continue
             if key == "ended_at" and value is True:
                 assignments.append("ended_at = NOW()")
+                continue
+            if key == "checkpoint":
+                assignments.append("checkpoint = CAST(:checkpoint AS JSONB)")
+                params[key] = json.dumps(value)
                 continue
             assignments.append(f"{key} = :{key}")
             params[key] = value

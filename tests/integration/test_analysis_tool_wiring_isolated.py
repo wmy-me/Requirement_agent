@@ -10,6 +10,7 @@ from __future__ import annotations
 from requirement_agent.tools.invoker import invoke
 from requirement_agent.tools.registry import names
 from requirement_agent.workflows.agents_nodes import analyze_node, extract_node, risk_node
+from requirement_agent.application.agent_execution_service import AgentExecutionService
 
 
 def test_legacy_analysis_adapters_are_registered_and_executable() -> None:
@@ -40,3 +41,15 @@ def test_workflow_nodes_use_registered_legacy_adapters() -> None:
     assert extracted["tool_calls"][0]["tool"] == "extract_requirement"
     assert analyzed["tool_calls"][0]["tool"] == "analyze_requirement_relation"
     assert assessed["tool_calls"][0]["tool"] == "assess_requirement_risk"
+
+
+def test_execution_claim_and_terminal_updates_are_conditional() -> None:
+    service = AgentExecutionService()
+    run = service.start(task_type="isolated-test")
+    run_id = str(run["run_id"])
+    assert service.claim(run_id) is not None
+    assert service.claim(run_id) is None, "second executor must not acquire a running run"
+    # Simulate a concurrent user cancellation before the stale executor returns.
+    service.repo._update_run(run_id, status="cancelled")
+    assert service.complete(run_id) is False
+    assert service.repo.get_run(run_id)["status"] == "cancelled"

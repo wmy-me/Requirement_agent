@@ -24,9 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from requirement_agent.api.dependencies import (
-    run_tracking,
-)
+from requirement_agent.application.agent_execution_service import AgentExecutionService
 from requirement_agent.api.schemas import AgentRunRequest
 from requirement_agent.workflows.graphs import run_analysis
 from requirement_agent.infrastructure.llm.invocation import bind_run_id
@@ -37,10 +35,12 @@ router = APIRouter()
 @router.post("/api/v1/agent/run")
 async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
     """与 /chat/stream 共享的分析管线（非流式，供回放/兼容）。"""
-    run_id = run_tracking.start_analysis(
-        source_id=None,  # ad-hoc 分析，不绑来源 —— 它不是「某条来源的分析」
-        meta={"source_type": payload.source_type, "entrypoint": "POST /agent/run"},
-    )
+    execution = AgentExecutionService()
+    created = execution.start(task_type="analysis", source_id=None, meta={"source_type": payload.source_type, "entrypoint": "POST /agent/run"})
+    run_id = str(created["run_id"])
+    if execution.claim(run_id) is None:  # defensive: a just-created queued run must be claimable
+        raise RuntimeError("unable to claim newly created agent run")
+    execution.repo.append_events(run_id, [{"event_type": "run_started", "node": "execution", "payload": {"task_type": "analysis"}}])
     try:
         with bind_run_id(run_id):
             result = run_analysis(
@@ -48,12 +48,14 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
                 requester_name=payload.requester_name,
             )
     except Exception as exc:  # noqa: BLE001 —— 记下已发生的事件再上抛，不吞
-        run_tracking.fail(run_id, error=exc, node=getattr(exc, "node", None))
+        execution.repo.append_events(run_id, [{"event_type": "run_failed", "node": getattr(exc, "node", None), "payload": {"error": str(exc)}}])
+        execution.fail(run_id, exc, current_node=getattr(exc, "node", None))
         raise
 
-    run_tracking.record_events(run_id, list(result.get("run_events") or []))
-    run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
-    run_tracking.finish(run_id, current_node="review_decision")
+    execution.repo.append_events(run_id, list(result.get("run_events") or []) + [{"event_type": "run_completed", "node": "review_decision", "payload": {}}])
+    execution.repo.record_tool_invocations(run_id, list(result.get("tool_calls") or []))
+    execution.checkpoint(run_id, {"version": 2, "remaining_model_turns": None, "remaining_tool_calls": None, "result": result})
+    execution.complete(run_id, current_node="review_decision")
 
     return {
         "status": "ok",
