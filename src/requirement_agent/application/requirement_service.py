@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from collections.abc import Mapping
+from typing import Any
 
 from requirement_agent.agents.analyze_agent import AnalyzeAgent
 from requirement_agent.agents.extract_agent import ExtractAgent
@@ -19,6 +21,8 @@ from requirement_agent.infrastructure.db.repositories import (
 )
 from requirement_agent.infrastructure.parser.document_parser import DocumentParser
 from requirement_agent.workflows.graphs import run_analysis
+
+logger = logging.getLogger(__name__)
 
 
 def _csv_cell(value: object) -> str:
@@ -128,6 +132,11 @@ class RequirementService:
             ],
             "normalized_fields": self.document_parser.normalize_fields(segments),
         }
+        # 这一步发生在**任何 token 存在之前**（run 还没建），所以它不受执行权栅栏保护。
+        # 之所以安全：它只写「由来源原文确定性推导出的输入规整结果」（清洗文本、分段、
+        # 归一化字段）与 `processing_status='extracting'`，**不含任何分析产物**。
+        # 被接管 / 失权的执行者在这里留下的最多是一份可重算的输入快照，
+        # 不会有陈旧结论被当成结果（那由发布事务的 token 行锁拦住）。
         self.source_repo.update_extraction(
             saved_source.id or 0,
             extracted_text=standardized_text,
@@ -168,6 +177,11 @@ class RequirementService:
 
         # 事件与工具调用落库。工具调用单独落一张表 —— metadata 里那份是给
         # 「分析→审核」跨进程传递用的，而这张表是给「按 run 反查」用的，两者不互相替代。
+        #
+        # 这两条**已经受执行权栅栏保护**（RunTracking 有 token 时走
+        # `append_events_if_owned` / `record_tool_invocations_if_owned`，
+        # 两者都在 `(run_id, status='running', execution_token)` 行锁下写入）：
+        # 被接管后迟到的执行者写不进事件与工具留痕，所以它们不会留下陈旧结果。
         self.run_tracking.record_events(run_id, list(result.get("run_events") or []))
         self.run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
 
@@ -210,9 +224,12 @@ class RequirementService:
         # 只写 pending_confirmation 提案与匹配记录，**不写任何正式数据**。
         # 这是 A 级「自动归档」范畴：记的是事实（模型抽出了什么、匹配上了什么），
         # 不是业务决策（哪些能力正式成立）—— 后者由人工在审核页确认。
-        metadata["capability_match"] = self.capability_matcher.match(
-            extracted, source_id=saved_source.id
-        )
+        #
+        # ⚠️ 它写入提案行（`capability`），所以**必须与发布同事务**：放在发布前独立
+        # 提交的话，被接管（租约过期重认领 / pause）的执行者会留下一批陈旧提案，
+        # 而来源却永远停在 pending_review 之外。因此这里只算出「会写什么」，
+        # 真正的写入交给 `publish_source_result` 的事务内钩子（见下方 published 调用）。
+        capability_hook = self._capability_match_hook(extracted, saved_source.id)
         # —— 工具调用留痕（B3）——
         # 分析与落库**分处两个进程/两次调用**（分析在 outbox 任务里、落库在审核时），
         # 所以「这次分析调了哪些工具、各花了多久」必须随 metadata 一起存下来，
@@ -235,10 +252,18 @@ class RequirementService:
         # Keep the execution in running state until immediately before this
         # business-visible publication.  A reclaimed worker must not publish a
         # stale analysis merely because it finished computation first.
-        if not self.run_tracking.execution_guard(run_id)():
+        #
+        # 发布与终态是**同一个 token 行锁事务**（见 AgentRunRepository
+        # .publish_source_and_finish_if_owned）：失权时来源状态、run 终态和最终事件
+        # 一起回滚，外部只看到「什么都没发生」。
+        published = self.run_tracking.publish_source_result(
+            run_id,
+            source_id=saved_source.id or 0,
+            metadata=metadata,
+            in_transaction=capability_hook,
+        )
+        if not published:
             raise RuntimeError("analysis execution ownership lost before publishing result")
-        self.source_repo.update_status(saved_source.id or 0, "pending_review", metadata=metadata)
-        self.run_tracking.finish(run_id)
         return {
             "source_id": saved_source.id,
             "idempotency_key": saved_source.idempotency_key,
@@ -249,6 +274,28 @@ class RequirementService:
             "candidates": candidates,
             "next_action": result.get("decision") or result.get("next_action"),
         }
+
+    def _capability_match_hook(self, extracted: dict[str, object], source_id: int | None):
+        """返回一个「在发布事务内跑」的钩子：比对候选并在同一事务里落提案。
+
+        独立成函数是为了让 `_analyze_and_mark_pending` 保持线性可读，同时把
+        「写提案」这件事明确地钉在发布事务内（`session` 由事务传进来）。
+        用 SAVEPOINT 包住：提案写入本身失败时只回滚这一段，仍和改造前一样降级成
+        `error=match_failed` 的可见结果，而不会把整笔发布拖成失败。
+        """
+
+        def run(session: Any) -> dict[str, object]:
+            try:
+                with session.begin_nested():
+                    payload = self.capability_matcher.match(
+                        extracted, source_id=source_id, session=session
+                    )
+            except Exception as exc:  # noqa: BLE001 —— 词表比对失败不该拖垮发布
+                logger.warning("event=capability_match_failed source_id=%s error=%s", source_id, exc)
+                payload = {"error": "match_failed"}
+            return {"capability_match": payload}
+
+        return run
 
     def list_requirements(
         self,

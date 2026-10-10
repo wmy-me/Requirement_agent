@@ -346,3 +346,25 @@
 仍未完成：
 - 历史四阶段 `_stream_chat_pipeline_legacy` 的旧 checkpoint 兼容写路径仍待逐段 token 化；新动态聊天路径不再回退到它，除非读取历史 checkpoint。
 - Worker 的 source 更新与 run 终态尚非跨表单事务；本批在发布前增加 ownership fence，下一批应将“来源发布 + waiting_review”做成同一受 token 约束的数据库事务。
+
+## 23. 发布事务原子化、发布前副作用审计与聊天预算传播
+
+已完成：
+- **Worker 发布成为单个 token 事务**：新增 `AgentRunRepository.publish_source_and_finish_if_owned`（`agent_run` 行 `FOR UPDATE` + `execution_token`/`status='running'` 谓词），把「来源 → `pending_review` + metadata 回填」「run → `waiting_review`」「最终 `run_completed` 事件」放进同一个提交。`AgentExecutionService.publish_worker_result` 与 `RunTracking.publish_source_result` 是新的入口；`RequirementService._analyze_and_mark_pending` 改为只调用它，失权即整体回滚并抛 `RuntimeError`（返回结构、outbox 幂等与 ReviewService 边界未动）。来源状态 `pending_review` 与 run 状态 `waiting_review` 分属两个状态集，刻意保留为两个参数。
+- **发布前持久化副作用审计**：`record_events` / `record_tool_calls` / `checkpoint` 三种写入经核实**本来就在 token 行锁下**（`append_events_if_owned` / `record_tool_invocations_if_owned` / `checkpoint_if_owned`），已加注释并用真库测试钉住「接管后旧 token 全部写不进」。`update_extraction`（输入规整）发生在建 run 之前、不受栅栏保护，但它只写由原文确定性推导的分段/归一化字段与 `processing_status='extracting'`，不含任何分析产物 —— 已注释说明「为什么安全」。
+- **发现并修复一处未被点名的陈旧写入**：能力/条件候选比对（`capability_matcher.match`）原先在发布守卫**之前**独立提交 `pending_confirmation` 提案行，被接管的执行者会留下陈旧提案。现改为在发布事务内、以 SAVEPOINT 包裹执行（`_capability_match_hook`），失权则提案随事务回滚，比对自身失败仍降级成 `error=match_failed` 而不拖垮发布。
+- **聊天/ReAct 预算真正逐次下传**：助手工具调用 `invoke(..., remaining_seconds=remaining_seconds())`；`_stream_library_assistant` 用 `bind_execution(None, deadline)` 把 run 的绝对 deadline 绑进 ReAct 线程，使 provider 每次请求的 HTTP timeout 与工具等待都按当前剩余预算截断（只绑 deadline、不绑 ownership guard，暂停/取消语义不变）。provider 抛出的 `AnalysisBudgetExhausted` 映射为 `incomplete` 而不是「模型不可用」；`should_stop` 返回 `incomplete` 时也不再输出「已暂停或取消」这句话。
+- **续跑不再重置预算**：`_stream_chat_pipeline` 在 `create_run`（按 `client_message_id` 幂等 upsert，会整体覆盖 meta）之前先取既有 run 的 `deadline_at_epoch` 并沿用，只有全新消息或历史 run 没记 deadline 时才发新预算。
+- **旧兼容管线路由改为失败关闭**：`_stream_chat_pipeline_legacy` 只接受真正的历史断点（checkpoint 无 `version` 键）。带 `version` 却解不开的动态断点现在直接报错收流，不再退回 ChatRepository 的无 token 写入路径。
+
+实际验证：
+- 新增 `tests/integration/test_worker_publish_atomicity.py`：**4 passed**。覆盖「接管恰好落在发布边界 → 来源、终态、能力提案都不落库」「发布事务内部注入失败 → 已执行的来源 UPDATE 一起回滚」「正常路径三件事同事务提交」「旧 token 写不进事件/工具/checkpoint/终态」。前两条在把发布改回 HEAD 的「守卫 + 两步写」时**确实失败**（陈旧提案与陈旧来源被提交），是真实的回归测试。
+- 新增 `tests/integration/test_chat_budget_lifecycle.py`：**6 passed**。覆盖聊天预算耗尽（`failed` + `meta.outcome=incomplete` + `run_incomplete` + 消息可回放）、暂停落在节点执行期间（run 保持 `paused`，stage/checkpoint 未被覆写）、续跑沿用原 deadline、解不开的动态断点被拒绝、真历史断点仍走兼容路径、澄清结果的 token 与版本化 checkpoint。
+- 基线与回归：改动前 `tests/` 全量 **31 failed, 724 passed, 16 skipped**（失败全部为既有用例假设预置样本/真实 embedding，与本批无关）；改动后 **31 failed, 734 passed, 16 skipped**，失败集合逐条 diff **完全一致**，新增 10 条全绿。
+- 定向回归：`tests/integration/test_agent_run_tracking.py tests/integration/test_dynamic_chat_checkpoint.py tests/integration/test_run_resume.py tests/unit/test_assistant_agent.py`：**25 passed**；`py_compile` 与 `git diff --check` 通过。
+
+仍未完成 / 需注意：
+- 续跑沿用绝对 deadline 意味着「暂停超过预算时长后再续跑」会立即以 `incomplete` 收尾（而不是再拿一整份预算）。这是「续跑不得刷新预算」的直接后果，但对长时间暂停的用户是行为变化，需要产品侧确认要不要改成「暂停期间不消耗预算」（按暂停时长平移 deadline）。
+- 澄清补充走的是**新 user 消息 + 新 run**，因此仍会获得一份新预算；这是有意保留的（新回合新预算），未按父 run 剩余预算扣减。
+- Worker 发布失败（非失权，例如发布事务自身报错）时 run 会停在 `running` 等租约过期，尚未在该分支主动写 `failed`；由上层 outbox 任务收尾。
+- 旧四阶段兼容管线本身仍是 ChatRepository 无 token 写入（只服务历史断点），未逐段 token 化；SSE 仍由连接协程发送。

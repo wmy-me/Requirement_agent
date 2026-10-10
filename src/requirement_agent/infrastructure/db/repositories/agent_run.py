@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -246,6 +248,74 @@ class AgentRunRepository:
             }], commit=False)
             session.commit()
         return {"id": to_sid(row["id"]), "conversation_id": str(row["conversation_id"]), "role": row["role"], "content": row["content"], "artifacts": dict(row["artifacts"] or {}), "run_id": str(row["run_id"]), "meta": dict(row["meta"] or {})}
+
+    def publish_source_and_finish_if_owned(
+        self,
+        run_id: str,
+        token: str,
+        *,
+        source_id: int,
+        metadata: dict[str, object],
+        source_status: str = "pending_review",
+        status: str = "waiting_review",
+        current_node: str | None = None,
+        event: dict[str, object] | None = None,
+        in_transaction: Callable[[Any], dict[str, object] | None] | None = None,
+    ) -> bool:
+        """把「业务可见的发布」与 run 终态收进**同一个 token 行锁事务**。
+
+        为什么这张仓储要写 `requirement_source`：发布会话的所有权在 `agent_run`
+        行上（`execution_token` 是唯一的写栅栏），而业务结果在另一张表。
+        两次独立事务的写法下，被接管（租约过期 / 人工 pause / 重新认领）的执行者
+        可能在失权前把来源改成 `pending_review`、失权后再也写不进终态 ——
+        库里就留下「来源说分析完了、run 说还在跑」的错位。
+        这里把两者放进一个事务：失权时行锁取不到，**来源和 run 一起回滚**，
+        外部观察到的是「什么都没发生」，而不是一半。
+
+        `source_status` 与 `status` 是两个状态集：来源侧是 `pending_review`
+        （等人工审），run 侧是 `waiting_review`。它们**不能合并成一个参数** ——
+        合成一个就会写坏其中一张表的 CHECK 约束。
+
+        `in_transaction` 给调用方一个在**同一事务内**做发布前副作用的钩子
+        （例如能力提案落库）。它的返回值会并进 `metadata` 后再写来源；
+        它抛异常与会话回滚一样，不会留下半截数据。
+        """
+        with SessionLocal() as session:
+            owned = session.execute(
+                text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"),
+                {"r": run_id, "t": token},
+            ).first()
+            if not owned:
+                session.rollback()
+                return False
+            published = dict(metadata)
+            if in_transaction is not None:
+                extra = in_transaction(session)
+                if extra:
+                    published.update(extra)
+            session.execute(
+                text(
+                    "UPDATE requirement_source SET processing_status = :status, "
+                    "metadata = CAST(:metadata AS JSONB), updated_at = NOW() WHERE id = :id"
+                ),
+                {"id": source_id, "status": source_status, "metadata": json.dumps(published, ensure_ascii=False)},
+            )
+            if event is not None:
+                self._append_events_in_session(session, run_id, [event], commit=False)
+            result = session.execute(
+                text(
+                    "UPDATE agent_run SET status=:status, current_node=COALESCE(:node,current_node), "
+                    "ended_at=NOW(), updated_at=NOW() WHERE run_id=CAST(:r AS UUID) "
+                    "AND status='running' AND execution_token=CAST(:t AS UUID)"
+                ),
+                {"r": run_id, "t": token, "status": status, "node": current_node},
+            )
+            if result.rowcount != 1:
+                # 行锁已经拿到，正常不会走到这里；真走到了也绝不提交半截。
+                session.rollback()
+                return False
+            session.commit()
+        return True
 
     def append_events_if_owned(self, run_id: str, token: str, events: list[dict[str, object]]) -> list[dict[str, object]]:
         with SessionLocal() as session:

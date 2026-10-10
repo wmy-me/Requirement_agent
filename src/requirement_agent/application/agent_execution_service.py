@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from requirement_agent.config.settings import settings
@@ -98,6 +99,25 @@ class AgentExecutionService:
         return self.repo.append_assistant_and_finish_if_owned(
             run_id, token, content=content, artifacts=artifacts, status=status,
             checkpoint=checkpoint, meta=meta, current_node=current_node,
+        )
+
+    def publish_worker_result(
+        self, run_id: str, token: str, *, source_id: int, metadata: dict[str, Any],
+        source_status: str = "pending_review", status: str = "waiting_review",
+        current_node: str | None = None,
+        in_transaction: Callable[[Any], dict[str, Any] | None] | None = None,
+    ) -> bool:
+        """Publish the business-visible result and the run terminal state atomically.
+
+        Both rows commit under the same execution-token row lock, so a reclaimed
+        executor cannot publish a stale analysis without also owning the run.
+        ``in_transaction`` runs inside that lock for publish-time side effects.
+        """
+        return self.repo.publish_source_and_finish_if_owned(
+            run_id, token, source_id=source_id, metadata=metadata,
+            source_status=source_status, status=status, current_node=current_node,
+            event={"event_type": "run_completed", "node": current_node, "payload": {"status": status}},
+            in_transaction=in_transaction,
         )
 
     def events(self, run_id: str, token: str, events: list[dict[str, Any]]) -> bool:

@@ -24,6 +24,7 @@ from requirement_agent.agents.analyze_agent import score_label
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.application.agent_execution_service import AgentExecutionService
+from requirement_agent.application.execution_control import bind_execution
 from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
@@ -631,10 +632,15 @@ async def _stream_library_assistant(
                 heartbeat.mark_lost()
 
         with bind_run_id(run_id):
-            result = await run_in_threadpool(
-                RequirementAssistantAgent(deadline_seconds=_remaining_budget()).answer, message, allow_external=allow_external,
-                history=history, should_stop=_stop_status, on_event=_persist_event,
-            )
+            # 把 run 的绝对 deadline 绑定到 ReAct 循环所在的线程：provider 每次发请求前
+            # 重新取「当前剩余预算」当 HTTP timeout，工具调用也按剩余预算截断。
+            # 只绑 deadline、不绑 ownership guard：暂停/取消仍由 `should_stop` 判定，
+            # 免得 provider 抛出的失权异常被当成「模型不可用」。
+            with bind_execution(None, time.monotonic() + _remaining_budget()):
+                result = await run_in_threadpool(
+                    RequirementAssistantAgent(deadline_seconds=_remaining_budget()).answer, message, allow_external=allow_external,
+                    history=history, should_stop=_stop_status, on_event=_persist_event,
+                )
         # Tool events have already been appended one by one by _persist_event.
         if not execution.tool_calls(run_id, token, result.tool_calls):
             yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
@@ -1019,6 +1025,15 @@ async def _stream_chat_pipeline(
     """SSE 对动态图的适配器；每个节点完成后将同一 state 包写入 agent_run.checkpoint。"""
     # 旧 checkpoint 没有 state/version，只可走原四段兼容恢复，避免把历史断点误解释。
     if resume and "state" not in resume:
+        # ⚠️ 无 token 的四段兼容管线**只服务真正的历史断点**（动态 checkpoint 之前的
+        # 格式：没有 `version` 键）。带 `version` 的断点属于新的执行生命周期：它解不开
+        # （校验失败 / 版本不认识）时必须失败关闭，不能退回 ChatRepository 的无 token
+        # 写入 —— 那会让一次新执行绕过执行权栅栏，写出与 `waiting_review` 无关的终态。
+        if "version" in (resume.get("checkpoint") or {}):
+            logger.error("event=legacy_route_refused reason=dynamic_checkpoint_unreadable")
+            yield _sse("error", {"message": "断点无法解析，不会回退到旧写入路径；请重新发起分析。"})
+            yield _sse("done", {"run_id": ""})
+            return
         async for frame in _stream_chat_pipeline_legacy(
             session_id=session_id, actor_id=actor_id, client_message_id=client_message_id,
             user_content=user_content, user_meta=user_meta, run_text=run_text, source_type=source_type,
@@ -1029,12 +1044,19 @@ async def _stream_chat_pipeline(
 
     chat_repo.upsert_user_message(conversation_id=session_id, content=user_content, actor_id=actor_id,
                                   client_message_id=client_message_id, meta=user_meta)
+    # 续跑**不能重新获得一整份预算**：`create_run` 按 (conversation_id, client_message_id)
+    # 幂等 upsert，会把 meta 整体覆盖成 EXCLUDED —— 若这里直接算一个新 deadline，
+    # 暂停再续跑就等于刷新预算，可以无限重试。所以先取既有 run 的绝对 deadline 原样沿用；
+    # 只有全新的消息（没有既有 run）或历史 run 没记 deadline 时才发新的。
+    prior = chat_repo.get_run_by_client(session_id, client_message_id) if client_message_id else None
+    prior_deadline = float(((prior or {}).get("meta") or {}).get("deadline_at_epoch") or 0)
+    deadline_at_epoch = prior_deadline or (time.time() + settings.agent_analysis_budget_seconds)
     try:
         run = chat_repo.create_run(conversation_id=session_id, client_message_id=client_message_id,
                                    status="queued", meta={"source_type": source_type, "requester_name": requester_name,
                                                            "checkpoint_format": "dynamic-v1",
                                                            "budget_seconds": settings.agent_analysis_budget_seconds,
-                                                           "deadline_at_epoch": time.time() + settings.agent_analysis_budget_seconds})
+                                                           "deadline_at_epoch": deadline_at_epoch})
     except ConversationBusyError:
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": ""}); return
     run_id = str(run["run_id"])
@@ -1044,7 +1066,7 @@ async def _stream_chat_pipeline(
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": run_id}); return
     token = str(claimed["execution_token"])
     heartbeat = execution.heartbeat_loop(run_id, token)
-    deadline_at_epoch = float((claimed.get("meta") or {}).get("deadline_at_epoch") or time.time())
+    deadline_at_epoch = float((claimed.get("meta") or {}).get("deadline_at_epoch") or deadline_at_epoch)
 
     def _remaining_budget() -> float:
         return max(0.0, deadline_at_epoch - time.time())

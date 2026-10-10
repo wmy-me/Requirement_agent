@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
+
 from requirement_agent.agents.assistant_agent import RequirementAssistantAgent
+from requirement_agent.application.execution_control import bind_execution
 from requirement_agent.application.intent_service import IntentService
 from requirement_agent.infrastructure.llm.openai_provider import ChatCompletion, ToolCall
 from requirement_agent.tools.base import ToolResult
@@ -24,9 +27,11 @@ class _FakeToolModel:
 def test_react_agent_runs_multiple_structured_tool_rounds(monkeypatch) -> None:
     model = _FakeToolModel()
     seen: list[tuple[str, dict[str, object]]] = []
+    budgets: list[float | None] = []
 
-    def fake_invoke(name, params, *, consumer):
+    def fake_invoke(name, params, *, consumer, remaining_seconds=None):
         assert consumer == "assistant"
+        budgets.append(remaining_seconds)
         seen.append((name, params))
         if name == "list_requirements":
             return ToolResult.success([{"requirement_key": "REQ-1", "requirement_name": "登录"}])
@@ -38,9 +43,13 @@ def test_react_agent_runs_multiple_structured_tool_rounds(monkeypatch) -> None:
         lambda _consumer: [{"name": "list_requirements"}, {"name": "get_requirement_detail"}],
     )
 
-    result = RequirementAssistantAgent(model=model).answer("登录模块有哪些需求？")
+    # 绑定任务 deadline 后，**每一次**工具调用都要拿到递减的剩余预算，
+    # 而不是只有第一次（或只有初始化时的那一份）。
+    with bind_execution(None, time.monotonic() + 30):
+        result = RequirementAssistantAgent(model=model).answer("登录模块有哪些需求？")
 
     assert result.status == "completed"
+    assert len(budgets) == 2 and all(b is not None and 0 < b <= 30 for b in budgets), budgets
     assert result.content == "已找到 REQ-1。"
     assert [item[0] for item in seen] == ["list_requirements", "get_requirement_detail"]
     assert [item["tool_call_id"] for item in result.tool_calls] == ["call-1", "call-2"]

@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
+from requirement_agent.application.execution_control import AnalysisBudgetExhausted, remaining_seconds
 from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
 from requirement_agent.infrastructure.llm.openai_provider import ChatCompletion, LLMProvider, ToolCall
 from requirement_agent.tools.invoker import invoke, tool_call_record
@@ -110,7 +111,7 @@ class RequirementAssistantAgent:
         for _turn in range(self.max_model_turns):
             stopped = should_stop() if should_stop else None
             if stopped:
-                return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+                return self._stop_result(stopped, calls, evidence, events)
             if time.monotonic() - started > self.deadline_seconds:
                 return AssistantResult(
                     "本次查询达到服务端时限，结果不完整。",
@@ -122,6 +123,13 @@ class RequirementAssistantAgent:
                 )
             try:
                 completion = self.model.complete_with_tools(messages, available_tools)
+            except AnalysisBudgetExhausted as exc:
+                # 预算耗尽是「不完整」，不是「模型不可用」——provider 在真正发请求前
+                # 会用尽预算，这时它抛的是这个异常，不能和凭据/网络失败混为一谈。
+                return AssistantResult(
+                    "本次查询达到服务端时限，结果不完整。",
+                    "incomplete", calls, evidence, events, f"deadline_exceeded:{exc}",
+                )
             except RuntimeError as exc:
                 return AssistantResult(
                     f"问答模型不可用：{exc}",
@@ -136,7 +144,7 @@ class RequirementAssistantAgent:
             # accepting its response or starting another tool call.
             stopped = should_stop() if should_stop else None
             if stopped:
-                return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+                return self._stop_result(stopped, calls, evidence, events)
             if time.monotonic() - started > self.deadline_seconds:
                 return AssistantResult("本次查询达到服务端时限，结果不完整。", "incomplete", calls, evidence, events, "deadline_exceeded")
             if not completion.tool_calls:
@@ -154,7 +162,7 @@ class RequirementAssistantAgent:
             for call in completion.tool_calls:
                 stopped = should_stop() if should_stop else None
                 if stopped:
-                    return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+                    return self._stop_result(stopped, calls, evidence, events)
                 if time.monotonic() - started > self.deadline_seconds:
                     return AssistantResult("本次查询达到服务端时限，结果不完整。", "incomplete", calls, evidence, events, "deadline_exceeded")
                 tool_count += 1
@@ -201,6 +209,21 @@ class RequirementAssistantAgent:
         )
 
     @staticmethod
+    def _stop_result(
+        stopped: str, calls: list[dict[str, Any]], evidence: list[Evidence], events: list[dict[str, Any]]
+    ) -> "AssistantResult":
+        """把 `should_stop` 的原因翻成用户看得懂的结果。
+
+        调用方的停止原因同时包含「暂停/取消」（DB 状态）与「预算耗尽」
+        （`_stop_status` 在剩余预算为 0 时返回 incomplete）—— 两者都用同一句
+        「已暂停或取消」会在预算耗尽时给出错误解释，且让 run 的 incomplete
+        结果和用户看到的文本对不上。
+        """
+        if stopped == "incomplete":
+            return AssistantResult("本次查询达到服务端时限，结果不完整。", "incomplete", calls, evidence, events, "deadline_exceeded")
+        return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+
+    @staticmethod
     def _assistant_message(completion: ChatCompletion) -> dict[str, Any]:
         return {
             "role": "assistant",
@@ -225,7 +248,11 @@ class RequirementAssistantAgent:
             from requirement_agent.tools.base import ToolResult
 
             return ToolResult.error("当前联网策略禁止外部工具调用"), raw
-        return invoke(call.name, raw, consumer="assistant"), raw
+        # 把**本次调用时刻**的剩余预算下传工具层：`remaining_seconds()` 读的是
+        # 调用方绑定的执行 deadline（见 `application/execution_control`）。
+        # 不传的话工具会拿自己的固定上限，慢工具可以单次就吃掉整个 run 预算 ——
+        # 与任务剩余时间无关，这正是「预算只初始化一次」的漏洞。
+        return invoke(call.name, raw, consumer="assistant", remaining_seconds=remaining_seconds()), raw
 
     @staticmethod
     def _evidence_for(name: str, result: object, offset: int) -> list[Evidence]:

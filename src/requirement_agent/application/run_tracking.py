@@ -167,6 +167,36 @@ class RunTracking:
             self.record_events(run_id, [RunEvent("run_completed", node=current_node)])
             self._guard("finish_run_compat", lambda: self.repo.finish_run(run_id, status="waiting_review", current_node=current_node))
 
+    def publish_source_result(
+        self,
+        run_id: str | None,
+        *,
+        source_id: int,
+        metadata: dict[str, Any],
+        current_node: str = "decide",
+        in_transaction: Callable[[Any], dict[str, Any] | None] | None = None,
+    ) -> bool:
+        """把来源置 `pending_review` 与 run 收尾成 `waiting_review` 原子地提交。
+
+        返回 `False` 表示**这次发布没有发生**（失权 / 断点被接管 / run 没建成）：
+        调用方必须把「没发布成功」当成失败上抛，不能返回普通成功 ——
+        这正是本方法存在的理由（此前是「先改来源、再收尾」两次事务，中间失权会错位）。
+        """
+        token = self._tokens.get(run_id or "")
+        if not run_id or not token:
+            return False
+        ok = bool(
+            self._guard(
+                "publish_source",
+                lambda: self.execution.publish_worker_result(
+                    run_id, token, source_id=source_id, metadata=metadata,
+                    current_node=current_node, in_transaction=in_transaction,
+                ),
+            )
+        )
+        self._stop_heartbeat(run_id)
+        return ok
+
     def _stop_heartbeat(self, run_id: str) -> None:
         heartbeat = self._heartbeats.pop(run_id, None)
         if heartbeat is not None:
