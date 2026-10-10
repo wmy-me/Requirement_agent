@@ -277,10 +277,11 @@ class BaseTool(ABC):
         结构化日志同样给得到，且不会让一个只读层拿到事务。
         """
         count: object = "-"
-        if isinstance(result.result, (list, dict)):
+        if isinstance(result.result, dict):
+            # Paged envelopes describe result rows with total, not dict keys.
+            count = result.result.get("total", result.result.get("count", len(result.result)))
+        elif isinstance(result.result, list):
             count = len(result.result)
-        elif isinstance(result.result, dict) and "count" in result.result:
-            count = result.result["count"]
 
         if result.is_error:
             logger.warning(
@@ -313,7 +314,16 @@ def _digest(raw: dict[str, Any] | None) -> str:
         return "{}"
     parts = []
     for key, value in list(raw.items())[:8]:
-        if isinstance(value, str) and len(value) > _ARG_TEXT_CHARS:
+        if any(token in key.lower() for token in ("token", "secret", "password", "credential", "api_key")):
+            value = "***"
+        elif isinstance(value, str) and len(value) > _ARG_TEXT_CHARS:
             value = f"{value[:_ARG_TEXT_CHARS]}…(共{len(value)}字)"
+        elif isinstance(value, (dict, list)):
+            value = _digest_value(value)
         parts.append(f"{key}={value!r}")
     return "{" + ", ".join(parts) + "}"
+
+
+def _digest_value(value: object) -> object:
+    text = repr(value)
+    return text[:_ARG_TEXT_CHARS] + ("…" if len(text) > _ARG_TEXT_CHARS else "")

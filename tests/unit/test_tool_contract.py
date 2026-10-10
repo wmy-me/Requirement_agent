@@ -49,6 +49,10 @@ EXPECTED_TOOLS = {
     # Tavily MCP public read-only tools
     "web_search",
     "read_web_page",
+    # structured legacy-agent adapters
+    "extract_requirement",
+    "analyze_requirement_relation",
+    "assess_requirement_risk",
 }
 
 WRITE_PREFIXES = ("save", "create", "update", "delete", "commit", "insert", "upsert", "sync")
@@ -158,7 +162,9 @@ def test_consumers_filter_works() -> None:
     assistant = {cls.name for cls in for_consumer("assistant")}
     assert analysis <= EXPECTED_TOOLS
     assert assistant <= EXPECTED_TOOLS
-    assert analysis <= assistant
+    # Legacy extraction/relation/risk adapters are workflow-only; exposing
+    # them to the assistant would let the model start a proposal analysis.
+    assert analysis - {"extract_requirement", "analyze_requirement_relation", "assess_requirement_risk"} <= assistant
     assert len(llm_schemas("analysis")) == len(analysis)
 
 

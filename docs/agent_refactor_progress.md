@@ -215,3 +215,16 @@
 未完成：
 - ChatRepository/聊天流、RunTracking/Worker 仍有无 token 写路径，尚未迁移；因此三个入口所有权闭环和实时 heartbeat/异步后台执行尚未完成。
 - 追加的 token 写入路径仅完成静态编译检查；隔离库认证仍阻断该轮真实竞态测试，不能计为通过。
+
+## 16. 工具契约、审计与分类（进行中）
+
+已完成：
+- 三个结构化分析工具的 output schema 改为复用 `ExtractedRequirement`、`AnalysisResult`、`RiskAssessment`；执行后再次校验输出，非法形状会被 BaseTool 转为 error。
+- 三个模型驱动分析工具显式使用 60 秒等待上限，不再继承 5 秒查询默认值；线程超时仍只表示调用方停止等待，不声称取消底层模型任务。
+- 修复 BaseTool 分页审计计数：优先读取 `total/count`，不再把分页 envelope 的字段数记作结果数。
+- 工具调用持久化参数改存脱敏/截断摘要，嵌套文本不会原样进入审计；敏感键被屏蔽。
+- 注册表契约测试已将三个 workflow-only 分析工具列为真实工具，并明确它们不开放给 assistant consumer。
+
+未完成：
+- 需求查询/检索/预演模块尚未物理迁移至 `tools/requirements`（需要分批移动和兼容转发，未在本轮仓促完成）；external Tavily 未改变，documents/memory 未创建空目录。
+- 任务剩余预算尚未下传至 BaseTool，分析工具的模型/数据库下层超时及有界线程池仍待结合执行器改造。

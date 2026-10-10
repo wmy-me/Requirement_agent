@@ -38,6 +38,7 @@ from typing import Any
 
 from requirement_agent.tools.base import ToolResult, ToolStatus
 from requirement_agent.tools.registry import get_class
+from requirement_agent.tools.base import _digest
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +141,13 @@ def tool_call_record(
     """
     value = result.result
     count: int | None = None
-    if isinstance(value, (list, dict)):
+    if isinstance(value, dict):
+        count = value.get("total", value.get("count", len(value)))
+    elif isinstance(value, list):
         count = len(value)
     return _CallRecord(
         tool=name,
-        params=dict(params or {}),
+        params={"summary": _digest(params or {})},
         status=result.status.value,
         duration_ms=result.duration_ms,
         count=count,
