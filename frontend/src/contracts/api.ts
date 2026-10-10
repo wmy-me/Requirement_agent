@@ -54,3 +54,26 @@ export type WebPolicy = "off" | "auto" | "on";
 export type AnalysisMode = "strict" | "balanced" | "broad";
 /** 只存在于 `/chat/stream`（JSON），**不存在于** `/chat/stream-with-files`。 */
 export type SourceType = "web" | "email" | "meeting" | "manual";
+
+/* ── 审核（F4）─────────────────────────────────────────────────────────
+   ⚠️ `source_id` 在**所有**端点都是字符串（`to_sid`）。曾经 `/reviews/pending`
+   发字符串、`/merge-preview` 发 number，前端把两边拼起来就撞类型 —— 现在统一。
+   提交裁决用 `POST /api/v1/reviews/submit`，任何 409 都**不可自动重试**。 */
+export interface ReviewSourceRow {
+  source_id: Id; source_type: string; requester_id: string | null; requester_name: string | null;
+  original_text: string | null; extracted_text: string | null;
+  metadata: Record<string, unknown>; processing_status: string;
+  submitted_at: string | null; updated_at: string | null;
+}
+export interface ReviewDetail extends ReviewSourceRow { source_event_id: string | null; original_payload: Record<string, unknown>; }
+/** 合并预演返回。`overrides` 就是提交时要原样回传的逐条裁决。 */
+export interface MergePreview {
+  source_id: Id; merge_mode: "union" | "replace";
+  target: { requirement_key: string; requirement_name: string; current_version: number };
+  next_version: number;
+  groups: Array<{ module_key: string | null; module_name: string | null; added: Array<{ content: string }>; modified: Array<{ feature_key: string; before: string; after: string }>; deleted: Array<{ feature_key: string; content: string }>; kept: number }>;
+  summary: { add: number; modify: number; delete: number; keep: number; active_after: number };
+  overrides: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+export type ReviewDecision = "approved" | "rejected" | "returned";

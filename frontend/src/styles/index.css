@@ -147,3 +147,28 @@
 .sidebar-section:last-of-type{overflow-y:auto;flex:0 1 auto}
 .sidebar-section:last-of-type a{align-items:baseline}
 .sidebar-section:last-of-type a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── 审核（F4）────────────────────────────────────────────────────────
+   详情按参考图分三块：原始材料 / 拟变更 / 来源与风险，底部固定裁决区。
+   增/改/删用淡绿/淡黄/淡红，同时**保留文字标记**（不能只靠颜色）。 */
+.table-row.reviews{grid-template-columns:2fr 1.4fr .9fr .8fr 1.1fr}
+.review-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:20px}
+.review-grid .panel{min-width:0}
+.pre-wrap{white-space:pre-wrap}
+.diff-module{margin-top:12px}
+.diff-line{font-size:13px;line-height:1.6;padding:6px 9px;border-radius:var(--ra-radius-ctl);margin:0 0 6px;white-space:pre-wrap;color:var(--ra-ink-2)}
+.diff-line b{font-weight:650;margin-right:5px}
+.diff-line.added{background:var(--ra-ok-bg)}.diff-line.added b{color:var(--ra-ok)}
+.diff-line.removed{background:var(--ra-bad-bg)}.diff-line.removed b{color:var(--ra-bad)}
+.diff-line.modified{background:var(--ra-warn-bg)}.diff-line.modified b{color:var(--ra-warn)}
+.review-decide{border:1px solid var(--ra-line);border-radius:var(--ra-radius-card);padding:18px 20px;background:var(--ra-surface-2)}
+.review-decide h2{margin-bottom:12px}
+.review-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.review-fields label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--ra-muted)}
+.review-fields label.wide{grid-column:1/-1}
+.review-fields select,.review-fields input,.review-fields textarea{border:1px solid var(--ra-border-control);border-radius:var(--ra-radius-ctl);padding:8px 10px;font-size:14px;background:var(--ra-bg);color:var(--ra-ink);outline:0;font-family:inherit}
+.review-fields textarea{resize:vertical}
+.hint.bad{color:var(--ra-bad)}
+.review-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+@media(max-width:900px){.review-grid{grid-template-columns:1fr}.review-fields{grid-template-columns:1fr}}
+.diff-module-name{font-size:12px;font-weight:650;color:var(--ra-muted);margin:14px 0 6px;letter-spacing:.02em}
