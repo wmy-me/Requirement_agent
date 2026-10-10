@@ -16,7 +16,7 @@
 - 原 `RequirementTrace` 是**臆造的**（`{requirement_key, versions:[{version_no, source_id, source_type}]}`），与服务器不符。
 - 已按真实响应重写：`{requirement, versions:[{version_id, version_no, ..., sources:[...]}]}`，新增 `TraceSource` / `TraceVersion` / `TraceRequirement`。
 - 「来源证据」面板现在按版本列出每个真实来源：来源类型、提交人（`requester_name`）、`original_text` 截断摘要；每条来源链接到**真实可用的**旧审核入口 `/app/reviews?source_id=<source_id>`（`static/app/js/pages/reviews.js` 读取该参数并打开审核抽屉）。不编造页码或引文。
-- **诚实披露（未修复，属旧代码）**：该旧抽屉在打开时会报 `加载失败 Failed to execute 'appendChild'...` —— 这是 `static/app/js/pages/reviews.js` 的既有缺陷（`body.replaceChildren(...)` 里传入了 `null`），**不在本次 frontend/** 所有权范围内，未改动。链接本身不是死链：它确实导航到审核中心、打开该来源抽屉，并在「审核历史」中渲染该来源行。
+- 该入口最初**是坏的**：旧抽屉对每一条来源都报 `加载失败 Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'`，等于「链接能到、详情区永远报错」，不满足「实际可用的来源入口」。**已修复**（编排 Agent 接手，属旧版代码，不在 frontend/** 内），见 §7。
 
 ### 3. 上传反馈与去重
 
@@ -39,7 +39,16 @@
 
 ### 6. 截图（docs/design/screenshots/）
 
-`library-documents-desktop.png`、`library-requirements-desktop.png`、`requirement-detail-desktop.png`、`document-detail-desktop.png`、`requirement-detail-version-picker-v1.png`、`library-narrow-390.png`、`requirement-detail-narrow-390.png`、`legacy-reviews-source-entry.png`（旧审核入口打开抽屉的失败实况）。
+`library-documents-desktop.png`、`library-requirements-desktop.png`、`requirement-detail-desktop.png`、`document-detail-desktop.png`、`requirement-detail-version-picker-v1.png`、`library-narrow-390.png`、`requirement-detail-narrow-390.png`、`legacy-reviews-source-entry.png`（旧审核入口抽屉，**修复后**的实际渲染）。
+
+### 7. 旧版审核抽屉渲染缺陷（已修，编排 Agent 接手）
+
+来源入口的目标页面本身是坏的，两个独立原因，都在 `static/app/js/pages/reviews.js`：
+
+1. `section(title, children)` 用 `[el('h3', ...), children]` 拼子节点，而 `core.js` 的 `el()` 内部只做**一层** `[].concat()` 展开 —— 传数组时得到的是「数组当节点」，`appendChild` 直接抛错。改为 `[el('h3', ...)].concat(children)`。这正是「结构化需求」「AI 分析结果」两节传数组的写法，所以此前每条来源都打不开。
+2. 降级标记是条件渲染（`degradation ? el(...) : null`），裸 `null` 进了 `body.replaceChildren(...)`，而它不接受 null。按 `el()` 同样的规则过滤空位。
+
+验证方式：真实 Chrome 跑到异步渲染完成再 dump DOM。修复前抽屉只有一个「加载失败」；修复后 8 个区块全部渲染（来源事实 / 原始输入 / 结构化需求 / AI 分析结果 / 能力匹配 / 相似与冲突候选 / 人工裁决），显示真实来源 ID、提交人「张伟」、渠道 web、状态「已入库」。
 
 ### 视觉对齐（对照参考图）
 
@@ -48,8 +57,9 @@
 
 ### 未完成 / 阻塞
 
-- F3 对话、F4 审核、F5 任务记录、F6 全量视觉验收仍未开始（本轮范围只有 F0–F2）。
-- 旧审核抽屉渲染缺陷（见 §2）不是本轮前端可修范围内的项。
+- F3 对话、F4 审核、F5 任务记录、F6 全量视觉验收仍未开始（本轮范围只有 F0–F2；是否进入 F3 待 F0–F2 验收结论）。
+- 旧审核抽屉渲染缺陷已在 §7 修复并验证，不再是阻塞项。
+- 参考图中的「…」行内更多操作列仍未实现（无真实接口，不放假按钮）；文档版本链只有在该文档存在 `stream_id` 时才有，种子文档没有，界面如实显示 404 态。
 - 上传的成功/失败 UI 均用 CDP 真实驱动：空文件触发后端 400 `uploaded file is empty`，界面显示「上传失败：uploaded file is empty」（bad 态），非通用兜底文案。
 
 ## F0–F2（2026-10-10）
