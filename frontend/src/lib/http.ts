@@ -1,6 +1,8 @@
 import type { ApiError, ListResponse, UploadResult } from "../contracts/api";
 
-const token = (): string | undefined => document.querySelector<HTMLMetaElement>('meta[name="ra-ui-token"]')?.content || undefined;
+/** Runtime credential injected by the server into the page (never bundled).
+ * Exported because the SSE client must set the same header on a raw fetch. */
+export const token = (): string | undefined => document.querySelector<HTMLMetaElement>('meta[name="ra-ui-token"]')?.content || undefined;
 
 /** Raised for a 404 on a resource whose absence is a valid state (e.g. a
  * document with no version stream). Callers handle it instead of crashing. */
