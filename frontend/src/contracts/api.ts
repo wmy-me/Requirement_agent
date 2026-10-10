@@ -32,3 +32,25 @@ export interface Conversation { id: Id; title: string; summary: string | null; s
  * success means the file was accepted, NOT that the index is ready. */
 export interface UploadResult { document: DocumentAsset; status: "queued" | "ready"; result: { id?: string } | null; }
 export interface ApiError extends Error { status?: number; requestId?: string; detail?: string; }
+
+/* ── 对话（F3）─────────────────────────────────────────────────────────
+   `artifacts` 的形状**不固定**，取决于走哪条路径（见 api/routes/agent_chat.py）：
+     - 助手路径：{intent, status, sources, tool_calls, incomplete_reason}
+     - 分析管线：{status, steps, source_type, extracted, candidates, analysis, risk, next_action, ...}
+     - 闲聊：{intent, answer_mode}；被拦截的操作请求：{intent, blocked}
+   因此**按存在的键判别**，不要按声明的类型判别。 */
+export type ChatArtifacts = Record<string, unknown>;
+
+/** `GET /api/v1/agent/chat/{session_id}` 的历史项，也是落库的 assistant 消息形状。 */
+export interface ChatHistoryItem { role: "user" | "assistant" | string; content: string; artifacts?: ChatArtifacts | null; client_message_id?: string | null; created_at?: string | null; }
+export interface ChatHistory { session_id: string; history: ChatHistoryItem[]; }
+/** `GET /api/v1/agent/chat/{session_id}/resumable` —— 只报 **paused 且有 checkpoint** 的 run。 */
+export interface ResumableRun { run_id: string; status: string; stage: string | null; steps_done: number | null; checkpoint_keys: string[]; updated_at: string | null; }
+export interface ResumableResponse { run: ResumableRun | null; }
+export interface RunSummary { run_id: string; status: string; run_type?: string | null; current_node?: string | null; source_id?: Id | null; conversation_id?: string | null; created_at?: string | null; updated_at?: string | null; ended_at?: string | null; meta?: Record<string, unknown> | null; }
+/** 真实可选值（后端 `mode` 参数）。 */
+export type ChatMode = "auto" | "ask_library" | "draft_requirement" | "research";
+export type WebPolicy = "off" | "auto" | "on";
+export type AnalysisMode = "strict" | "balanced" | "broad";
+/** 只存在于 `/chat/stream`（JSON），**不存在于** `/chat/stream-with-files`。 */
+export type SourceType = "web" | "email" | "meeting" | "manual";

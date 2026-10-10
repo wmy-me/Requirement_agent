@@ -1,11 +1,13 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
 import { LibraryPage, DocumentDetail, RequirementDetail } from "../features/library/LibraryPages";
+import { ChatPage } from "../features/chat/ChatPage";
 import { Placeholder } from "../components/Placeholder";
 
 export function App() {
   return <Routes><Route element={<AppShell />}>
-    <Route index element={<Placeholder title="你想了解哪些需求？" description="新对话仍由现有页面提供，避免在恢复与 SSE 能力稳定前重复启动任务。" action="打开旧版对话" href="/app/" />} />
+    <Route index element={<ChatPage />} />
+    <Route path="chat/:sessionId" element={<ChatPage />} />
     <Route path="library" element={<LibraryPage />} />
     <Route path="library/documents/:documentId" element={<DocumentDetail />} />
     <Route path="library/requirements/:requirementKey" element={<RequirementDetail />} />
