@@ -14,7 +14,11 @@ function reviewRisk(detail) {
 }
 
 function section(title, children) {
-  return el('section', {}, [el('h3', { class: 'section-title', text: title }), children]);
+  // ⚠️ 必须用 `.concat(children)` 而不是 `[h3, children]`：`el()` 内部只做一层
+  // `[].concat(children)` 展开，把子节点数组原样塞进去会变成「数组当节点」——
+  // `appendChild` 抛 "parameter 1 is not of type 'Node'"，整个抽屉白屏。
+  // 「结构化需求」「AI 分析结果」两节传的正是数组，所以此前每条来源都打不开。
+  return el('section', {}, [el('h3', { class: 'section-title', text: title })].concat(children));
 }
 
 function textBlock(value, empty = '未提供') {
@@ -164,7 +168,11 @@ async function openReview(item, refresh) {
       const risk = meta.risk || {};
       const degradation = meta.degradation || null;
       const capabilityMatch = meta.capability_match || {};
-      body.replaceChildren(
+      // `replaceChildren` 不接受 null，而下面的「降级标记」是条件渲染 ——
+      // 没有降级标记的来源（绝大多数）会留下一个 null 实参，直接抛
+      // "parameter 1 is not of type 'Node'"，整个抽屉渲染失败。
+      // 这里按 core.js `el()` 的 children 约定过滤掉空位。
+      body.replaceChildren(...[
         section('来源事实', kv([
           ['来源 ID', el('span', { class: 'mono', text: String(detail.source_id) })],
           ['提交人', detail.requester_name || '未提供'], ['渠道', detail.source_type || '未提供'],
@@ -199,7 +207,7 @@ async function openReview(item, refresh) {
           el('p', { text: '以下按钮才会改变审核状态或创建需求版本。AI 分析不会自动写入正式需求。' }),
           decisionForm(detail, requirements.items || [], () => { refresh(); closeDrawer(); }),
         ]),
-      );
+      ].filter((node) => node !== null && node !== undefined && node !== false));
     } catch (err) {
       body.replaceChildren(state.error(err, () => openReview(item, refresh)));
     }
