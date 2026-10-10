@@ -75,3 +75,43 @@ def test_auto_mode_prefers_read_only_library_query() -> None:
     assert service.classify("登录模块有哪些需求？").intent == "library_query"
     assert service.classify("新增手机号登录并整理提案").intent == "new_requirement"
     assert service.classify("删除 REQ-1").intent == "operation_request"
+    assert service.classify("查看新增需求有哪些").intent == "library_query"
+    assert service.classify("删除功能有哪些需求").intent == "library_query"
+
+
+def test_react_agent_checks_stop_and_uses_bounded_chat_history(monkeypatch) -> None:
+    class HistoryModel:
+        def __init__(self) -> None:
+            self.messages = []
+
+        def complete_with_tools(self, messages, _tools):
+            self.messages = messages
+            return ChatCompletion("无需调用工具。", ())
+
+    model = HistoryModel()
+    result = RequirementAssistantAgent(model=model).answer(
+        "现在的问题", history=[{"role": "user", "content": f"历史{i}"} for i in range(10)]
+    )
+    assert result.status == "completed"
+    assert [item["content"] for item in model.messages if item["role"] == "user"] == [*(f"历史{i}" for i in range(2, 10)), "现在的问题"]
+
+    stopped = RequirementAssistantAgent(model=model).answer("问题", should_stop=lambda: "cancelled")
+    assert stopped.status == "cancelled"
+
+
+def test_paged_evidence_and_unknown_citation_are_checked(monkeypatch) -> None:
+    class CitationModel:
+        turn = 0
+
+        def complete_with_tools(self, _messages, _tools):
+            self.turn += 1
+            if self.turn == 1:
+                return ChatCompletion("", (ToolCall("call-1", "list_requirements_by_module", '{"module":"登录"}'),))
+            return ChatCompletion("见 [E2]。", ())
+
+    monkeypatch.setattr("requirement_agent.agents.assistant_agent.invoke", lambda *_args, **_kwargs: ToolResult.success({"items": [{"requirement_key": "REQ-1", "requirement_name": "登录"}]}))
+    monkeypatch.setattr("requirement_agent.agents.assistant_agent.llm_schemas", lambda _consumer: [{"name": "list_requirements_by_module"}])
+    result = RequirementAssistantAgent(model=CitationModel()).answer("登录模块")
+    assert result.status == "incomplete"
+    assert result.incomplete_reason == "invalid_citation:E2"
+    assert result.sources()[0]["source_ref"] == "REQ-1"

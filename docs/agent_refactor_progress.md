@@ -149,3 +149,25 @@
 - 可回滚的统一运行基础，不破坏现有需求审核与版本管理链。
 
 未完成的真实外部联调部分已如实记录；未编造成功结果，也未伪装为已部署/已开放生产能力。
+
+## 12. 本轮可靠性、工具与旧 Agent 迁移（进行中）
+
+已完成：
+- 助手循环在每次模型调用前后、每次工具调用前检查 `paused/cancelled`；最终状态仅在数据库仍为 `running` 时条件更新，避免旧协程覆盖暂停或取消。
+- 工具开始/结束事件在每次调用时立即写入运行事件，工具调用明细独立保存；模型/工具预算与总 deadline 产生明确 `incomplete` 结果。
+- Tavily MCP 的 `isError`、文本 JSON 解析失败和非对象 payload 都返回 `ToolResult.error`，不再伪装为 empty。
+- auto 意图中“查看新增需求有哪些”“删除功能有哪些需求”为查询；“删除 REQ-1”为受控操作请求。
+- 助手只使用同会话最近 8 条 user/assistant 历史，忽略 artifacts/tool payload。
+- 新增 `tools/requirements` 中的 `extract_requirement`、`analyze_requirement_relation`、`assess_requirement_risk`，包装保留的 ExtractAgent、AnalyzeAgent、RiskAgent；分析图经统一 invoker 调用。关系分析继续保留现有证据/双闸门规则，风险结果包含降级信息。
+- 新增注册表驱动的 `docs/agent_tool_catalog.md` 及生成脚本；审批、落库、合并、删除、回退仍被注册表拒绝，消费者权限由 invoker 执行。
+
+仍未完成：
+- 三个入口尚未完全收敛为单一 `AgentExecutionService`：聊天助手已加强，旧 `/agent/run` 与 Worker 仍有兼容编排。
+- documents/memory 子包还没有已注册业务工具；旧需求查询工具继续保留顶层兼容模块，尚未物理移动。
+- 尚未实现独立 Proposal 持久化、hash/基础版本绑定审批；既有 ReviewService 流程未替换。
+
+本轮验证：
+- `.venv/bin/python -m pytest -q tests/unit/test_assistant_agent.py tests/unit/test_tavily_mcp.py`：15 passed。
+- `.venv/bin/python -m pytest -q tests/unit/test_assistant_agent.py tests/unit/test_tavily_mcp.py tests/unit/test_risk_skill_robustness.py tests/unit/test_extract_agent.py tests/unit/test_analyze_skill_consistency.py`：27 passed。
+- `.venv/bin/python -m py_compile ...`（本轮修改的助手、MCP、工具包装、工作流与目录生成脚本）：通过；`git diff --check`：通过。
+- `tests/integration/test_workflow_tool_wiring.py` 在本机数据库连接池已失效时失败（`psycopg.OperationalError: connection is bad`）；这不是通过结果，待使用隔离可用数据库重跑。

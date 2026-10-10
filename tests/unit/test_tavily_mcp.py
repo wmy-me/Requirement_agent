@@ -108,6 +108,16 @@ def test_read_web_page_rejects_unsafe_supplier_redirect(monkeypatch: pytest.Monk
     assert fake.calls == [("tavily-extract", {"urls": ["https://example.com/page"]})]
 
 
+@pytest.mark.parametrize("result", [
+    {"isError": True, "content": [{"type": "text", "text": "rate limited"}]},
+    {"content": [{"type": "text", "text": "not json"}]},
+])
+def test_mcp_errors_and_unparseable_payloads_are_not_empty(monkeypatch: pytest.MonkeyPatch, result: dict[str, Any]) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    value = WebSearchTool(_adapter(FakeMCPTransport(result=result))).run({"query": "roadmap"})
+    assert value.status is ToolStatus.ERROR
+
+
 @pytest.mark.parametrize(
     "endpoint",
     ["http://mcp.tavily.com/mcp/", "https://localhost/mcp/", "https://mcp.tavily.com/other"],

@@ -445,6 +445,32 @@ class ChatRepository:
             session.commit()
         return self._normalize_run_row(row) if row else None
 
+    def complete_run_if_running(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        error: str | None = None,
+        meta: dict[str, object] | None = None,
+        stage: str = "done",
+        checkpoint: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        """Finish only a running run; never resurrect a paused/cancelled run."""
+        sets = ["status = :status", "error = :error", "meta = CAST(:meta AS JSONB)", "stage = :stage", "updated_at = NOW()"]
+        values: dict[str, object] = {"run_id": run_id, "status": status, "error": error, "meta": json.dumps(meta or {}), "stage": stage}
+        if checkpoint is not None:
+            sets.append("checkpoint = CAST(:checkpoint AS JSONB)")
+            values["checkpoint"] = json.dumps(checkpoint)
+        with SessionLocal() as session:
+            row = session.execute(text(f"""
+                UPDATE agent_run SET {", ".join(sets)}
+                WHERE run_id = CAST(:run_id AS UUID) AND status = 'running'
+                RETURNING id, run_id, conversation_id, client_message_id, status, error, meta,
+                          stage, checkpoint, created_at, updated_at
+            """), values).mappings().first()
+            session.commit()
+        return self._normalize_run_row(row) if row else None
+
     def get_run(self, run_id: str) -> dict[str, object] | None:
         """按 run_id 取 run；不存在返回 None。"""
         with SessionLocal() as session:

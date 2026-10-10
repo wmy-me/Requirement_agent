@@ -37,6 +37,8 @@ class TavilyToolAdapter:
         if isinstance(raw, ToolResult):
             return raw
         rows = _rows(raw)
+        if isinstance(rows, ToolResult):
+            return rows
         normalized = [_search_row(row) for row in rows[:requested_limit]]
         if not normalized:
             return ToolResult.empty("Tavily search completed but returned no results")
@@ -51,6 +53,8 @@ class TavilyToolAdapter:
         if isinstance(raw, ToolResult):
             return raw
         rows = _rows(raw)
+        if isinstance(rows, ToolResult):
+            return rows
         if not rows:
             return ToolResult.empty("Tavily extract completed but returned no page content")
         row = _page_row(rows[0], requested_url=safe_url, resolver=self._resolver)
@@ -71,8 +75,10 @@ def make_default_tavily_adapter() -> TavilyToolAdapter:
     return TavilyToolAdapter(MCPClientManager(config), config)
 
 
-def _rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows(raw: dict[str, Any]) -> list[dict[str, Any]] | ToolResult:
     payload = _content_payload(raw)
+    if isinstance(payload, ToolResult):
+        return payload
     results = payload.get("results") if isinstance(payload, dict) else None
     if isinstance(results, list):
         return [row for row in results if isinstance(row, dict)]
@@ -81,9 +87,9 @@ def _rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _content_payload(raw: dict[str, Any]) -> dict[str, Any]:
+def _content_payload(raw: dict[str, Any]) -> dict[str, Any] | ToolResult:
     if raw.get("isError"):
-        return {}
+        return ToolResult.error(_mcp_error_message(raw, "Tavily MCP returned an error"))
     if isinstance(raw.get("structuredContent"), dict):
         return raw["structuredContent"]
     if isinstance(raw.get("results"), list):
@@ -99,8 +105,17 @@ def _content_payload(raw: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return ToolResult.error("Tavily MCP returned unparseable text content")
+    return parsed if isinstance(parsed, dict) else ToolResult.error("Tavily MCP returned an unsupported payload")
+
+
+def _mcp_error_message(raw: dict[str, Any], fallback: str) -> str:
+    content = raw.get("content")
+    if isinstance(content, list):
+        text = " ".join(str(item.get("text") or "") for item in content if isinstance(item, dict)).strip()
+        if text:
+            return text[:500]
+    return str(raw.get("message") or raw.get("error") or fallback)[:500]
 
 
 def _search_row(row: dict[str, Any]) -> dict[str, Any]:

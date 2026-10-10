@@ -22,7 +22,7 @@ AssistantIntent = Literal[
 ]
 
 _CASUAL = ("你好", "您好", "你是谁", "你能做什么", "在吗", "hi", "hello", "谢谢", "感谢")
-_QUERY = ("哪些需求", "有哪些需求", "查询", "查一下", "是什么", "详情", "版本", "对比", "改了什么")
+_QUERY = ("哪些需求", "有哪些需求", "有哪些", "查看", "查询", "查一下", "是什么", "详情", "版本", "对比", "改了什么")
 _RESEARCH = ("搜索网页", "联网查询", "网上查", "调研", "最新消息", "外部资料")
 _DRAFT = ("整理提案", "整理成需求", "提交需求", "创建需求", "新增", "新需求")
 _CHANGE = ("修改需求", "变更需求", "更新需求", "改需求")
@@ -54,13 +54,15 @@ class IntentService:
         if mode == "draft_requirement":
             intent: AssistantIntent = "change_requirement" if _REQ_KEY.search(text) or any(word in text for word in _CHANGE) else "new_requirement"
             return IntentDecision(intent, mode, "用户明确选择需求草稿模式；仍需人工审批后才能正式写入。")
-        if any(word in text for word in _OPERATIONS):
-            return IntentDecision("operation_request", mode, "正式操作不会作为模型工具执行。")
+        # "删除功能有哪些需求" is a library query; an operation is only
+        # requested when a concrete requirement identity is the target.
+        if any(word in text for word in _OPERATIONS) and _REQ_KEY.search(text):
+            return IntentDecision("operation_request", mode, "针对具体需求的正式操作不会作为模型工具执行。")
         if any(word in text for word in _RESEARCH):
             return IntentDecision("external_research", mode, "用户要求外部调研。")
         if any(word in text for word in _CHANGE):
             return IntentDecision("change_requirement", mode, "消息明确要求修改已有需求。")
-        if any(word in text for word in _DRAFT):
+        if any(word in text for word in _DRAFT) and not any(word in text for word in _QUERY):
             return IntentDecision("new_requirement", mode, "消息明确要求整理或提交新的需求提案。")
         if any(word in lower for word in _CASUAL) and len(text) <= 40:
             return IntentDecision("casual", mode, "短消息是普通交流。")

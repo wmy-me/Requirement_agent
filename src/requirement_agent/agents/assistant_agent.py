@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
 from requirement_agent.infrastructure.llm.openai_provider import ChatCompletion, LLMProvider, ToolCall
@@ -76,7 +77,15 @@ class RequirementAssistantAgent:
         self.max_tool_calls = max_tool_calls
         self.deadline_seconds = deadline_seconds
 
-    def answer(self, question: str, *, allow_external: bool = False) -> AssistantResult:
+    def answer(
+        self,
+        question: str,
+        *,
+        allow_external: bool = False,
+        history: list[dict[str, object]] | None = None,
+        should_stop: Callable[[], str | None] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> AssistantResult:
         """Execute at most the configured model/tool budget and return public output."""
         available_tools = [
             schema for schema in llm_schemas("assistant")
@@ -84,14 +93,24 @@ class RequirementAssistantAgent:
         ]
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": question},
         ]
+        # History is conversation-scoped by the repository caller.  Keep only
+        # normal chat messages and a small tail: artifacts/tool payloads may
+        # contain stale, unauthorized or very large data.
+        for item in (history or [])[-8:]:
+            role, content = item.get("role"), item.get("content")
+            if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
+                messages.append({"role": role, "content": content[:2_000]})
+        messages.append({"role": "user", "content": question})
         started = time.monotonic()
         calls: list[dict[str, Any]] = []
         evidence: list[Evidence] = []
         events: list[dict[str, Any]] = []
         tool_count = 0
         for _turn in range(self.max_model_turns):
+            stopped = should_stop() if should_stop else None
+            if stopped:
+                return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
             if time.monotonic() - started > self.deadline_seconds:
                 return AssistantResult(
                     "本次查询达到服务端时限，结果不完整。",
@@ -112,13 +131,32 @@ class RequirementAssistantAgent:
                     events,
                     "model_unavailable",
                 )
+            # A synchronous provider cannot be force-killed safely, but its
+            # elapsed time and a concurrent cancellation are checked before
+            # accepting its response or starting another tool call.
+            stopped = should_stop() if should_stop else None
+            if stopped:
+                return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+            if time.monotonic() - started > self.deadline_seconds:
+                return AssistantResult("本次查询达到服务端时限，结果不完整。", "incomplete", calls, evidence, events, "deadline_exceeded")
             if not completion.tool_calls:
                 content = completion.content.strip()
                 if not content:
                     return AssistantResult("模型未返回可展示的回答。", "failed", calls, evidence, events, "empty_model_response")
+                invalid_citations = self._invalid_citations(content, evidence)
+                if invalid_citations:
+                    return AssistantResult(
+                        "回答包含未在本轮工具结果中验证的引用，结果不完整。",
+                        "incomplete", calls, evidence, events, "invalid_citation:" + ",".join(invalid_citations),
+                    )
                 return AssistantResult(content, "completed", calls, evidence, events)
             messages.append(self._assistant_message(completion))
             for call in completion.tool_calls:
+                stopped = should_stop() if should_stop else None
+                if stopped:
+                    return AssistantResult("本次查询已暂停或取消。", stopped, calls, evidence, events, stopped)
+                if time.monotonic() - started > self.deadline_seconds:
+                    return AssistantResult("本次查询达到服务端时限，结果不完整。", "incomplete", calls, evidence, events, "deadline_exceeded")
                 tool_count += 1
                 if tool_count > self.max_tool_calls:
                     return AssistantResult(
@@ -129,20 +167,18 @@ class RequirementAssistantAgent:
                         events,
                         "tool_budget_exceeded",
                     )
+                started_event = {"event_type": "tool_started", "node": "assistant", "payload": {"tool": call.name, "tool_call_id": call.id}}
+                events.append(started_event)
+                if on_event:
+                    on_event(started_event)
                 result, raw_params = self._invoke(call, allow_external)
                 record = tool_call_record(call.name, raw_params, result)
                 record["tool_call_id"] = call.id
                 calls.append(record)
-                events.extend(
-                    [
-                        {"event_type": "tool_started", "node": "assistant", "payload": {"tool": call.name}},
-                        {
-                            "event_type": "tool_completed",
-                            "node": "assistant",
-                            "payload": {"tool": call.name, "status": result.status.value},
-                        },
-                    ]
-                )
+                completed_event = {"event_type": "tool_completed", "node": "assistant", "payload": {"tool": call.name, "tool_call_id": call.id, "status": result.status.value}}
+                events.append(completed_event)
+                if on_event:
+                    on_event(completed_event)
                 evidence.extend(self._evidence_for(call.name, result.result, len(evidence)))
                 messages.append(
                     {
@@ -194,7 +230,9 @@ class RequirementAssistantAgent:
     @staticmethod
     def _evidence_for(name: str, result: object, offset: int) -> list[Evidence]:
         """Create stable per-run evidence identifiers from returned, authorized tool data."""
-        rows = result if isinstance(result, list) else [result]
+        # Paginated internal tools conventionally return {items, total, ...};
+        # evidence must be emitted for the actual rows rather than the envelope.
+        rows = result.get("items", []) if isinstance(result, dict) and isinstance(result.get("items"), list) else (result if isinstance(result, list) else [result])
         evidence: list[Evidence] = []
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -218,3 +256,9 @@ class RequirementAssistantAgent:
                 )
             )
         return evidence
+
+    @staticmethod
+    def _invalid_citations(content: str, evidence: list[Evidence]) -> list[str]:
+        cited = set(re.findall(r"\[(E\d+)\]", content))
+        available = {item.evidence_id for item in evidence}
+        return sorted(cited - available)

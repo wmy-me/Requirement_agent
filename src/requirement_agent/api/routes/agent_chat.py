@@ -579,11 +579,22 @@ async def _stream_library_assistant(
     yield _sse("session", {"session_id": session_id, "run_id": run_id, "intent": intent})
     yield _tracked_sse(run_id, "step", {"step": "assistant", "label": "正在查询需求库…"}, node="assistant")
     try:
+        def _stop_status() -> str | None:
+            current = chat_repo.get_run(run_id)
+            value = str(current.get("status")) if current else "cancelled"
+            return value if value in {"paused", "cancelled"} else None
+
+        def _persist_event(event: dict[str, object]) -> None:
+            # This callback is invoked between tool calls, so event persistence
+            # does not wait for the whole ReAct loop to finish.
+            run_tracking.record_one(run_id, event)
+
         with bind_run_id(run_id):
             result = await run_in_threadpool(
-                RequirementAssistantAgent().answer, message, allow_external=allow_external
+                RequirementAssistantAgent().answer, message, allow_external=allow_external,
+                history=history, should_stop=_stop_status, on_event=_persist_event,
             )
-        run_tracking.record_events(run_id, result.events)
+        # Tool events have already been appended one by one by _persist_event.
         run_tracking.record_tool_calls(run_id, result.tool_calls)
         for event in result.events:
             if event["event_type"] == "tool_started":
@@ -608,14 +619,21 @@ async def _stream_library_assistant(
         ])
         # Budget exhaustion is a completed, explicitly incomplete response; it is
         # not a failed query and must remain replayable like any other final answer.
+        if result.status in {"paused", "cancelled"}:
+            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": result.status}, node="assistant")
+            return
         final_status = "failed" if result.status == "failed" else "completed"
-        chat_repo.update_run(
+        finished = chat_repo.complete_run_if_running(
             run_id=run_id, status=final_status,
             error=result.incomplete_reason if final_status == "failed" else None,
             meta={"conversation_id": session_id, "assistant_message_id": assistant["id"], "intent": intent},
             stage="done",
             checkpoint={"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources()},
         )
+        if finished is None:
+            # A concurrent pause/cancel wins. Do not expose a stale completion.
+            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
+            return
         yield _sse("artifacts", {"artifacts": artifacts})
         yield _sse("narrative", {"start": True})
         for index in range(0, len(result.content), 10):
@@ -1030,8 +1048,12 @@ async def _stream_chat_pipeline(
             if not content: content = _fallback_narrative(pipeline)
         assistant = chat_repo.append_assistant_message(conversation_id=session_id, content=content, artifacts=pipeline, run_id=run_id)
         history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-        chat_repo.update_run(run_id=run_id, status="completed", stage="done",
-                             meta={"conversation_id": session_id, "assistant_message_id": assistant["id"]}, checkpoint=pack_checkpoint(state))
+        finished = chat_repo.complete_run_if_running(
+            run_id=run_id, status="completed", stage="done",
+            meta={"conversation_id": session_id, "assistant_message_id": assistant["id"]}, checkpoint=pack_checkpoint(state),
+        )
+        if finished is None:
+            raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
         yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
     except RunStopped as stopped:
         yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": stopped.status}, node=stopped.status)
