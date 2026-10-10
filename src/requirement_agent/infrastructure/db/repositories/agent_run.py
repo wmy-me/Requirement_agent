@@ -176,6 +176,24 @@ class AgentRunRepository:
             session.commit()
         return result.rowcount == 1
 
+    def append_events_if_owned(self, run_id: str, token: str, events: list[dict[str, object]]) -> list[dict[str, object]]:
+        if not events:
+            return []
+        with SessionLocal() as session:
+            owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"), {"r": run_id, "t": token}).first()
+            if not owned:
+                session.rollback()
+                return []
+            return self._append_events_in_session(session, run_id, events)
+
+    def record_tool_invocations_if_owned(self, run_id: str, token: str, records: list[dict[str, object]]) -> int:
+        # Ownership is checked before delegating to the established serializer.
+        with SessionLocal() as session:
+            owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID)"), {"r": run_id, "t": token}).first()
+            if not owned:
+                return 0
+        return self.record_tool_invocations(run_id, records)
+
     def finish_if_running(self, run_id: str, *, token: str, status: str, error: str | None = None, current_node: str | None = None) -> bool:
         """Write a terminal outcome only while this executor still owns running.
 
@@ -189,6 +207,18 @@ class AgentRunRepository:
                     ended_at = NOW(), updated_at = NOW()
                 WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)
             """), {"r": run_id, "token": token, "status": status, "error": error, "node": current_node})
+            session.commit()
+        return result.rowcount == 1
+
+    def finish_with_event_if_owned(self, run_id: str, token: str, *, status: str, event: dict[str, object], error: str | None = None, current_node: str | None = None) -> bool:
+        """Append final event and change status in one transaction under token ownership."""
+        with SessionLocal() as session:
+            owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"), {"r": run_id, "t": token}).first()
+            if not owned:
+                session.rollback()
+                return False
+            self._append_events_in_session(session, run_id, [event], commit=False)
+            result = session.execute(text("UPDATE agent_run SET status=:status, error=:error, current_node=COALESCE(:node,current_node), ended_at=NOW(), updated_at=NOW() WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID)"), {"r": run_id, "t": token, "status": status, "error": error, "node": current_node})
             session.commit()
         return result.rowcount == 1
 
@@ -362,6 +392,19 @@ class AgentRunRepository:
                     },
                 ).mappings().one()
                 rows.append(dict(saved))
+            session.commit()
+        return rows
+
+    def _append_events_in_session(self, session: object, run_id: str, events: list[dict[str, object]], *, commit: bool = True) -> list[dict[str, object]]:
+        """Internal append used after an ownership row lock is held."""
+        start = session.execute(text("SELECT COALESCE(MAX(sequence), 0) FROM agent_run_event WHERE run_id=CAST(:r AS UUID)"), {"r": run_id}).scalar() or 0
+        rows: list[dict[str, object]] = []
+        for offset, event in enumerate(events, start=1):
+            saved = session.execute(text("""INSERT INTO agent_run_event (id,run_id,sequence,event_type,node,payload)
+                VALUES (:id,CAST(:run_id AS UUID),:sequence,:event_type,:node,CAST(:payload AS JSONB))
+                RETURNING id,run_id,sequence,event_type,node,payload,created_at"""), {"id": new_id(), "run_id": run_id, "sequence": int(start)+offset, "event_type": str(event.get("event_type") or ""), "node": event.get("node"), "payload": json.dumps(redact_payload(event.get("payload")), ensure_ascii=False)}).mappings().one()
+            rows.append(dict(saved))
+        if commit:
             session.commit()
         return rows
 

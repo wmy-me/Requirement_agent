@@ -27,18 +27,24 @@ class AgentExecutionService:
     def checkpoint(self, run_id: str, token: str, state: dict[str, Any], events: list[dict[str, Any]] | None = None) -> bool:
         # Reuse the event repository's ordered append; checkpoint persistence is
         # intentionally explicit so callers cannot accidentally reset budgets.
-        if events:
-            self.repo.append_events(run_id, events)
+        if events and not self.repo.append_events_if_owned(run_id, token, events):
+            return False
         return self.repo.checkpoint_if_owned(run_id, token, state)
+
+    def events(self, run_id: str, token: str, events: list[dict[str, Any]]) -> bool:
+        return bool(self.repo.append_events_if_owned(run_id, token, events))
+
+    def tool_calls(self, run_id: str, token: str, records: list[dict[str, Any]]) -> bool:
+        return bool(self.repo.record_tool_invocations_if_owned(run_id, token, records)) or not records
 
     def heartbeat(self, run_id: str, token: str) -> bool:
         return self.repo.heartbeat(run_id, token)
 
     def complete(self, run_id: str, token: str, *, current_node: str | None = None) -> bool:
-        return self.repo.finish_if_running(run_id, token=token, status="completed", current_node=current_node)
+        return self.repo.finish_with_event_if_owned(run_id, token, status="completed", current_node=current_node, event={"event_type": "run_completed", "node": current_node, "payload": {}})
 
     def fail(self, run_id: str, token: str, error: BaseException, *, current_node: str | None = None) -> bool:
-        return self.repo.finish_if_running(run_id, token=token, status="failed", error=str(error), current_node=current_node)
+        return self.repo.finish_with_event_if_owned(run_id, token, status="failed", error=str(error), current_node=current_node, event={"event_type": "run_failed", "node": current_node, "payload": {"error": str(error)}})
 
 
 __all__ = ["AgentExecutionService"]

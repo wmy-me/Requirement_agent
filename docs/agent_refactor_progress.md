@@ -205,3 +205,13 @@
 
 未完成：
 - 聊天和 Worker 接入 token/租约执行服务；实时 SSE 订阅、后台任务解耦、逐回合 ReAct 完整恢复状态、稳定 evidence locator 与恢复后引用闭环。
+
+## 15. 所有权写入审计（进行中）
+
+已完成：
+- `/agent/run` 的 started、普通运行事件、工具调用、checkpoint、completed/failed 已改经 `AgentExecutionService` 的 token 写入接口；旧 token 不能继续追加事件、工具调用或 checkpoint。
+- completed/failed 状态和对应最终事件改为同一数据库事务；仅成功取得 token 所有权时返回成功。
+
+未完成：
+- ChatRepository/聊天流、RunTracking/Worker 仍有无 token 写路径，尚未迁移；因此三个入口所有权闭环和实时 heartbeat/异步后台执行尚未完成。
+- 追加的 token 写入路径仅完成静态编译检查；隔离库认证仍阻断该轮真实竞态测试，不能计为通过。
