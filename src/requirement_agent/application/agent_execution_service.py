@@ -83,12 +83,22 @@ class AgentExecutionService:
     def claim(self, run_id: str) -> dict[str, object] | None:
         return self.repo.claim_run(run_id, lease_seconds=max(1, int(self.lease_seconds)))
 
-    def checkpoint(self, run_id: str, token: str, state: dict[str, Any], events: list[dict[str, Any]] | None = None) -> bool:
+    def checkpoint(self, run_id: str, token: str, state: dict[str, Any], events: list[dict[str, Any]] | None = None, *, stage: str | None = None) -> bool:
         # Reuse the event repository's ordered append; checkpoint persistence is
         # intentionally explicit so callers cannot accidentally reset budgets.
         if events and not self.repo.append_events_if_owned(run_id, token, events):
             return False
-        return self.repo.checkpoint_if_owned(run_id, token, state)
+        return self.repo.checkpoint_if_owned(run_id, token, state, stage=stage)
+
+    def complete_chat_message(
+        self, run_id: str, token: str, *, content: str, artifacts: dict[str, Any],
+        checkpoint: dict[str, Any], meta: dict[str, Any], current_node: str = "assistant", status: str = "completed",
+    ) -> dict[str, object] | None:
+        """Commit the assistant message and completion under one ownership lock."""
+        return self.repo.append_assistant_and_finish_if_owned(
+            run_id, token, content=content, artifacts=artifacts, status=status,
+            checkpoint=checkpoint, meta=meta, current_node=current_node,
+        )
 
     def events(self, run_id: str, token: str, events: list[dict[str, Any]]) -> bool:
         saved = self.repo.append_events_if_owned(run_id, token, events)

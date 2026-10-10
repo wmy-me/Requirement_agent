@@ -156,6 +156,8 @@ class RequirementService:
                     source_text=standardized_text,
                     source_type=saved_source.source_type,
                     requester_name=saved_source.requester_name,
+                    execution_guard=self.run_tracking.execution_guard(run_id),
+                    deadline_monotonic=self.run_tracking.deadline_monotonic(run_id),
                 )
         except Exception as exc:
             # **失败要能定位到节点** —— 节点名由 `event_nodes.NodeFailure` 带出来
@@ -168,6 +170,10 @@ class RequirementService:
         # 「分析→审核」跨进程传递用的，而这张表是给「按 run 反查」用的，两者不互相替代。
         self.run_tracking.record_events(run_id, list(result.get("run_events") or []))
         self.run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
+        # A lease can be lost while the last synchronous node is returning.
+        # Do not advance the tracked execution (or publish its result) then.
+        if not self.run_tracking.execution_guard(run_id)():
+            raise RuntimeError("analysis execution ownership lost before finish")
         self.run_tracking.finish(run_id)
 
         extracted = dict(result.get("extracted") or {})

@@ -195,12 +195,50 @@ class AgentRunRepository:
             session.commit()
         return row is not None
 
-    def checkpoint_if_owned(self, run_id: str, token: str, checkpoint: dict[str, object]) -> bool:
+    def checkpoint_if_owned(self, run_id: str, token: str, checkpoint: dict[str, object], *, stage: str | None = None) -> bool:
         with SessionLocal() as session:
-            result = session.execute(text("""UPDATE agent_run SET checkpoint = CAST(:checkpoint AS JSONB), updated_at = NOW()
-                WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)"""), {"r": run_id, "token": token, "checkpoint": json.dumps(checkpoint)})
+            result = session.execute(text("""UPDATE agent_run SET checkpoint = CAST(:checkpoint AS JSONB),
+                stage = COALESCE(:stage, stage), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)"""), {"r": run_id, "token": token, "checkpoint": json.dumps(checkpoint), "stage": stage})
             session.commit()
         return result.rowcount == 1
+
+    def append_assistant_and_finish_if_owned(
+        self, run_id: str, token: str, *, content: str, artifacts: dict[str, object],
+        status: str, checkpoint: dict[str, object], meta: dict[str, object], current_node: str | None = None,
+    ) -> dict[str, object] | None:
+        """Atomically persist the chat answer and its token-fenced final state."""
+        with SessionLocal() as session:
+            run = session.execute(text("""SELECT conversation_id FROM agent_run
+                WHERE run_id=CAST(:r AS UUID) AND status='running'
+                  AND execution_token=CAST(:t AS UUID) FOR UPDATE"""), {"r": run_id, "t": token}).mappings().first()
+            if not run:
+                session.rollback()
+                return None
+            row = session.execute(text("""INSERT INTO agent_message
+                (id, conversation_id, role, content, artifacts, run_id, meta)
+                VALUES (:id, :conversation_id, 'assistant', :content, CAST(:artifacts AS JSONB),
+                        CAST(:run_id AS UUID), CAST(:message_meta AS JSONB))
+                RETURNING id, conversation_id, role, content, artifacts, client_message_id, run_id, meta, created_at"""), {
+                    "id": new_id(), "conversation_id": run["conversation_id"], "content": content,
+                    "artifacts": json.dumps(artifacts, ensure_ascii=False), "run_id": run_id,
+                    "message_meta": json.dumps({"source": "agent"}),
+                }).mappings().one()
+            final_meta = {**meta, "assistant_message_id": str(row["id"])}
+            updated = session.execute(text("""UPDATE agent_run SET status=:status,
+                checkpoint=CAST(:checkpoint AS JSONB), meta=CAST(:meta AS JSONB),
+                current_node=COALESCE(:node,current_node), ended_at=NOW(), updated_at=NOW()
+                WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID)"""), {
+                    "status": status, "checkpoint": json.dumps(checkpoint, ensure_ascii=False),
+                    "meta": json.dumps(final_meta, ensure_ascii=False), "node": current_node,
+                    "r": run_id, "t": token,
+                })
+            if updated.rowcount != 1:
+                session.rollback()
+                return None
+            self._append_events_in_session(session, run_id, [{"event_type": "run_completed", "node": current_node, "payload": {"status": status}}], commit=False)
+            session.commit()
+        return {"id": to_sid(row["id"]), "conversation_id": str(row["conversation_id"]), "role": row["role"], "content": row["content"], "artifacts": dict(row["artifacts"] or {}), "run_id": str(row["run_id"]), "meta": dict(row["meta"] or {})}
 
     def append_events_if_owned(self, run_id: str, token: str, events: list[dict[str, object]]) -> list[dict[str, object]]:
         with SessionLocal() as session:

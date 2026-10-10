@@ -26,12 +26,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from requirement_agent.domain.agent_run import RunEvent
 from requirement_agent.infrastructure.db.repositories import AgentRunRepository
 from requirement_agent.application.agent_execution_service import AgentExecutionService, ExecutionHeartbeat
+from requirement_agent.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,12 @@ class RunTracking:
         这件事在事件流里是**可见的**（只有 `run_started` 就没了），
         而不是一个空 run 让人猜。
         """
-        created = self._guard("start_analysis", lambda: self.execution.start(task_type="analysis", source_id=source_id, meta=meta))
+        # Store an absolute deadline, never a fresh duration.  A retry/reclaim
+        # therefore cannot silently buy a second full analysis budget.
+        values = {**(meta or {})}
+        values.setdefault("budget_seconds", settings.agent_analysis_budget_seconds)
+        values.setdefault("deadline_at_epoch", time.time() + settings.agent_analysis_budget_seconds)
+        created = self._guard("start_analysis", lambda: self.execution.start(task_type="analysis", source_id=source_id, meta=values))
         if not created:
             return None
         run_id = str(created["run_id"])
@@ -71,6 +78,23 @@ class RunTracking:
         self._heartbeats[run_id] = self.execution.heartbeat_loop(run_id, self._tokens[run_id])
         self.record_events(run_id, [RunEvent("run_started", payload={"source_id": source_id})])
         return run_id
+
+    def execution_guard(self, run_id: str | None) -> Callable[[], bool]:
+        """Return the worker's cooperative ownership fence.
+
+        It checks both the lease thread and the database token.  It does not
+        claim to interrupt a call that is already inside a provider.
+        """
+        token = self._tokens.get(run_id or "")
+        heartbeat = self._heartbeats.get(run_id or "")
+        return lambda: bool(run_id and token and not (heartbeat and heartbeat.lost) and self.execution.owns(run_id, token))
+
+    def deadline_monotonic(self, run_id: str | None) -> float | None:
+        if not run_id:
+            return None
+        row = self.repo.get_run(run_id)
+        deadline = float((row or {}).get("meta", {}).get("deadline_at_epoch") or 0)
+        return time.monotonic() + max(0.0, deadline - time.time()) if deadline else None
 
     def record_events(self, run_id: str | None, events: list[Any]) -> None:
         """落一批事件。入参是 `RunEvent` 或已经是 dict 的形态。"""

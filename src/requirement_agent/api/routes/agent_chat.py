@@ -645,9 +645,6 @@ async def _stream_library_assistant(
         if not execution.owns(run_id, token):
             yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
             return
-        assistant = chat_repo.append_assistant_message(
-            conversation_id=session_id, content=result.content, artifacts=artifacts, run_id=run_id,
-        )
         history.extend([
             {"role": "user", "content": message, "client_message_id": client_message_id},
             {"role": "assistant", "content": result.content, "artifacts": artifacts},
@@ -659,12 +656,18 @@ async def _stream_library_assistant(
             return
         final_status = "failed" if result.status == "failed" else "completed"
         checkpoint = {"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources(), "execution_position": "done"}
-        if not execution.checkpoint(run_id, token, checkpoint):
-            # A concurrent pause/cancel wins. Do not expose a stale completion.
-            yield _tracked_sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
-            return
-        finished = execution.fail(run_id, token, RuntimeError(result.incomplete_reason or result.content), current_node="assistant") if final_status == "failed" else execution.complete(run_id, token, current_node="assistant")
+        if final_status == "completed":
+            assistant = execution.complete_chat_message(
+                run_id, token, content=result.content, artifacts=artifacts, checkpoint=checkpoint,
+                meta={"conversation_id": session_id}, current_node="assistant",
+            )
+            finished = assistant is not None
+        elif not execution.checkpoint(run_id, token, checkpoint, stage="done"):
+            finished = False
+        else:
+            finished = execution.fail(run_id, token, RuntimeError(result.incomplete_reason or result.content), current_node="assistant")
         if not finished:
+            # A concurrent pause/cancel wins. Do not expose a stale completion.
             yield _tracked_sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
             return
         yield _sse("artifacts", {"artifacts": artifacts})
@@ -1005,11 +1008,17 @@ async def _stream_chat_pipeline(
                                   client_message_id=client_message_id, meta=user_meta)
     try:
         run = chat_repo.create_run(conversation_id=session_id, client_message_id=client_message_id,
-                                   status="running", meta={"source_type": source_type, "requester_name": requester_name,
+                                   status="queued", meta={"source_type": source_type, "requester_name": requester_name,
                                                            "checkpoint_format": "dynamic-v1"})
     except ConversationBusyError:
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": ""}); return
     run_id = str(run["run_id"])
+    execution = AgentExecutionService()
+    claimed = execution.claim(run_id)
+    if claimed is None:
+        yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": run_id}); return
+    token = str(claimed["execution_token"])
+    heartbeat = execution.heartbeat_loop(run_id, token)
     # 补充消息创建了新的 run 后，旧澄清 run 不再是可继续任务；保留其 checkpoint 审计。
     if resume and resume.get("parent_run_id"):
         parent = chat_repo.get_run(str(resume["parent_run_id"]))
@@ -1026,13 +1035,16 @@ async def _stream_chat_pipeline(
         state["intent"] = None
 
     def persist(stage: str, status_value: str = "running") -> None:
-        current = chat_repo.get_run(run_id)
-        status_now = str(current.get("status") if current else "cancelled")
-        if status_now in {"paused", "cancelled"}:
-            raise RunStopped(status_now)
-        chat_repo.update_run(run_id=run_id, status=status_value, error=None,
-                             meta=(current or run).get("meta") or {}, stage=stage,
-                             checkpoint=pack_checkpoint(state))
+        # All active checkpoints are fenced by the claimed token.  Waiting
+        # states are finalized below, never written through ChatRepository.
+        if heartbeat.lost or not execution.owns(run_id, token):
+            current = chat_repo.get_run(run_id)
+            raise RunStopped(str((current or {}).get("status") or "cancelled"))
+        if status_value != "running" or not execution.checkpoint(
+            run_id, token, pack_checkpoint(state), stage=stage,
+        ):
+            current = chat_repo.get_run(run_id)
+            raise RunStopped(str((current or {}).get("status") or "cancelled"))
 
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
@@ -1060,10 +1072,13 @@ async def _stream_chat_pipeline(
         }
         if state.get("clarification_question"):
             content = str(state["clarification_question"])
-            chat_repo.append_assistant_message(conversation_id=session_id, content=content, artifacts=pipeline, run_id=run_id)
+            saved = execution.complete_chat_message(
+                run_id, token, content=content, artifacts=pipeline, checkpoint=pack_checkpoint(state),
+                meta={"conversation_id": session_id}, current_node="clarify", status="waiting_clarification",
+            )
+            if saved is None:
+                raise RunStopped("cancelled")
             history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-            chat_repo.update_run(run_id=run_id, status="waiting_clarification", stage="clarifying",
-                                 meta={"conversation_id": session_id}, checkpoint=pack_checkpoint(state))
             yield _sse("artifacts", {"artifacts": pipeline})
             yield _sse("narrative", {"start": True})
             for i in range(0, len(content), 10): yield _sse("narrative", {"t": content[i:i + 10]})
@@ -1072,32 +1087,31 @@ async def _stream_chat_pipeline(
         if state.get("answer"):
             content = ""
             yield _sse("artifacts", {"artifacts": pipeline}); yield _sse("narrative", {"start": True})
-            async for token in _answer_chunks(run_text, run_id=run_id):
-                content += token; yield _sse("narrative", {"t": token})
+            async for chunk in _answer_chunks(run_text, run_id=run_id):
+                content += chunk; yield _sse("narrative", {"t": chunk})
         else:
             with bind_run_id(run_id): memory_ctx = memory_context_builder.build_context(actor_id, run_text, limit=4)
             content = ""
             yield _sse("artifacts", {"artifacts": pipeline}); yield _sse("narrative", {"start": True})
-            async for token in _narrative_chunks(pipeline, memory_context=memory_ctx, run_id=run_id):
-                content += token; yield _sse("narrative", {"t": token})
+            async for chunk in _narrative_chunks(pipeline, memory_context=memory_ctx, run_id=run_id):
+                content += chunk; yield _sse("narrative", {"t": chunk})
             if not content: content = _fallback_narrative(pipeline)
-        assistant = chat_repo.append_assistant_message(conversation_id=session_id, content=content, artifacts=pipeline, run_id=run_id)
-        history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-        finished = chat_repo.complete_run_if_running(
-            run_id=run_id, status="completed", stage="done",
-            meta={"conversation_id": session_id, "assistant_message_id": assistant["id"]}, checkpoint=pack_checkpoint(state),
+        assistant = execution.complete_chat_message(
+            run_id, token, content=content, artifacts=pipeline, checkpoint=pack_checkpoint(state),
+            meta={"conversation_id": session_id}, current_node="narrating",
         )
-        if finished is None:
+        if assistant is None:
             raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
+        history.append({"role": "assistant", "content": content, "artifacts": pipeline})
         yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
     except RunStopped as stopped:
         yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": stopped.status}, node=stopped.status)
     except Exception as exc:
-        current = chat_repo.get_run(run_id)
-        if current and current["status"] == "running":
-            chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta=current["meta"], stage=current["stage"], checkpoint=current["checkpoint"])
+        execution.fail(run_id, token, exc, current_node="chat")
         yield _tracked_sse(run_id, "error", {"message": str(exc)})
         yield _tracked_sse(run_id, "done", {"run_id": run_id})
+    finally:
+        heartbeat.stop()
 
 
 async def _stream_resumed_run(run: dict[str, object]) -> AsyncIterator[str]:

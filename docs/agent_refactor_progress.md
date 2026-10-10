@@ -317,3 +317,15 @@
 未完成：
 - 动态聊天图、resume/clarification 等旧聊天兼容分支尚未逐一迁移到 token 生命周期；本批只迁移问答 ReAct 主路径，不能宣称所有聊天路径已统一。
 - 未进行真实 MCP/LLM 联调；SSE 仍由连接协程发送，不是后续批次的后台执行/断线回放实现。
+
+补充（本批聊天动态分支与 Worker 实际执行接入）：
+- `RequirementService` 现在将 `RunTracking` 的 token ownership guard 与已持久化的绝对 deadline 传给真实 `run_analysis` 调用；图节点边界失权或预算耗尽会停止后续模型/工具调用，最后一次返回后再次校验所有权才进入 `waiting_review`。Outbox 的原有幂等/审核提交路径未改变。
+- 动态需求聊天、澄清补充与 resume 创建的运行均会 claim token 并启动 heartbeat；每个节点 checkpoint 使用 token 条件更新。pause/cancel/接管赢得状态后，旧流不能再写 checkpoint 或完成。
+- assistant 问答与动态需求聊天的最终 assistant message 和 run 终态通过同一个 token 行锁事务写入；失权时既不会追加该消息，也不会把 run 伪装为完成。澄清结果以同一方式持久化为 `waiting_clarification`，保留已有暂停/恢复 API 形状。
+
+实际验证：
+- 独立 PostgreSQL 库运行 `PYTHONPATH=src /home/wangmengyang/Software/Requirement_agent/Requirement_agent/.venv/bin/python -m pytest -q tests/integration/test_dynamic_chat_checkpoint.py tests/integration/test_run_resume.py tests/integration/test_agent_run_tracking.py`：**20 passed**（含澄清后补充、resume、pause/cancel、Worker token tracking）。
+
+仍未完成：
+- 旧四阶段 `_stream_chat_pipeline_legacy` 仍使用 ChatRepository 兼容状态写入，未迁入 token 生命周期；它只服务历史 checkpoint 兼容，不能称为完全统一。
+- 本批没有实现逐回合消息/tool 原始结果恢复，也未将 SSE 与连接解耦；外部 LLM/MCP 未联调。
