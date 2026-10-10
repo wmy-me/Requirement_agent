@@ -77,3 +77,18 @@ export interface MergePreview {
   warnings: string[];
 }
 export type ReviewDecision = "approved" | "rejected" | "returned";
+
+/* ── 任务记录（F5）──────────────────────────────────────────────────────
+   `meta` 经 `stringify_run_meta` 出来，可能是对象也可能是字符串 —— 按两种都处理。
+   普通页面**不展示** execution_token / lease_expires_at（§4.7：普通视图不显示
+   租约字段），它们只在诊断需要时才有意义。 */
+export interface RunRow {
+  id: Id; run_id: string; conversation_id: string | null; source_id: Id | null;
+  run_type: string | null; client_message_id?: string | null; status: string; error: string | null;
+  meta: Record<string, unknown> | string | null; stage: string | null;
+  current_node: string | null; created_at: string | null; started_at: string | null;
+  ended_at: string | null; updated_at: string | null;
+}
+export interface RunEvent { id: string; run_id: string; sequence: number; event_type: string; node: string | null; payload: Record<string, unknown>; created_at: string | null; }
+export interface ToolInvocation { id: string; run_id: string; tool_name: string; arguments_summary: string | null; result_summary: string | null; status: string | null; elapsed_ms: number | null; error_message: string | null; created_at: string | null; }
+export interface RunInvocations { run_id: string; tools: ToolInvocation[]; models: unknown[]; }
