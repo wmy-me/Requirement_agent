@@ -850,6 +850,7 @@ class RequirementMasterRepository:
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_BUSINESS_DOMAIN}), NULL) AS business_domains,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT {_SOURCE_SENSITIVITY}), NULL) AS sensitivity_levels,
                            ARRAY_REMOVE(ARRAY_AGG(DISTINCT f.content), NULL) AS feature_contents,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT CASE WHEN f.status = 'active' THEN f.module_name END), NULL) AS module_names,
                            COUNT(DISTINCT CASE WHEN f.status = 'active' THEN f.id END) AS feature_count,
                            MIN(s.submitted_at) AS first_source_submitted_at,
                            MAX(s.submitted_at) AS latest_source_submitted_at
@@ -881,6 +882,7 @@ class RequirementMasterRepository:
                 "business_domains": list(row["business_domains"] or []),
                 "sensitivity_levels": list(row["sensitivity_levels"] or []),
                 "feature_contents": list(row["feature_contents"] or []),
+                "module_names": list(row["module_names"] or []),
                 "feature_count": int(row["feature_count"] or 0),
                 "first_source_submitted_at": as_display_iso(row["first_source_submitted_at"]),
                 "latest_source_submitted_at": as_display_iso(row["latest_source_submitted_at"]),

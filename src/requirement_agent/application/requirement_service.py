@@ -281,6 +281,10 @@ class RequirementService:
             "business_domain": domains[0] if domains else "general",
             "business_domains": domains,
             "current_version": item.get("current_version", 0),
+            # 真实模块归属：来自 active feature 的 `module_name`（migration 014），
+            # 不是从标题推断、也不是业务领域。没有模块标签的需求返回空数组，
+            # 前端据此显示「未提供」而不是拿 `business_domain` 冒充。
+            "module_names": list(item.get("module_names") or []),
             "feature_count": item.get("feature_count", 0),
             "requester_names": list(item.get("requester_names") or []),
             "source_types": list(item.get("source_types") or []),
