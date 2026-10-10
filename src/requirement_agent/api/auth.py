@@ -91,10 +91,11 @@ EXEMPT_PATTERNS: Final = (
 EXEMPT_PREFIXES: Final = (
     "/static",
     "/app/",  # 工作台页面本身要能打开（数据请求仍要 token）
+    "/app-next/",  # React 工作台页面和构建资产；API 请求仍附运行时 token
     "/api/v1/health",  # 探活：前端每 30 秒轮询，鉴权会让它变成噪声
 )
 EXEMPT_EXACT: Final = frozenset(
-    {"/", "/app", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
+    {"/", "/app", "/app-next", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
 )
 
 # ── 写路由 → 权限档次 ─────────────────────────────────────────────────────

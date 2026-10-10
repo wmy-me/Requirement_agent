@@ -1,4 +1,4 @@
-import type { ApiError, UnknownRecord } from "../contracts/api";
+import type { ApiError, ListResponse, UploadResult } from "../contracts/api";
 
 const token = (): string | undefined => document.querySelector<HTMLMetaElement>('meta[name="ra-ui-token"]')?.content || undefined;
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -14,4 +14,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return response.json() as Promise<T>;
 }
-export const items = <T>(response: UnknownRecord): T[] => Array.isArray(response.items) ? response.items as T[] : [];
+export const listItems = <T>(response: ListResponse<T>): T[] => response.items;
+export async function uploadDocument(file: File): Promise<UploadResult> {
+  const body = new FormData(); body.append("file", file, file.name);
+  return api<UploadResult>("/api/v1/documents/upload", { method: "POST", body });
+}

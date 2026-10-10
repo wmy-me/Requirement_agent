@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # 项目根目录：本文件位于 <root>/src/requirement_agent/api/app.py
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 STATIC_DIR = PROJECT_ROOT / "static"
+FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 
 # 不记请求日志的路径：静态资源、前端页面与探活。
 # 前端每 30 秒轮询两个 health 端点（`app.js` 的 loadStatus），不跳过会把日志刷满，
@@ -92,6 +93,11 @@ def create_app() -> FastAPI:
     )
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    # The React workbench is built separately from legacy /app.  Mount only its
+    # hashed assets; the catch-all below serves index.html for deep links and
+    # injects the runtime API credential in the same way as the legacy UI.
+    if FRONTEND_DIST_DIR.is_dir():
+        app.mount("/app-next/assets", StaticFiles(directory=str(FRONTEND_DIST_DIR / "assets")), name="app-next-assets")
 
     # 鉴权（B1）：**定义在最前面 = 最内层**，这样 401/403 也会被日志中间件记到、
     # 也会带上安全响应头。豁免路径见 `api/auth.py` 的 EXEMPT_*。
@@ -231,6 +237,19 @@ def create_app() -> FastAPI:
             return HTMLResponse(html.replace(marker, snippet))
         logger.warning("event=ui_token_marker_missing path=%s", path)
         return HTMLResponse(html.replace("</head>", snippet + "</head>", 1))
+
+    def _render_app_next() -> HTMLResponse:
+        index = FRONTEND_DIST_DIR / "index.html"
+        if not index.is_file():
+            raise HTTPException(status_code=503, detail="app-next frontend is not built")
+        return _render_page(index)
+
+    @app.get("/app-next", include_in_schema=False)
+    @app.get("/app-next/{path:path}", include_in_schema=False)
+    async def app_next_page(path: str = "") -> HTMLResponse:
+        # Assets are handled by the StaticFiles mount. All other paths are
+        # client-side routes and must survive direct refreshes.
+        return _render_app_next()
 
     @app.get("/app", include_in_schema=False)
     @app.get("/app/{page}", include_in_schema=False)
