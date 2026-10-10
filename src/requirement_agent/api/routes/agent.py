@@ -95,21 +95,36 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         # copy_context retains request/run context for the bounded worker.
         context = contextvars.copy_context()
         loop = asyncio.get_running_loop()
-        admitted = await loop.run_in_executor(
-            None, lambda: _ANALYSIS_SLOTS.acquire(timeout=remaining_budget)
-        )
+        admitted = False
+        while not admitted:
+            if not guard():
+                raise ExecutionStopped("agent run no longer owns execution")
+            remaining_budget = deadline_monotonic - time.monotonic()
+            if remaining_budget <= 0:
+                break
+            admitted = _ANALYSIS_SLOTS.acquire(blocking=False)
+            if not admitted:
+                await asyncio.sleep(min(0.02, remaining_budget))
         if not admitted:
             if not execution.incomplete(run_id, token, "analysis executor capacity or budget exhausted", current_node="execution"):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="agent run lost execution ownership")
             return {"status": "incomplete", "run_id": run_id, "reason": "executor_capacity"}
-        result = await loop.run_in_executor(
-            _ANALYSIS_EXECUTOR,
-            lambda: context.run(
-                _run_analysis_in_context,
-                run_id=run_id, source_text=payload.original_text, source_type=payload.source_type,
-                requester_name=payload.requester_name, guard=guard, deadline_monotonic=deadline_monotonic,
-            ),
-        )
+        try:
+            analysis_future = loop.run_in_executor(
+                _ANALYSIS_EXECUTOR,
+                lambda: context.run(
+                    _run_analysis_in_context,
+                    run_id=run_id, source_text=payload.original_text, source_type=payload.source_type,
+                    requester_name=payload.requester_name, guard=guard, deadline_monotonic=deadline_monotonic,
+                ),
+            )
+        except Exception:
+            _ANALYSIS_SLOTS.release()
+            raise
+        # Capacity follows the real future, even if this request coroutine is
+        # cancelled while the synchronous graph keeps running.
+        analysis_future.add_done_callback(lambda _: _ANALYSIS_SLOTS.release())
+        result = await analysis_future
     except AnalysisBudgetExhausted as exc:
         execution.incomplete(run_id, token, str(exc), current_node="analysis")
         return {"status": "incomplete", "run_id": run_id, "reason": "deadline_exceeded"}
@@ -120,8 +135,6 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         execution.fail(run_id, token, exc, current_node=getattr(exc, "node", None))
         raise
     finally:
-        if 'admitted' in locals() and admitted:
-            _ANALYSIS_SLOTS.release()
         heartbeat.stop()
 
     if not execution.events(run_id, token, list(result.get("run_events") or [])):

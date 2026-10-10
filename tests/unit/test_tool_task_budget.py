@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
+import threading
 
+import requirement_agent.tools.base as base_module
 from requirement_agent.tools.base import BaseTool, ToolInput, ToolResult, ToolStatus
 
 
@@ -32,3 +34,29 @@ def test_exhausted_task_budget_does_not_execute_tool() -> None:
     result = _SlowTool().run({"value": "x"}, timeout_seconds=0)
     assert result.status is ToolStatus.ERROR
     assert result.message == "任务预算已耗尽，未执行工具"
+
+
+def test_saturated_queue_consumes_same_deadline_and_never_runs_late(monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    class BlockingTool(_SlowTool):
+        def execute(self, params: _Input) -> ToolResult:
+            calls.append(params.value)
+            started.set()
+            release.wait(1)
+            return ToolResult.success({"value": params.value})
+
+    monkeypatch.setattr(base_module, "_TOOL_SLOTS", threading.BoundedSemaphore(1))
+    first = threading.Thread(target=lambda: BlockingTool().run({"value": "first"}, timeout_seconds=1))
+    first.start()
+    assert started.wait(0.2)
+    began = time.monotonic()
+    late = BlockingTool().run({"value": "late"}, timeout_seconds=0.04)
+    assert late.status is ToolStatus.ERROR
+    assert time.monotonic() - began < 0.12
+    release.set()
+    first.join(1)
+    # The rejected queued call never reaches execute after capacity returns.
+    assert calls == ["first"]

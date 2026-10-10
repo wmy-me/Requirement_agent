@@ -265,7 +265,8 @@ class BaseTool(ABC):
         # 更一般地说：**任何依赖 ContextVar 的横切机制在工具内都会失效**。
         #
         # 只读传播（父 → 子）。工具在子线程里新设的上下文不会回流 —— 我们只需要读。
-        if not _TOOL_SLOTS.acquire(timeout=timeout_seconds):
+        deadline = time.monotonic() + timeout_seconds
+        if not _TOOL_SLOTS.acquire(timeout=max(0.0, deadline - time.monotonic())):
             raise TimeoutError(f"{self.name}: executor capacity exhausted")
         context = contextvars.copy_context()
 
@@ -277,7 +278,11 @@ class BaseTool(ABC):
         future = _TOOL_EXECUTOR.submit(context.run, work)
         future.add_done_callback(lambda _: _TOOL_SLOTS.release())
         try:
-            return future.result(timeout=timeout_seconds)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                future.cancel()
+                raise TimeoutError(self.name)
+            return future.result(timeout=remaining)
         except FutureTimeoutError:
             # Do not call Future.cancel() as though it stopped a running call.
             # It only prevents a not-yet-started task and would obscure this

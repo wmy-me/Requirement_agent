@@ -297,3 +297,8 @@
 
 未完成：
 - 本轮尚未模拟真实 HTTP 重试耗尽总预算，也未对线程池饱和的多线程竞争作隔离数据库集成验证；下一批统一入口时应补齐。
+
+补充（队列 deadline 修复）：
+- 工具容量准入、排队及 Future 等待现在共享同一个绝对 monotonic deadline；成功准入后重新计算剩余时间，不会重新获得完整工具 timeout。
+- `/agent/run` 容量等待改为 async 协作轮询；请求协程取消不会遗留后台 acquire。分析容量在实际 Future 完成的回调中释放，而不是 HTTP 请求提前结束时释放；submit 失败会立即释放已取得容量。
+- `tests/unit/test_tool_task_budget.py` 的可控阻塞器覆盖队列饱和、准入耗尽同一预算、超时排队任务在容量后来后不执行：本轮 `tests/unit/test_tool_task_budget.py tests/unit/test_execution_boundary.py tests/unit/test_agent_run_nonblocking.py` 为 **6 passed**。
