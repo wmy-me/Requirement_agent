@@ -1,0 +1,1 @@
+export function Placeholder({title, description, action, href}: {title:string; description:string; action:string; href:string}) { return <section className="empty-page"><div><span className="eyebrow">需求助手</span><h1>{title}</h1><p>{description}</p><a className="button primary" href={href}>{action}</a></div></section>; }
