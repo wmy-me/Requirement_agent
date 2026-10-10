@@ -16,12 +16,15 @@ from requirement_agent.tools.invoker import (
     is_ok,
     tool_call_record,
 )
+from requirement_agent.application.execution_control import check_execution, remaining_seconds
 
 
 def extract_node(state: dict[str, Any]) -> dict[str, Any]:
     """抽取结构化需求，保留完整字段（领域/优先级/子需求/原文）供后续节点使用。"""
     params = {"text": state.get("source_text") or "", "source_type": state.get("source_type", "web"), "requester_name": state.get("requester_name")}
-    result = invoke("extract_requirement", params, consumer="analysis")
+    check_execution()
+    result = invoke("extract_requirement", params, consumer="analysis", remaining_seconds=remaining_seconds())
+    check_execution()
     if not is_ok(result):
         raise ToolInvocationError("extract_requirement", str(result.message or "unknown error"))
     return {"extracted": result.result, "tool_calls": [tool_call_record("extract_requirement", params, result)], "completed_steps": ["extract"]}
@@ -66,7 +69,9 @@ def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
     if mode == "hard" and source_type:
         params["channel"] = source_type
 
-    result = invoke("search_requirements", params, consumer="analysis")
+    check_execution()
+    result = invoke("search_requirements", params, consumer="analysis", remaining_seconds=remaining_seconds())
+    check_execution()
     record = tool_call_record("search_requirements", params, result)
 
     if not is_ok(result):
@@ -165,7 +170,9 @@ def analyze_node(state: dict[str, Any]) -> dict[str, Any]:
     extracted = _extracted_model(state)
     candidates = state.get("candidates") or []
     params = {"extracted": extracted.model_dump(mode="python"), "historical_requirements": candidates, "analysis_mode": state.get("analysis_mode", "strict")}
-    result = invoke("analyze_requirement_relation", params, consumer="analysis")
+    check_execution()
+    result = invoke("analyze_requirement_relation", params, consumer="analysis", remaining_seconds=remaining_seconds())
+    check_execution()
     if not is_ok(result):
         raise ToolInvocationError("analyze_requirement_relation", str(result.message or "unknown error"))
     return {"analysis": result.result, "tool_calls": [tool_call_record("analyze_requirement_relation", params, result)], "completed_steps": ["analyze"]}
@@ -175,7 +182,9 @@ def risk_node(state: dict[str, Any]) -> dict[str, Any]:
     """评估质量/变更/技术影响风险（恒在决策前执行）。"""
     extracted = _extracted_model(state)
     params = {"extracted": extracted.model_dump(mode="python")}
-    result = invoke("assess_requirement_risk", params, consumer="analysis")
+    check_execution()
+    result = invoke("assess_requirement_risk", params, consumer="analysis", remaining_seconds=remaining_seconds())
+    check_execution()
     if not is_ok(result):
         raise ToolInvocationError("assess_requirement_risk", str(result.message or "unknown error"))
     return {"risk": result.result, "tool_calls": [tool_call_record("assess_requirement_risk", params, result)], "completed_steps": ["risk"]}

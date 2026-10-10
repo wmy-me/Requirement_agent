@@ -8,11 +8,13 @@ database; extract/analyze/risk fall back to their deterministic implementations.
 from __future__ import annotations
 
 import threading
+import time
 
 from requirement_agent.tools.invoker import invoke
 from requirement_agent.tools.registry import names
 from requirement_agent.workflows.agents_nodes import analyze_node, extract_node, risk_node
 from requirement_agent.application.agent_execution_service import AgentExecutionService
+from requirement_agent.config.settings import settings
 
 
 def test_legacy_analysis_adapters_are_registered_and_executable() -> None:
@@ -57,6 +59,7 @@ def test_execution_claim_and_terminal_updates_are_conditional() -> None:
     service.repo._update_run(run_id, status="cancelled")
     assert service.complete(run_id, token) is False
     assert service.repo.get_run(run_id)["status"] == "cancelled"
+    assert not any(event["event_type"] == "run_completed" for event in service.repo.list_events(run_id))
 
 
 def test_expired_lease_reclaims_and_rejects_old_writer() -> None:
@@ -100,3 +103,66 @@ def test_two_executors_race_on_one_claim_with_barrier() -> None:
     for thread in threads:
         thread.join()
     assert sum(item is not None for item in claimed) == 1
+
+
+def test_empty_events_distinguish_valid_owner_from_lost_owner() -> None:
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="empty-events") ["run_id"])
+    first = service.claim(run_id)
+    assert first is not None
+    first_token = str(first["execution_token"])
+    assert service.events(run_id, first_token, []) is True
+    service.repo._update_run(run_id, status="cancelled")
+    assert service.events(run_id, first_token, []) is False
+
+
+def test_heartbeat_keeps_long_running_lease_from_being_reclaimed(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "agent_execution_lease_seconds", 2.0)
+    monkeypatch.setattr(settings, "agent_execution_heartbeat_seconds", 0.2)
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="heartbeat") ["run_id"])
+    claimed = service.claim(run_id)
+    assert claimed is not None
+    heartbeat = service.heartbeat_loop(run_id, str(claimed["execution_token"]))
+    try:
+        # Longer than the original lease: without periodic renewal a second
+        # executor would atomically take this run.
+        time.sleep(2.2)
+        assert service.claim(run_id) is None
+        assert heartbeat.lost is False
+    finally:
+        heartbeat.stop()
+
+
+def test_heartbeat_stops_after_cancel_and_marks_executor_lost(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "agent_execution_lease_seconds", 2.0)
+    monkeypatch.setattr(settings, "agent_execution_heartbeat_seconds", 0.1)
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="heartbeat-cancel") ["run_id"])
+    claimed = service.claim(run_id)
+    assert claimed is not None
+    heartbeat = service.heartbeat_loop(run_id, str(claimed["execution_token"]))
+    try:
+        service.repo._update_run(run_id, status="cancelled")
+        deadline = time.monotonic() + 1.0
+        while not heartbeat.lost and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert heartbeat.lost is True
+        assert service.repo.get_run(run_id)["status"] == "cancelled"
+    finally:
+        heartbeat.stop()
+
+
+def test_pause_then_reclaim_rejects_old_executor_writes() -> None:
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="pause-reclaim") ["run_id"])
+    first = service.claim(run_id)
+    assert first is not None
+    first_token = str(first["execution_token"])
+    service.repo._update_run(run_id, status="paused")
+    second = service.claim(run_id)
+    assert second is not None
+    assert str(second["execution_token"]) != first_token
+    assert service.events(run_id, first_token, []) is False
+    assert service.checkpoint(run_id, first_token, {"late": True}) is False
+    assert service.complete(run_id, first_token) is False

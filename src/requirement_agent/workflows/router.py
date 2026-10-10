@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.infrastructure.llm.model_registry import ModelRegistry
 from requirement_agent.config.settings import settings
+from requirement_agent.application.execution_control import check_execution
 
 ACTION_SET = frozenset({"answer", "clarify", "extract", "retrieve", "analyze", "risk", "prepare_review", "finish"})
 Intent = Literal["general_question", "requirement", "unclear"]
@@ -78,7 +79,9 @@ def _model_proposal(state: dict[str, Any]) -> RouteProposal | None:
     }
     system = "你是需求工作流路由器。只返回 JSON：intent、action、reason、missing_information。不得给出其他文本。"
     try:
+        check_execution()
         raw = provider.generate(json.dumps(prompt, ensure_ascii=False), system_prompt=system)
+        check_execution()
         return RouteProposal.model_validate(json.loads(raw))
     except Exception:  # 网络/超时/非法 JSON 都必须回到确定性安全路径
         return None
@@ -102,6 +105,7 @@ def _allowed(proposal: RouteProposal, state: dict[str, Any]) -> bool:
 
 def router_node(state: dict[str, Any]) -> dict[str, Any]:
     """选择一跳并留下可审计理由；非法模型建议退回到确定性安全计划。"""
+    check_execution()
     count = int(state.get("route_count") or 0) + 1
     max_routes = int(state.get("max_routes") or 12)
     elapsed = time.monotonic() - float(state.get("started_at") or time.monotonic())

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -29,6 +29,7 @@ from requirement_agent.workflows.router import (
     router_node,
 )
 from requirement_agent.workflows.state import RequirementState
+from requirement_agent.application.execution_control import bind_execution
 
 
 def _route(state: RequirementState) -> str:
@@ -116,6 +117,8 @@ def run_analysis(
     normalized_fields: dict[str, Any] | None = None,
     conversation_mode: bool = False,
     intent: str | None = "requirement",
+    execution_guard: Callable[[], bool] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> RequirementState:
     """便捷入口：跑一遍分析图并返回最终 state。
 
@@ -139,7 +142,8 @@ def run_analysis(
     if normalized_fields:
         initial["normalized_fields"] = normalized_fields
     # 路由上限是业务护栏；给图略高于该上限的递归预算，避免 LangGraph 自身先报错。
-    return analysis_graph.invoke(initial, config={"recursion_limit": 32})
+    with bind_execution(execution_guard, deadline_monotonic):
+        return analysis_graph.invoke(initial, config={"recursion_limit": 32})
 
 
 def run_decision(ctx: dict[str, Any]) -> RequirementState:

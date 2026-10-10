@@ -31,6 +31,7 @@ from requirement_agent.infrastructure.db.repositories import AgentRunRepository
 from requirement_agent.infrastructure.db.session import SessionLocal
 from requirement_agent.workflows import agents_nodes
 from requirement_agent.workflows.event_nodes import NodeFailure
+from requirement_agent.tools.base import ToolResult
 
 
 # ── 假件：让分析图不碰真模型 ──────────────────────────────────────────────
@@ -69,21 +70,24 @@ class FakeRiskAgent:
 
 @pytest.fixture
 def no_llm(monkeypatch):
-    """把三个 Agent 换成假件 —— 分析图照跑，只是不花 LLM 调用。"""
-    monkeypatch.setattr(agents_nodes, "ExtractAgent", FakeExtractAgent)
-    monkeypatch.setattr(agents_nodes, "AnalyzeAgent", FakeAnalyzeAgent)
-    monkeypatch.setattr(agents_nodes, "RiskAgent", FakeRiskAgent)
-    # 检索走关键词分支（不调 embedding），并把候选固定成两条
-    monkeypatch.setattr(
-        agents_nodes,
-        "invoke",
-        lambda name, params, consumer=None: type(
-            "R", (), {"result": [
-                {"requirement_key": "REQ-000001", "requirement_name": "历史", "vector_similarity": 0.80},
-                {"requirement_key": "REQ-000002", "requirement_name": "历史2", "vector_similarity": 0.60},
-            ], "status": type("S", (), {"value": "success"})(), "duration_ms": 1.0, "message": None}
-        )(),
-    )
+    """完整替换当前注册工具接线，分析图不触碰真实模型/embedding。"""
+    candidates = [
+        {"requirement_key": "REQ-000001", "requirement_name": "历史", "vector_similarity": 0.80},
+        {"requirement_key": "REQ-000002", "requirement_name": "历史2", "vector_similarity": 0.60},
+    ]
+
+    def fake_invoke(name, params, consumer=None, remaining_seconds=None):
+        if name == "extract_requirement":
+            return ToolResult.success(_extracted().model_dump(mode="python"), duration_ms=1.0)
+        if name == "search_requirements":
+            return ToolResult.success(candidates, duration_ms=1.0)
+        if name == "analyze_requirement_relation":
+            return ToolResult.success(FakeAnalyzeAgent().analyze(None).model_dump(mode="python"), duration_ms=1.0)
+        if name == "assess_requirement_risk":
+            return ToolResult.success(FakeRiskAgent().assess(None).model_dump(mode="python"), duration_ms=1.0)
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(agents_nodes, "invoke", fake_invoke)
 
 
 def _source(marker: str) -> RequirementSource:
@@ -193,8 +197,13 @@ def test_failed_analysis_records_the_node(no_llm, cleanup, monkeypatch) -> None:
     """
     from requirement_agent.tools.base import ToolResult
 
+    original_invoke = agents_nodes.invoke
     monkeypatch.setattr(
-        agents_nodes, "invoke", lambda *a, **k: ToolResult.error("数据库连接被拒绝")
+        agents_nodes, "invoke",
+        lambda name, *args, **kwargs: (
+            ToolResult.error("数据库连接被拒绝") if name == "search_requirements"
+            else original_invoke(name, *args, **kwargs)
+        ),
     )
 
     # **按 idempotency_key 精确定位**，不靠「找最近的 failed run」——
@@ -251,12 +260,15 @@ def test_tool_invocation_mirrors_tool_call_record() -> None:
 
 
 def test_tool_invocation_lands_for_a_real_analysis(no_llm, cleanup) -> None:
-    """真实链路里工具调用确实落库，且带着 sample。"""
+    """迁移后的四个分析工具都必须落库，检索仍保留候选 sample。"""
     _, run_id = _submit(no_llm, cleanup)
     rows = AgentRunRepository().list_tool_invocations(run_id)
 
-    assert len(rows) == 1, "这次分析只调了 search_requirements 一个工具"
-    row = rows[0]
+    assert [row["tool_name"] for row in rows] == [
+        "extract_requirement", "search_requirements",
+        "analyze_requirement_relation", "assess_requirement_risk",
+    ]
+    row = next(row for row in rows if row["tool_name"] == "search_requirements")
     assert row["tool_name"] == "search_requirements"
     assert row["status"] == "success"
     assert row["result_summary"]["count"] == 2

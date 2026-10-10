@@ -20,8 +20,8 @@
 from __future__ import annotations
 
 import contextvars
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import logging
-import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -37,6 +37,11 @@ __all__ = ["BaseTool", "ToolInput", "ToolResult", "ToolStatus", "audit_summary"]
 # 参数摘要里单个字符串值的截断长度。工具参数可能带上千字的需求正文，
 # 原样打进日志既没用又危险（审计日志不该成为第二条数据副本）。
 _ARG_TEXT_CHARS = 120
+
+# A timed-out Python call can continue below this layer.  A bounded pool keeps
+# those unavoidable stragglers from creating an unbounded number of threads;
+# it does not claim to cancel their database/HTTP/model work.
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-call")
 
 
 class ToolInput(BaseModel):
@@ -179,7 +184,7 @@ class BaseTool(ABC):
 
     # ── 执行入口 ──────────────────────────────────────────────────────────
 
-    def run(self, raw: dict[str, Any] | None = None) -> ToolResult:
+    def run(self, raw: dict[str, Any] | None = None, *, timeout_seconds: float | None = None) -> ToolResult:
         """校验 → 计时 → 执行 → 审计。**调用方只该走这里，不要直接调 `execute`。**
 
         三种失败都被兜住并转成 `ToolResult`（不向上抛）：
@@ -202,11 +207,15 @@ class BaseTool(ABC):
             return result
 
         try:
-            result = self._execute_with_timeout(params)
+            effective_timeout = self._effective_timeout(timeout_seconds)
+            if effective_timeout <= 0:
+                result = ToolResult.error("任务预算已耗尽，未执行工具")
+            else:
+                result = self._execute_with_timeout(params, effective_timeout)
         except TimeoutError:
             duration = _ms_since(started)
             result = ToolResult.error(
-                f"工具 {self.name} 超过 {self.timeout_seconds}s 未返回，已放弃等待",
+                f"工具 {self.name} 超过 {effective_timeout:.3g}s 未返回，已放弃等待",
                 duration_ms=duration,
             )
             self._audit(raw, result)
@@ -226,26 +235,22 @@ class BaseTool(ABC):
         self._audit(raw, final)
         return final
 
-    def _execute_with_timeout(self, params: Any) -> ToolResult:
+    def _effective_timeout(self, remaining_seconds: float | None) -> float:
+        """Apply the caller's task deadline without ever enlarging tool policy."""
+        if remaining_seconds is None:
+            return float(self.timeout_seconds)
+        return min(float(self.timeout_seconds), max(0.0, float(remaining_seconds)))
+
+    def _execute_with_timeout(self, params: Any, timeout_seconds: float) -> ToolResult:
         """带超时地执行 `execute`。
 
         **超时的语义是「不再等它」，不是「取消它」。** Python 杀不掉线程，
         所以超时后那个调用仍在后台跑 —— 这是它唯一的诚实描述。
         要真正取消，得靠下层（Postgres 的 `statement_timeout` / HTTP 客户端超时）。
 
-        为什么用**每次新建的守护线程**而不是共享线程池：共享池一旦被几个卡住的调用
-        占满，后续调用会**排在队里无限等** —— 那比没有超时还糟。每次新建的线程
-        随进程退出而消失，不会累积。当前工具全是本地库查询（毫秒级），
-        建线程的开销可以忽略。
+        使用有界共享线程池：超时后底层调用可能仍在跑，但最多占用固定数量的线程。
+        若池被旧调用占满，排队本身也受这里的同一个 deadline 限制。
         """
-        box: dict[str, Any] = {}
-
-        def _work() -> None:
-            try:
-                box["result"] = self.execute(params)
-            except BaseException as exc:  # noqa: BLE001 —— 原样带回主线程再分类
-                box["error"] = exc
-
         # ⚠️ **必须把上下文复制进工作线程。** 原生 `threading.Thread` **不会**带走
         # contextvars（`anyio.to_thread.run_in_threadpool` 会，原生线程不会）。
         #
@@ -256,16 +261,14 @@ class BaseTool(ABC):
         #
         # 只读传播（父 → 子）。工具在子线程里新设的上下文不会回流 —— 我们只需要读。
         context = contextvars.copy_context()
-        worker = threading.Thread(
-            target=context.run, args=(_work,), name=f"tool-{self.name}", daemon=True
-        )
-        worker.start()
-        worker.join(self.timeout_seconds)
-        if worker.is_alive():
+        future = _TOOL_EXECUTOR.submit(context.run, self.execute, params)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeoutError as exc:
+            # Do not call Future.cancel() as though it stopped a running call.
+            # It only prevents a not-yet-started task and would obscure this
+            # layer's deliberately documented "stop waiting" semantics.
             raise TimeoutError(self.name)
-        if "error" in box:
-            raise box["error"]
-        return box["result"]
 
     # ── 审计 ──────────────────────────────────────────────────────────────
 

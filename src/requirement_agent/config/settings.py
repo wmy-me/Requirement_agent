@@ -77,6 +77,23 @@ class Settings(BaseSettings):
     # 可恢复错误（网络层异常 / 408,409,425,429,5xx）的最大重试次数，0 表示不重试。
     llm_max_retries: int = Field(default=2, ge=0, alias="LLM_MAX_RETRIES")
 
+    # `/agent/run` execution lease and wall-clock budget.  The heartbeat is
+    # intentionally shorter than the lease; runtime validation below also
+    # clamps an accidental invalid deployment value instead of creating a
+    # permanent false takeover window.
+    agent_execution_lease_seconds: float = Field(
+        default=120.0, gt=1.0, alias="AGENT_EXECUTION_LEASE_SECONDS"
+    )
+    agent_execution_heartbeat_seconds: float = Field(
+        default=30.0, gt=0.1, alias="AGENT_EXECUTION_HEARTBEAT_SECONDS"
+    )
+    agent_analysis_budget_seconds: float = Field(
+        default=240.0, gt=0.1, alias="AGENT_ANALYSIS_BUDGET_SECONDS"
+    )
+    agent_analysis_executor_workers: int = Field(
+        default=4, ge=1, le=32, alias="AGENT_ANALYSIS_EXECUTOR_WORKERS"
+    )
+
     # —— 飞书渠道（事件订阅）——
     # verification_token / encrypt_key 至少配一个，否则 Webhook 端点会拒绝所有请求
     # （未配置的渠道端点不能接受任意输入）。两者都配时签名校验与 token 校验都会执行。

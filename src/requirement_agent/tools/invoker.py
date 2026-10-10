@@ -108,7 +108,13 @@ def _result_sample(value: object) -> list[dict[str, Any]] | None:
     return rows or None
 
 
-def invoke(name: str, params: dict[str, Any] | None = None, *, consumer: str = "analysis") -> ToolResult:
+def invoke(
+    name: str,
+    params: dict[str, Any] | None = None,
+    *,
+    consumer: str = "analysis",
+    remaining_seconds: float | None = None,
+) -> ToolResult:
     """经注册表调用一个工具。
 
     - 工具不存在 / 消费方不在白名单 → 返回 `ERROR`（不抛）——
@@ -126,7 +132,9 @@ def invoke(name: str, params: dict[str, Any] | None = None, *, consumer: str = "
         )
         return ToolResult.error(f"消费方 {consumer} 不允许调用 {name}")
 
-    return cls().run(params or {})
+    if remaining_seconds is not None and remaining_seconds <= 0:
+        return ToolResult.error("任务预算已耗尽，未执行工具")
+    return cls().run(params or {}, timeout_seconds=remaining_seconds)
 
 
 def tool_call_record(

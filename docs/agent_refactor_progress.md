@@ -258,3 +258,27 @@
 未完成：
 - 周期性 heartbeat 尚未接入实际模型/工具循环；当前仅有可调用的 heartbeat 原语。
 - `/agent/run` 仍在 async 路由同步执行 `run_analysis`，取消/暂停不能在长模型调用期间及时生效；任务剩余时间未下传工具层。本轮不将其标记为完成。
+
+## 19. `/agent/run` 实际续租、任务预算与非阻塞执行（部分完成）
+
+已完成：
+- `AgentExecutionService` 为 `/agent/run` 提供可配置的租约和周期 heartbeat（`AGENT_EXECUTION_LEASE_SECONDS`、`AGENT_EXECUTION_HEARTBEAT_SECONDS`）。heartbeat 间隔在运行时钳制为小于租约；完成、失败、预算耗尽、暂停/取消或失权后都停止续租。
+- 续租规则明确为：租约即使刚过期，只要尚未被另一执行者通过原子 claim 接管，持有原 token 的 running 执行者仍可续租；一旦被接管、暂停或取消，heartbeat 条件更新失败，旧执行者不再启动后续模型/工具边界调用。
+- `events(run_id, token, [])` 现在仍在带行锁的 token/状态检查下执行；空批次在仍拥有执行权时成功，失权时失败。空工具批次也使用明确所有权探测，未再把空列表解释为失权。
+- `/agent/run` 将同步 `run_analysis` 放入固定大小线程池，HTTP 事件循环不再被该同步分析占用；run id 的 context 与 execution guard 一并传播。该端点尚保持原有“请求等待结果”的响应形状，未在本批次改成脱离连接的后台任务。
+- 分析图的 router、extract/retrieve/analyze/risk 在模型/工具调用前后检查执行权和 wall-clock deadline。已进入的 Python 同步调用不能被强杀；底层 HTTP 通过 `LLMProvider` 取不大于任务剩余时间的 timeout，工具实际等待时间取工具上限和剩余预算的较小值。
+- `/agent/run` 在 run metadata 与 checkpoint 持久化 `deadline_at_epoch`、剩余预算和执行位置；预算耗尽写入 `run_incomplete` 最终事件并返回 API `status=incomplete`，不返回普通成功。数据库现有状态集没有 `incomplete`，持久状态为 `failed` 并带明确原因，避免伪造完成。
+- `BaseTool` 改为固定大小执行池。超时只表示调用方停止等待，不能表示下层 HTTP/数据库/模型调用已被取消；固定容量防止连续超时无限创建后台线程。
+
+实际验证：
+- `.venv/bin/python -m pytest -q tests/unit/test_tool_task_budget.py tests/unit/test_extract_agent.py tests/unit/test_analyze_skill_consistency.py`：**12 passed**。覆盖剩余预算小于工具上限和预算已耗尽时不执行工具。
+- 在独立库 `requirement_agent_codex_isolated`、专用非 superuser 测试角色、无真实模型与业务样本下运行 `tests/integration/test_analysis_tool_wiring_isolated.py`：**9 passed**。覆盖真实数据库 Barrier 双认领、取消与迟到 complete、租约过期接管后旧 token 拒写、空事件语义、长于初始租约的 heartbeat 续租、取消后 heartbeat 失权停止、暂停后重新认领。
+- 最终组合命令 `.venv/bin/python -m pytest -q tests/integration/test_agent_run_tracking.py tests/integration/test_analysis_tool_wiring_isolated.py tests/unit/test_tool_task_budget.py tests/unit/test_extract_agent.py tests/unit/test_analyze_skill_consistency.py`：**35 passed**。工作流追踪夹具已更新为当前四个分析工具的真实注册调用链。
+- `.venv/bin/python -m pytest -q tests/unit/test_agent_run_nonblocking.py`：**1 passed**。用同步阻塞假分析器验证 `/agent/run` 将工作投至有界执行池，async 事件循环仍可继续调度；暂停/取消的真实 token 失权行为由上述隔离 PostgreSQL 测试覆盖。
+- 本轮修改模块及测试已通过 `python -m py_compile`；`git diff --check` 通过。
+
+仍未完成：
+- `/agent/run` 目前只在图节点边界合作式停止，尚未逐回合持久化模型消息/工具原始返回或从 checkpoint 续跑；因此不能宣称中途进程崩溃后的 exactly-once 或完整 ReAct 恢复。
+- 仍未把聊天和 Worker 迁移至该执行服务；聊天/Worker 的旧入口仍保留兼容编排。
+- 未实现后台任务与 SSE 解耦、断线回放或实时事件订阅；这些属于后续批次。
+- 未对真实外部 LLM、HTTP、Tavily 或生产数据库做联调。本批验证使用假模型/离线工具和隔离 PostgreSQL。

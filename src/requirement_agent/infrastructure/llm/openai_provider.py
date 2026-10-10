@@ -25,6 +25,7 @@ from requirement_agent.infrastructure.llm.invocation import (
     record_invocation,
 )
 from requirement_agent.infrastructure.llm.model_registry import ModelSpec
+from requirement_agent.application.execution_control import remaining_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,12 @@ class LLMProvider:
             else settings.embedding_model
         )
         self.temperature = settings.llm_temperature
-        self.timeout = settings.llm_timeout_seconds
-        self.stream_read_timeout = settings.llm_stream_read_timeout_seconds
+        # A task-level deadline can only reduce provider timeouts.  This does
+        # not cancel a request already handed to httpx, but new HTTP calls use
+        # the actual remaining task budget rather than the global default.
+        remaining = remaining_seconds()
+        self.timeout = min(settings.llm_timeout_seconds, remaining) if remaining is not None else settings.llm_timeout_seconds
+        self.stream_read_timeout = min(settings.llm_stream_read_timeout_seconds, remaining) if remaining is not None else settings.llm_stream_read_timeout_seconds
         self.max_retries = settings.llm_max_retries
         self.retry_backoff = settings.llm_retry_backoff_seconds
 

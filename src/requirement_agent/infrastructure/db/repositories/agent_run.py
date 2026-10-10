@@ -169,6 +169,32 @@ class AgentRunRepository:
             session.commit()
         return result.rowcount == 1
 
+    def owns_execution(self, run_id: str, token: str) -> bool:
+        """Return whether ``token`` still fences a running executor.
+
+        This is deliberately a no-op ownership probe.  Empty event/tool batches
+        are valid output, so callers must not infer lost ownership from a zero
+        inserted-row count.
+        """
+        with SessionLocal() as session:
+            row = session.execute(
+                text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) "
+                     "AND status='running' AND execution_token=CAST(:t AS UUID)"),
+                {"r": run_id, "t": token},
+            ).first()
+        return row is not None
+
+    def owns_execution_locked(self, run_id: str, token: str) -> bool:
+        """Probe ownership while taking the same row lock used for writes."""
+        with SessionLocal() as session:
+            row = session.execute(
+                text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) "
+                     "AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"),
+                {"r": run_id, "t": token},
+            ).first()
+            session.commit()
+        return row is not None
+
     def checkpoint_if_owned(self, run_id: str, token: str, checkpoint: dict[str, object]) -> bool:
         with SessionLocal() as session:
             result = session.execute(text("""UPDATE agent_run SET checkpoint = CAST(:checkpoint AS JSONB), updated_at = NOW()
@@ -177,12 +203,15 @@ class AgentRunRepository:
         return result.rowcount == 1
 
     def append_events_if_owned(self, run_id: str, token: str, events: list[dict[str, object]]) -> list[dict[str, object]]:
-        if not events:
-            return []
         with SessionLocal() as session:
             owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"), {"r": run_id, "t": token}).first()
             if not owned:
                 session.rollback()
+                return []
+            # Preserve the distinction between a valid empty batch and a lost
+            # token at the service boundary.  The lock/check still happens.
+            if not events:
+                session.commit()
                 return []
             return self._append_events_in_session(session, run_id, events)
 
