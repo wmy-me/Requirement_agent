@@ -51,6 +51,11 @@ def test_dynamic_checkpoint_is_versioned_and_continues_after_clarify(monkeypatch
         assert seen["invalidation_history"][-1]["reason"] == "supplement_changed_source_text"
         assert chat_repo.get_run(str(pending["run_id"]))["status"] == "cancelled"
         assert "done" in "".join(second)
+        # Atomic assistant finalization may add conversation/message fields but
+        # must not erase the immutable lifecycle deadline or routing metadata.
+        finished = chat_repo.get_run_by_client(conv, "second")
+        assert finished and finished["meta"]["checkpoint_format"] == "dynamic-v1"
+        assert "deadline_at_epoch" in finished["meta"]
     finally:
         with SessionLocal() as session:
             session.execute(text("DELETE FROM agent_run WHERE conversation_id = CAST(:c AS UUID)"), {"c": conv})

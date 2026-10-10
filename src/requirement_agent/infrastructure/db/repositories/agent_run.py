@@ -209,7 +209,7 @@ class AgentRunRepository:
     ) -> dict[str, object] | None:
         """Atomically persist the chat answer and its token-fenced final state."""
         with SessionLocal() as session:
-            run = session.execute(text("""SELECT conversation_id FROM agent_run
+            run = session.execute(text("""SELECT conversation_id, meta FROM agent_run
                 WHERE run_id=CAST(:r AS UUID) AND status='running'
                   AND execution_token=CAST(:t AS UUID) FOR UPDATE"""), {"r": run_id, "t": token}).mappings().first()
             if not run:
@@ -224,7 +224,10 @@ class AgentRunRepository:
                     "artifacts": json.dumps(artifacts, ensure_ascii=False), "run_id": run_id,
                     "message_meta": json.dumps({"source": "agent"}),
                 }).mappings().one()
-            final_meta = {**meta, "assistant_message_id": str(row["id"])}
+            # Callers only provide the fields they own (usually the
+            # conversation id).  Keep the creation/claim budget, intent and
+            # retry provenance already stored on the run.
+            final_meta = {**dict(run["meta"] or {}), **meta, "assistant_message_id": str(row["id"])}
             updated = session.execute(text("""UPDATE agent_run SET status=:status,
                 checkpoint=CAST(:checkpoint AS JSONB), meta=CAST(:meta AS JSONB),
                 current_node=COALESCE(:node,current_node), ended_at=NOW(), updated_at=NOW()
@@ -236,7 +239,11 @@ class AgentRunRepository:
             if updated.rowcount != 1:
                 session.rollback()
                 return None
-            self._append_events_in_session(session, run_id, [{"event_type": "run_completed", "node": current_node, "payload": {"status": status}}], commit=False)
+            outcome = str(final_meta.get("outcome") or status)
+            self._append_events_in_session(session, run_id, [{
+                "event_type": "run_incomplete" if outcome == "incomplete" else "run_completed",
+                "node": current_node, "payload": {"status": outcome},
+            }], commit=False)
             session.commit()
         return {"id": to_sid(row["id"]), "conversation_id": str(row["conversation_id"]), "role": row["role"], "content": row["content"], "artifacts": dict(row["artifacts"] or {}), "run_id": str(row["run_id"]), "meta": dict(row["meta"] or {})}
 

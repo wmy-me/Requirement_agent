@@ -329,3 +329,20 @@
 仍未完成：
 - 旧四阶段 `_stream_chat_pipeline_legacy` 仍使用 ChatRepository 兼容状态写入，未迁入 token 生命周期；它只服务历史 checkpoint 兼容，不能称为完全统一。
 - 本批没有实现逐回合消息/tool 原始结果恢复，也未将 SSE 与连接解耦；外部 LLM/MCP 未联调。
+
+## 22. 聊天收尾与 Worker 发布边界补丁（部分完成）
+
+已完成：
+- assistant message 与 run 的原子收尾现合并既有 `agent_run.meta`，不再因写入 `conversation_id` / `assistant_message_id` 丢失 intent、deadline、预算或路由字段。
+- 只读问答 run 在创建时持久化 `deadline_at_epoch` 与预算；执行时按剩余时间初始化 ReAct，并将剩余预算写回 checkpoint。预算耗尽的消息仍原子保存用于回放，但 run 保持 `failed`、`meta.outcome=incomplete`，最终事件为 `run_incomplete`，与 pause/cancel/provider failed 区分。
+- 动态需求聊天每个图节点事件改为直接使用当前 claim token 落库；生产图获得 execution guard 与绝对 deadline。失权/超时后不再写 checkpoint 或追加后续事件。
+- Worker 在来源变为 `pending_review` 前再次检查 token ownership；完成 `waiting_review` 放在业务可见结果发布之后，避免已观察到失权的执行者发布旧计算结果。
+
+实际验证：
+- 隔离 PostgreSQL：`tests/integration/test_agent_run_tracking.py tests/integration/test_dynamic_chat_checkpoint.py`：**15 passed**。
+- 动态聊天/恢复回归：`tests/integration/test_dynamic_chat_checkpoint.py tests/integration/test_run_resume.py`：**6 passed**。
+- ReAct 预算与引用单元回归：`tests/unit/test_assistant_agent.py`：**5 passed**。
+
+仍未完成：
+- 历史四阶段 `_stream_chat_pipeline_legacy` 的旧 checkpoint 兼容写路径仍待逐段 token 化；新动态聊天路径不再回退到它，除非读取历史 checkpoint。
+- Worker 的 source 更新与 run 终态尚非跨表单事务；本批在发布前增加 ownership fence，下一批应将“来源发布 + waiting_review”做成同一受 token 约束的数据库事务。

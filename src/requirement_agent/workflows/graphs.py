@@ -100,10 +100,14 @@ analysis_graph = build_analysis_graph()
 decision_graph = build_decision_graph()
 
 
-def stream_analysis(initial: dict[str, Any]) -> Iterator[dict[str, dict[str, Any]]]:
+def stream_analysis(
+    initial: dict[str, Any], *, execution_guard: Callable[[], bool] | None = None,
+    deadline_monotonic: float | None = None,
+) -> Iterator[dict[str, dict[str, Any]]]:
     """逐节点产生动态图增量，供 SSE 适配器在每个安全点写 PostgreSQL checkpoint。"""
     seeded = {**initial, "started_at": time.monotonic(), "max_routes": int(initial.get("max_routes") or 12)}
-    yield from analysis_graph.stream(seeded, config={"recursion_limit": 32}, stream_mode="updates")
+    with bind_execution(execution_guard, deadline_monotonic):
+        yield from analysis_graph.stream(seeded, config={"recursion_limit": 32}, stream_mode="updates")
 
 
 def run_analysis(

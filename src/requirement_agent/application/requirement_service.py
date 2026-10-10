@@ -170,11 +170,6 @@ class RequirementService:
         # 「分析→审核」跨进程传递用的，而这张表是给「按 run 反查」用的，两者不互相替代。
         self.run_tracking.record_events(run_id, list(result.get("run_events") or []))
         self.run_tracking.record_tool_calls(run_id, list(result.get("tool_calls") or []))
-        # A lease can be lost while the last synchronous node is returning.
-        # Do not advance the tracked execution (or publish its result) then.
-        if not self.run_tracking.execution_guard(run_id)():
-            raise RuntimeError("analysis execution ownership lost before finish")
-        self.run_tracking.finish(run_id)
 
         extracted = dict(result.get("extracted") or {})
         analysis = dict(result.get("analysis") or {})
@@ -237,7 +232,13 @@ class RequirementService:
         retrieval = dict(result.get("retrieval") or {})
         if retrieval:
             metadata["retrieval"] = retrieval
+        # Keep the execution in running state until immediately before this
+        # business-visible publication.  A reclaimed worker must not publish a
+        # stale analysis merely because it finished computation first.
+        if not self.run_tracking.execution_guard(run_id)():
+            raise RuntimeError("analysis execution ownership lost before publishing result")
         self.source_repo.update_status(saved_source.id or 0, "pending_review", metadata=metadata)
+        self.run_tracking.finish(run_id)
         return {
             "source_id": saved_source.id,
             "idempotency_key": saved_source.idempotency_key,

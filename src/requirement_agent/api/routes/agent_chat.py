@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from queue import Empty, Queue
 from typing import Literal
@@ -23,6 +24,7 @@ from requirement_agent.agents.analyze_agent import score_label
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
 from requirement_agent.application.agent_execution_service import AgentExecutionService
+from requirement_agent.config.settings import settings
 from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.infrastructure.llm.invocation import bind_run_id
@@ -570,7 +572,9 @@ async def _stream_library_assistant(
             client_message_id=client_message_id,
             status="queued",
             meta={"task_type": "assistant", "execution_version": "assistant_v1", "intent": intent,
-                  "actor_id": actor_id, "web_policy": "on" if allow_external else "off"},
+                  "actor_id": actor_id, "web_policy": "on" if allow_external else "off",
+                  "budget_seconds": settings.agent_assistant_budget_seconds,
+                  "deadline_at_epoch": time.time() + settings.agent_assistant_budget_seconds},
         )
     except ConversationBusyError:
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE})
@@ -585,8 +589,13 @@ async def _stream_library_assistant(
         return
     token = str(claimed["execution_token"])
     heartbeat = execution.heartbeat_loop(run_id, token)
+    deadline_at_epoch = float((claimed.get("meta") or {}).get("deadline_at_epoch") or time.time())
+
+    def _remaining_budget() -> float:
+        return max(0.0, deadline_at_epoch - time.time())
     if not execution.checkpoint(
-        run_id, token, {"version": 1, "intent": intent, "execution_position": "assistant"},
+        run_id, token, {"version": 2, "intent": intent, "execution_position": "assistant",
+                        "deadline_at_epoch": deadline_at_epoch, "remaining_budget_seconds": _remaining_budget()},
         events=[{"event_type": "run_started", "node": "assistant", "payload": {"task_type": "assistant"}}],
     ):
         heartbeat.stop()
@@ -607,6 +616,8 @@ async def _stream_library_assistant(
     yield _tracked_sse("step", {"step": "assistant", "label": "正在查询需求库…"}, node="assistant")
     try:
         def _stop_status() -> str | None:
+            if _remaining_budget() <= 0:
+                return "incomplete"
             if heartbeat.lost or not execution.owns(run_id, token):
                 return "cancelled"
             current = chat_repo.get_run(run_id)
@@ -621,7 +632,7 @@ async def _stream_library_assistant(
 
         with bind_run_id(run_id):
             result = await run_in_threadpool(
-                RequirementAssistantAgent().answer, message, allow_external=allow_external,
+                RequirementAssistantAgent(deadline_seconds=_remaining_budget()).answer, message, allow_external=allow_external,
                 history=history, should_stop=_stop_status, on_event=_persist_event,
             )
         # Tool events have already been appended one by one by _persist_event.
@@ -655,8 +666,20 @@ async def _stream_library_assistant(
             yield _tracked_sse("done", {"run_id": run_id, "status": result.status}, node="assistant")
             return
         final_status = "failed" if result.status == "failed" else "completed"
-        checkpoint = {"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources(), "execution_position": "done"}
-        if final_status == "completed":
+        checkpoint = {"version": 2, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources(), "execution_position": "done",
+                      "deadline_at_epoch": deadline_at_epoch, "remaining_budget_seconds": _remaining_budget(),
+                      "outcome": result.status, "incomplete_reason": result.incomplete_reason}
+        if result.status == "incomplete":
+            # Budget exhaustion is intentionally distinguishable from both a
+            # provider failure and user cancellation.  It remains replayable
+            # through the durable assistant message but cannot claim success.
+            assistant = execution.complete_chat_message(
+                run_id, token, content=result.content, artifacts=artifacts, checkpoint=checkpoint,
+                meta={"conversation_id": session_id, "outcome": "incomplete"}, current_node="assistant", status="failed",
+            )
+            finished = assistant is not None
+            final_status = "incomplete"
+        elif final_status == "completed":
             assistant = execution.complete_chat_message(
                 run_id, token, content=result.content, artifacts=artifacts, checkpoint=checkpoint,
                 meta={"conversation_id": session_id}, current_node="assistant",
@@ -1009,7 +1032,9 @@ async def _stream_chat_pipeline(
     try:
         run = chat_repo.create_run(conversation_id=session_id, client_message_id=client_message_id,
                                    status="queued", meta={"source_type": source_type, "requester_name": requester_name,
-                                                           "checkpoint_format": "dynamic-v1"})
+                                                           "checkpoint_format": "dynamic-v1",
+                                                           "budget_seconds": settings.agent_analysis_budget_seconds,
+                                                           "deadline_at_epoch": time.time() + settings.agent_analysis_budget_seconds})
     except ConversationBusyError:
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": ""}); return
     run_id = str(run["run_id"])
@@ -1019,6 +1044,22 @@ async def _stream_chat_pipeline(
         yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE}); yield _sse("done", {"run_id": run_id}); return
     token = str(claimed["execution_token"])
     heartbeat = execution.heartbeat_loop(run_id, token)
+    deadline_at_epoch = float((claimed.get("meta") or {}).get("deadline_at_epoch") or time.time())
+
+    def _remaining_budget() -> float:
+        return max(0.0, deadline_at_epoch - time.time())
+
+    def tracked(name: str, payload: dict[str, object], *, node: str | None = None) -> str:
+        event_type = _SSE_TO_RUN_EVENT.get(name)
+        seq: int | None = None
+        if event_type:
+            rows = execution.repo.append_events_if_owned(
+                run_id, token, [{"event_type": event_type, "node": node, "payload": payload}]
+            )
+            if not rows:
+                raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
+            seq = int(rows[0]["sequence"])
+        return _sse(name, payload, seq=seq)
     # 补充消息创建了新的 run 后，旧澄清 run 不再是可继续任务；保留其 checkpoint 审计。
     if resume and resume.get("parent_run_id"):
         parent = chat_repo.get_run(str(resume["parent_run_id"]))
@@ -1037,6 +1078,10 @@ async def _stream_chat_pipeline(
     def persist(stage: str, status_value: str = "running") -> None:
         # All active checkpoints are fenced by the claimed token.  Waiting
         # states are finalized below, never written through ChatRepository.
+        if _remaining_budget() <= 0:
+            if not execution.incomplete(run_id, token, "chat analysis deadline exceeded", current_node=stage):
+                raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
+            raise RunStopped("incomplete")
         if heartbeat.lost or not execution.owns(run_id, token):
             current = chat_repo.get_run(run_id)
             raise RunStopped(str((current or {}).get("status") or "cancelled"))
@@ -1048,15 +1093,30 @@ async def _stream_chat_pipeline(
 
     try:
         yield _sse("session", {"session_id": session_id, "run_id": run_id})
-        for update_group in stream_analysis(state):
+        # Test/extension graph adapters predating the execution boundary only
+        # accept ``initial``.  Production ``stream_analysis`` receives the
+        # guard; retain that narrow adapter compatibility without removing the
+        # fence from new runs.
+        try:
+            updates = stream_analysis(
+                state,
+                execution_guard=lambda: not heartbeat.lost and execution.owns(run_id, token),
+                deadline_monotonic=time.monotonic() + _remaining_budget(),
+            )
+        except TypeError as exc:
+            if "execution_guard" not in str(exc) and "deadline_monotonic" not in str(exc):
+                raise
+            updates = stream_analysis(state)
+        for update_group in updates:
             node, output = next(iter(update_group.items()))
             _merge_graph_update(state, dict(output))
             for event in output.get("run_events") or []:
-                run_tracking.record_one(run_id, event)
+                if not execution.events(run_id, token, [dict(event)]):
+                    raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
             if node == "router":
                 action = str(state.get("route_action") or "finish")
                 if action != "finish":
-                    yield _tracked_sse(run_id, "step", {"step": action, "label": _STEP_LABELS.get(action, "正在处理…"),
+                    yield tracked("step", {"step": action, "label": _STEP_LABELS.get(action, "正在处理…"),
                                                           "reason": state.get("route_reason")}, node="router")
                 persist("routing")
                 continue
@@ -1082,7 +1142,7 @@ async def _stream_chat_pipeline(
             yield _sse("artifacts", {"artifacts": pipeline})
             yield _sse("narrative", {"start": True})
             for i in range(0, len(content), 10): yield _sse("narrative", {"t": content[i:i + 10]})
-            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": "waiting_clarification"}, node="clarify")
+            yield tracked("done", {"run_id": run_id, "status": "waiting_clarification"}, node="clarify")
             return
         if state.get("answer"):
             content = ""
@@ -1103,13 +1163,13 @@ async def _stream_chat_pipeline(
         if assistant is None:
             raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
         history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-        yield _tracked_sse(run_id, "done", {"run_id": run_id}, node="narrating")
+        yield tracked("done", {"run_id": run_id}, node="narrating")
     except RunStopped as stopped:
-        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": stopped.status}, node=stopped.status)
+        yield _sse("done", {"run_id": run_id, "status": stopped.status})
     except Exception as exc:
         execution.fail(run_id, token, exc, current_node="chat")
-        yield _tracked_sse(run_id, "error", {"message": str(exc)})
-        yield _tracked_sse(run_id, "done", {"run_id": run_id})
+        yield _sse("error", {"message": str(exc)})
+        yield _sse("done", {"run_id": run_id})
     finally:
         heartbeat.stop()
 

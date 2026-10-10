@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     agent_analysis_budget_seconds: float = Field(
         default=240.0, gt=0.1, alias="AGENT_ANALYSIS_BUDGET_SECONDS"
     )
+    # Read-only chat uses the same execution fencing but has a smaller default
+    # wall-clock budget.  The absolute deadline is persisted on agent_run so a
+    # reclaim/resume never receives a fresh allowance.
+    agent_assistant_budget_seconds: float = Field(
+        default=120.0, gt=0.1, alias="AGENT_ASSISTANT_BUDGET_SECONDS"
+    )
     agent_analysis_executor_workers: int = Field(
         default=4, ge=1, le=32, alias="AGENT_ANALYSIS_EXECUTOR_WORKERS"
     )
