@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -32,7 +33,7 @@ __all__ = ["AgentRunRepository"]
 
 _RUN_COLUMNS = (
     "id, run_id, conversation_id, source_id, run_type, client_message_id, status, error, "
-    "meta, stage, checkpoint, current_node, started_at, ended_at, created_at, updated_at"
+    "meta, stage, checkpoint, current_node, execution_token, lease_expires_at, started_at, ended_at, created_at, updated_at"
 )
 
 
@@ -62,6 +63,8 @@ def _normalize_run_row(row: dict[str, object] | None) -> dict[str, object] | Non
         "stage": row.get("stage"),
         "checkpoint": dict(row.get("checkpoint") or {}),
         "current_node": row.get("current_node"),
+        "execution_token": str(row["execution_token"]) if row.get("execution_token") else None,
+        "lease_expires_at": as_display_iso(row.get("lease_expires_at")),
         "started_at": as_display_iso(row.get("started_at")),
         "ended_at": as_display_iso(row.get("ended_at")),
         "created_at": as_display_iso(row.get("created_at")),
@@ -137,23 +140,43 @@ class AgentRunRepository:
             ).mappings().first()
         return _normalize_run_row(dict(row) if row else None)
 
-    def claim_run(self, run_id: str, *, allowed_statuses: tuple[str, ...] = ("queued", "paused", "retrying")) -> dict[str, object] | None:
+    def claim_run(self, run_id: str, *, allowed_statuses: tuple[str, ...] = ("queued", "paused", "retrying"), lease_seconds: int = 120) -> dict[str, object] | None:
         """Atomically acquire a resumable run.
 
         The status predicate is the ownership fence: concurrent resume callers
         race on one UPDATE and exactly one observes a returned row.
         """
+        token = str(uuid4())
         with SessionLocal() as session:
             row = session.execute(text(f"""
                 UPDATE agent_run
-                SET status = 'running', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
-                WHERE run_id = CAST(:r AS UUID) AND status = ANY(CAST(:statuses AS TEXT[]))
+                SET status = 'running', execution_token = CAST(:token AS UUID),
+                    lease_expires_at = NOW() + make_interval(secs => :lease),
+                    started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND (
+                    status = ANY(CAST(:statuses AS TEXT[])) OR
+                    (status = 'running' AND lease_expires_at < NOW())
+                )
                 RETURNING {_RUN_COLUMNS}
-            """), {"r": run_id, "statuses": list(allowed_statuses)}).mappings().first()
+            """), {"r": run_id, "statuses": list(allowed_statuses), "token": token, "lease": lease_seconds}).mappings().first()
             session.commit()
         return _normalize_run_row(dict(row) if row else None)
 
-    def finish_if_running(self, run_id: str, *, status: str, error: str | None = None, current_node: str | None = None) -> bool:
+    def heartbeat(self, run_id: str, token: str, *, lease_seconds: int = 120) -> bool:
+        with SessionLocal() as session:
+            result = session.execute(text("""UPDATE agent_run SET lease_expires_at = NOW() + make_interval(secs => :lease), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)"""), {"r": run_id, "token": token, "lease": lease_seconds})
+            session.commit()
+        return result.rowcount == 1
+
+    def checkpoint_if_owned(self, run_id: str, token: str, checkpoint: dict[str, object]) -> bool:
+        with SessionLocal() as session:
+            result = session.execute(text("""UPDATE agent_run SET checkpoint = CAST(:checkpoint AS JSONB), updated_at = NOW()
+                WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)"""), {"r": run_id, "token": token, "checkpoint": json.dumps(checkpoint)})
+            session.commit()
+        return result.rowcount == 1
+
+    def finish_if_running(self, run_id: str, *, token: str, status: str, error: str | None = None, current_node: str | None = None) -> bool:
         """Write a terminal outcome only while this executor still owns running.
 
         A concurrent pause/cancel changes the status first and wins; a late
@@ -164,8 +187,8 @@ class AgentRunRepository:
                 UPDATE agent_run
                 SET status = :status, error = :error, current_node = COALESCE(:node, current_node),
                     ended_at = NOW(), updated_at = NOW()
-                WHERE run_id = CAST(:r AS UUID) AND status = 'running'
-            """), {"r": run_id, "status": status, "error": error, "node": current_node})
+                WHERE run_id = CAST(:r AS UUID) AND status = 'running' AND execution_token = CAST(:token AS UUID)
+            """), {"r": run_id, "token": token, "status": status, "error": error, "node": current_node})
             session.commit()
         return result.rowcount == 1
 

@@ -191,3 +191,17 @@
 
 第二版当前验证：
 - 在专用迁移库运行 `DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:5432/requirement_agent_codex_20261010 API_AUTH_TOKEN=test-api-token TAVILY_MCP_ENABLED=false .venv/bin/python -m pytest -q tests/integration/test_analysis_tool_wiring_isolated.py`：3 passed（注册、实际执行、工作流接线、原子双认领/条件终态）。
+
+## 14–20. 第二版续作：执行所有权与恢复边界（进行中）
+
+已完成（待专用库认证恢复后重跑集成验证）：
+- 新增 `029_agent_run_execution_ownership.sql`：`execution_token`、`lease_expires_at` 及 running 租约索引，保持旧 run 可读。
+- `claim_run` 以单条条件 UPDATE 生成新的 UUID token；queued/paused/retrying 或已过期租约的 running run 才能被认领。
+- heartbeat、checkpoint、complete 与 fail 都以 `(run_id, status='running', execution_token)` 为写入栅栏。旧执行者在暂停/取消、过期重认领后不能写 checkpoint 或终结 run。
+- `/agent/run` 已传递认领 token 至 checkpoint/终结调用。
+
+部分完成：
+- 已新增 A 过期、B 重新认领、A 迟到 checkpoint/complete 被拒绝的隔离测试；当前本地 PostgreSQL TCP 认证拒绝空密码，未能在本轮重跑，不能计为通过。
+
+未完成：
+- 聊天和 Worker 接入 token/租约执行服务；实时 SSE 订阅、后台任务解耦、逐回合 ReAct 完整恢复状态、稳定 evidence locator 与恢复后引用闭环。

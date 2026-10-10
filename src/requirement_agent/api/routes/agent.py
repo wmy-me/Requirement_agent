@@ -38,8 +38,10 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
     execution = AgentExecutionService()
     created = execution.start(task_type="analysis", source_id=None, meta={"source_type": payload.source_type, "entrypoint": "POST /agent/run"})
     run_id = str(created["run_id"])
-    if execution.claim(run_id) is None:  # defensive: a just-created queued run must be claimable
+    claimed = execution.claim(run_id)
+    if claimed is None:  # defensive: a just-created queued run must be claimable
         raise RuntimeError("unable to claim newly created agent run")
+    token = str(claimed["execution_token"])
     execution.repo.append_events(run_id, [{"event_type": "run_started", "node": "execution", "payload": {"task_type": "analysis"}}])
     try:
         with bind_run_id(run_id):
@@ -49,13 +51,13 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
             )
     except Exception as exc:  # noqa: BLE001 —— 记下已发生的事件再上抛，不吞
         execution.repo.append_events(run_id, [{"event_type": "run_failed", "node": getattr(exc, "node", None), "payload": {"error": str(exc)}}])
-        execution.fail(run_id, exc, current_node=getattr(exc, "node", None))
+        execution.fail(run_id, token, exc, current_node=getattr(exc, "node", None))
         raise
 
     execution.repo.append_events(run_id, list(result.get("run_events") or []) + [{"event_type": "run_completed", "node": "review_decision", "payload": {}}])
     execution.repo.record_tool_invocations(run_id, list(result.get("tool_calls") or []))
-    execution.checkpoint(run_id, {"version": 2, "remaining_model_turns": None, "remaining_tool_calls": None, "result": result})
-    execution.complete(run_id, current_node="review_decision")
+    execution.checkpoint(run_id, token, {"version": 2, "remaining_model_turns": None, "remaining_tool_calls": None, "result": result})
+    execution.complete(run_id, token, current_node="review_decision")
 
     return {
         "status": "ok",

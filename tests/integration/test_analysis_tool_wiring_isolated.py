@@ -47,9 +47,33 @@ def test_execution_claim_and_terminal_updates_are_conditional() -> None:
     service = AgentExecutionService()
     run = service.start(task_type="isolated-test")
     run_id = str(run["run_id"])
-    assert service.claim(run_id) is not None
+    claimed = service.claim(run_id)
+    assert claimed is not None
+    token = str(claimed["execution_token"])
     assert service.claim(run_id) is None, "second executor must not acquire a running run"
     # Simulate a concurrent user cancellation before the stale executor returns.
     service.repo._update_run(run_id, status="cancelled")
-    assert service.complete(run_id) is False
+    assert service.complete(run_id, token) is False
     assert service.repo.get_run(run_id)["status"] == "cancelled"
+
+
+def test_expired_lease_reclaims_and_rejects_old_writer() -> None:
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="isolated-lease")["run_id"])
+    first = service.claim(run_id)
+    assert first is not None
+    first_token = str(first["execution_token"])
+    # Test-only forced expiry simulates a crashed worker without using business data.
+    # SQL expression is test-only to simulate an expired executor lease.
+    from requirement_agent.infrastructure.db.session import SessionLocal
+    from sqlalchemy import text
+    with SessionLocal() as session:
+        session.execute(text("UPDATE agent_run SET lease_expires_at = NOW() - interval '1 second' WHERE run_id = CAST(:r AS UUID)"), {"r": run_id})
+        session.commit()
+    second = service.claim(run_id)
+    assert second is not None
+    second_token = str(second["execution_token"])
+    assert second_token != first_token
+    assert service.checkpoint(run_id, first_token, {"old": True}) is False
+    assert service.complete(run_id, first_token) is False
+    assert service.checkpoint(run_id, second_token, {"turn": 1, "remaining_tool_calls": 11}) is True
