@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 from typing import Any
 
@@ -42,6 +43,9 @@ router = APIRouter()
 # bounded; full detached execution/SSE is intentionally a later migration.
 _ANALYSIS_EXECUTOR = ThreadPoolExecutor(
     max_workers=settings.agent_analysis_executor_workers, thread_name_prefix="agent-analysis"
+)
+_ANALYSIS_SLOTS = threading.BoundedSemaphore(
+    settings.agent_analysis_executor_workers + settings.agent_analysis_executor_queue
 )
 
 
@@ -91,6 +95,13 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         # copy_context retains request/run context for the bounded worker.
         context = contextvars.copy_context()
         loop = asyncio.get_running_loop()
+        admitted = await loop.run_in_executor(
+            None, lambda: _ANALYSIS_SLOTS.acquire(timeout=remaining_budget)
+        )
+        if not admitted:
+            if not execution.incomplete(run_id, token, "analysis executor capacity or budget exhausted", current_node="execution"):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="agent run lost execution ownership")
+            return {"status": "incomplete", "run_id": run_id, "reason": "executor_capacity"}
         result = await loop.run_in_executor(
             _ANALYSIS_EXECUTOR,
             lambda: context.run(
@@ -109,6 +120,8 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         execution.fail(run_id, token, exc, current_node=getattr(exc, "node", None))
         raise
     finally:
+        if 'admitted' in locals() and admitted:
+            _ANALYSIS_SLOTS.release()
         heartbeat.stop()
 
     if not execution.events(run_id, token, list(result.get("run_events") or [])):

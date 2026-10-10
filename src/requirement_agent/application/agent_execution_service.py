@@ -45,7 +45,11 @@ class ExecutionHeartbeat:
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
-            if not self.service.heartbeat(self.run_id, self.token):
+            try:
+                renewed = self.service.heartbeat(self.run_id, self.token)
+            except Exception:  # database outage means ownership is unknowable
+                renewed = False
+            if not renewed:
                 self._lost.set()
                 return
 

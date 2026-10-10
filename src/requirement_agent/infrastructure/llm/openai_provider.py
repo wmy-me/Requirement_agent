@@ -25,7 +25,7 @@ from requirement_agent.infrastructure.llm.invocation import (
     record_invocation,
 )
 from requirement_agent.infrastructure.llm.model_registry import ModelSpec
-from requirement_agent.application.execution_control import remaining_seconds
+from requirement_agent.application.execution_control import check_execution, remaining_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ class LLMProvider:
                 f"{self.base_url}/chat/completions",
                 payload,
                 self._headers(self.api_key),
-                self.timeout,
+                self._remaining_timeout(),
             ),
             op="chat",
             model=self.model,
@@ -253,6 +253,12 @@ class LLMProvider:
 
     def _sleep(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def _remaining_timeout(self) -> float:
+        """Re-evaluate execution deadline immediately before every request."""
+        check_execution()
+        remaining = remaining_seconds()
+        return min(self.timeout, remaining) if remaining is not None else self.timeout
 
     def _backoff_seconds(self, attempt: int) -> float:
         """指数退避 + 抖动：抖动避免多实例在同一时刻一起重试形成尖峰。"""
@@ -346,6 +352,7 @@ class LLMProvider:
         for attempt in range(self.max_retries + 1):
             attempts += 1
             try:
+                check_execution()
                 response = send()
                 response.raise_for_status()
                 return _CallResult(response, attempts, _elapsed_ms(started_at))
@@ -365,7 +372,15 @@ class LLMProvider:
             except httpx.TransportError as exc:  # 含超时、连接失败等网络层异常
                 last_error = exc
             if attempt < self.max_retries:
-                self._sleep(self._backoff_seconds(attempt))
+                check_execution()
+                delay = self._backoff_seconds(attempt)
+                remaining = remaining_seconds()
+                if remaining is not None:
+                    if remaining <= 0:
+                        check_execution()
+                    delay = min(delay, remaining)
+                self._sleep(delay)
+                check_execution()
         assert last_error is not None, "重试循环至少执行一次，必已记录异常"
         self._observe(
             op=op,
@@ -422,7 +437,7 @@ class LLMProvider:
                 f"{self.base_url}/chat/completions",
                 payload,
                 self._headers(self.api_key),
-                self.timeout,
+                self._remaining_timeout(),
             ),
             op="chat",
             model=self.model,
@@ -527,7 +542,7 @@ class LLMProvider:
                 f"{self._embedding_base_url()}/embeddings",
                 payload,
                 self._headers(self._embedding_api_key()),
-                self.timeout,
+                self._remaining_timeout(),
             ),
             op="embed",
             model=self.embedding_model,

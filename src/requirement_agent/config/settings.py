@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     agent_analysis_executor_workers: int = Field(
         default=4, ge=1, le=32, alias="AGENT_ANALYSIS_EXECUTOR_WORKERS"
     )
+    agent_analysis_executor_queue: int = Field(default=8, ge=0, le=128, alias="AGENT_ANALYSIS_EXECUTOR_QUEUE")
+    agent_tool_executor_workers: int = Field(default=8, ge=1, le=64, alias="AGENT_TOOL_EXECUTOR_WORKERS")
+    agent_tool_executor_queue: int = Field(default=16, ge=0, le=256, alias="AGENT_TOOL_EXECUTOR_QUEUE")
 
     # —— 飞书渠道（事件订阅）——
     # verification_token / encrypt_key 至少配一个，否则 Webhook 端点会拒绝所有请求

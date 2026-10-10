@@ -282,3 +282,18 @@
 - 仍未把聊天和 Worker 迁移至该执行服务；聊天/Worker 的旧入口仍保留兼容编排。
 - 未实现后台任务与 SSE 解耦、断线回放或实时事件订阅；这些属于后续批次。
 - 未对真实外部 LLM、HTTP、Tavily 或生产数据库做联调。本批验证使用假模型/离线工具和隔离 PostgreSQL。
+
+## 20. 执行边界补丁（部分完成）
+
+已完成：
+- 分析与工具执行池均增加固定“运行中 + 排队中”准入上限；容量等待受任务剩余时间限制。容量或预算耗尽产生明确 error/incomplete，而不是无限排队。
+- 工具等待超时时调用 `Future.cancel()`；该操作只会取消尚未开始的 Future。已开始的 Python 调用不被描述为已取消，仍受其下层 HTTP/数据库超时约束。
+- 工具工作线程真正开始时重新检查 execution token 和 deadline，因此排队期间暂停、取消、接管或预算耗尽不会再执行工具主体。
+- heartbeat 捕获数据库异常并标记 `lost=True` 后退出；`stop()` 会通知并 join 续租线程。调用边界以 `lost` 阻止后续模型/工具调用。
+- LLM 重试循环在每次请求、退避前后检查执行权和剩余总预算；每次非流式 HTTP 请求重新取得不大于当前剩余预算的 timeout。
+
+实际验证：
+- `.venv/bin/python -m pytest -q tests/unit/test_execution_boundary.py tests/unit/test_tool_task_budget.py tests/unit/test_agent_run_nonblocking.py`：**5 passed**。覆盖 heartbeat 数据库异常失权、工具开始时的 ownership 重检、任务预算和路由非阻塞。
+
+未完成：
+- 本轮尚未模拟真实 HTTP 重试耗尽总预算，也未对线程池饱和的多线程竞争作隔离数据库集成验证；下一批统一入口时应补齐。

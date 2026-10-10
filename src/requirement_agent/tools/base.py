@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextvars
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -29,6 +30,9 @@ from enum import Enum
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+
+from requirement_agent.application.execution_control import check_execution
+from requirement_agent.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +45,8 @@ _ARG_TEXT_CHARS = 120
 # A timed-out Python call can continue below this layer.  A bounded pool keeps
 # those unavoidable stragglers from creating an unbounded number of threads;
 # it does not claim to cancel their database/HTTP/model work.
-_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-call")
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.agent_tool_executor_workers, thread_name_prefix="tool-call")
+_TOOL_SLOTS = threading.BoundedSemaphore(settings.agent_tool_executor_workers + settings.agent_tool_executor_queue)
 
 
 class ToolInput(BaseModel):
@@ -260,14 +265,26 @@ class BaseTool(ABC):
         # 更一般地说：**任何依赖 ContextVar 的横切机制在工具内都会失效**。
         #
         # 只读传播（父 → 子）。工具在子线程里新设的上下文不会回流 —— 我们只需要读。
+        if not _TOOL_SLOTS.acquire(timeout=timeout_seconds):
+            raise TimeoutError(f"{self.name}: executor capacity exhausted")
         context = contextvars.copy_context()
-        future = _TOOL_EXECUTOR.submit(context.run, self.execute, params)
+
+        def work() -> ToolResult:
+            # A queued task must re-check when a worker actually starts it.
+            check_execution()
+            return self.execute(params)
+
+        future = _TOOL_EXECUTOR.submit(context.run, work)
+        future.add_done_callback(lambda _: _TOOL_SLOTS.release())
         try:
             return future.result(timeout=timeout_seconds)
-        except FutureTimeoutError as exc:
+        except FutureTimeoutError:
             # Do not call Future.cancel() as though it stopped a running call.
             # It only prevents a not-yet-started task and would obscure this
             # layer's deliberately documented "stop waiting" semantics.
+            # This only cancels work that never started; a running Python call
+            # is intentionally not claimed to be cancelled.
+            future.cancel()
             raise TimeoutError(self.name)
 
     # ── 审计 ──────────────────────────────────────────────────────────────
