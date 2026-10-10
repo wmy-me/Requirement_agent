@@ -1,5 +1,82 @@
 # 前端重构实施记录
 
+## F3–F6 与 F1 遗留项（2026-10-10，第二次修正轮）
+
+对照方案 §8，本轮补齐了 **F1 实际空缺的两项**，并完成 **F3 / F4 / F5**，F6 见文末。
+
+### 0. 先纠正一个进度错觉
+
+方案把「HTTP/**SSE** 层」和「统一设计变量」都算在 F1，但两项此前**都不存在**：
+`lib/http.ts` 只有一个总是 `response.json()` 的 `api()`，全仓库没有任何流式客户端；
+`styles/index.css` 一个 CSS 变量都没有。所以 F1 并未真正完成，本轮先补这两项。
+
+### A. F1 遗留项
+
+- **SSE 客户端** `frontend/src/lib/stream.ts`。后端是 POST + SSE 且要 `Authorization`，
+  `EventSource` 不能用；也不能复用 `api()`。按真实帧格式实现（`id:` 仅 step/done/error 带、
+  data 多行合并、CRLF 容错、注释与未知字段忽略、尾块丢弃、409 的 `active_run` 解析）。
+  **读取消与写取消分开**：`abortRead` 只关响应，真正停止要打 `POST /agent/runs/{id}/cancel`；
+  卸载只断读、绝不取消服务端 run。**不做**自动重连与 `Last-Event-ID` 回放（该契约不存在）。
+- **设计变量** `--ra-*`。取值逐字保持原样，**不改视觉结果**；抽取后重出资料库 / 需求详情 /
+  文档详情三张截图与提交版本**逐字节一致**（`cmp` 验证）。
+
+### B. F3 对话页（完成）
+
+- 状态机 `features/chat/reducer.ts` 处理三处反直觉：① `done` 经常**不带 status**，
+  用 `sawErrorFrame` 区分成功与失败收尾；② `artifacts` 在分析管线上**先于** `narrative{start}`
+  到达，气泡不能靠 start 创建；③ `incomplete` **不是成功**（琥珀色）。
+- 正文用 `react-markdown` + `remark-gfm`：输出 React 元素、**无 innerHTML**、不启用 `rehype-raw`、
+  链接白名单 + `noopener noreferrer nofollow`；懒加载成独立 chunk（158 kB 不进首屏）。
+- `artifacts` 按**真实形状**渲染（旧版用 `Array.isArray` 判对象，恒假 → 从未渲染过）。
+- 模式/联网/来源在**带附件时置灰**（`stream-with-files` 没有这三个参数）；
+  没有文档范围参数，故不做文档选择器，只给「在问题里写 REQ 编号」的提示。
+- 侧栏「最近对话」改跳站内 `/chat/:sessionId`，保留「旧版对话」次级入口。
+
+### C. F4 审核（完成）
+
+列表（待审 / 历史）+ 详情三栏（原始材料 / 拟变更 / 来源与风险）+ 底部裁决区。
+增改删用淡绿/淡黄/淡红**并保留文字标记**。**预演失败即禁用批准**；任何 409 都**不自动重试**。
+
+### D. F5 任务记录（完成）
+
+`failed` + `meta.outcome=incomplete` 映射为**未完成（预算或超时耗尽）**（琥珀色），原始状态
+小字保留供诊断。重试只对分析类 run 出现（后端对会话 run 会拒绝）。普通视图不显示租约字段。
+
+### E. F6 验收（本轮范围内完成）
+
+**实测（隔离库 `req_agent_iso` + 真实 FastAPI + 真实 Chrome；业务库零写入）：**
+
+| 项 | 结果 |
+|---|---|
+| `/app-next`、哈希资源、`ra-ui-token` 注入、深链接硬刷新、旧 `/app` | 全部 200 / 正确注入 |
+| 对话发送「你好」 | `session/step/narrative/done` 正确解析，`done` 无 status 判为成功 |
+| ask_library 一轮 | 服务端 provider 401 后流中断 → 界面显示「未正常结束」，未被当成成功 |
+| 需求列表 `module_names` | 报表、订单 / 支付 / **未提供** |
+| `/trace` | v2 `meeting·李娜`、v1 `web·张伟`，含摘要与时间 |
+| 文档详情 / 分片 / 无版本流 404 | 均按真实响应渲染，404 为正常态不崩 |
+| 审核列表 / 详情 / 合并预演 | 真实待审来源；选 REQ-000101 预演返回「v2 → v3；未变更 3 项」+ 1 条新增 |
+| 任务列表 / 详情 / 未完成映射 | 真实 run 行与事件行；incomplete 渲染为琥珀色 |
+| 窄屏 390px | 四个页面均无横向溢出；本期修掉审核/任务列表在窄屏保留 5 列栅格导致标题竖排的问题 |
+
+截图 20 张存 `docs/design/screenshots/`（8 页桌面 + 对话/资料库/审核/任务窄屏 + 版本切换 +
+旧版来源入口），逐张对照 `docs/design/requirement-workbench-reference.png`。
+
+接口映射见 **`docs/frontend_api_mapping.md`**（当前版；`docs/refactoring/frontend-api-mapping.md`
+仍是 2026-09-23 的历史盘点，不要当现状用）。
+
+### 仍未完成 / 阻塞
+
+- **真实 LLM / Tavily / MCP 未联调**：本机 `.env` 的 DeepSeek key 实测返回 **401**，
+  因此 F3 只能验证到「协议解析 + 失败呈现」，**没有产出过真实模型答案**。
+  可验证的路径（casual / 截断 / 取消）都验了；完整的 ReAct 工具调用链未能跑通。
+- **后端缺陷（未在本批修复，属后端范围）**：`agent_chat.py:711` 的 assistant 流只捕获
+  `(RuntimeError, ValueError)`，provider 抛的 `httpx.HTTPStatusError` 会穿透 →
+  **流不发终态帧就关闭**，run 留在 `running` 直到租约过期。前端已按「未正常结束」处理；
+  后端应放宽 except 并补终态帧。
+- 澄清的持久恢复、断线回放、SSE 后台化仍未实现（后端无对应契约），前端据实说明。
+- 参考图的「…」行内操作列、模型调用明细区未做（无真实接口，不放假按钮/假数据）。
+
+
 ## F0–F2 修正轮（2026-10-10，真实数据库联调）
 
 本次把 F0–F2 的「构建通过」推进到「对真实后端验证」，并修掉一个业务字段错误。

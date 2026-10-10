@@ -72,7 +72,7 @@ export function RunsListPage() {
       </div>
       {result.isLoading ? <div className="state">正在加载…</div> : result.isError ? <ErrorView error={result.error} /> : (
         <div className="data-table">
-          <div className="table-row runs"><span>任务</span><span>类型</span><span>状态</span><span>开始</span><span>耗时</span></div>
+          <div className="table-row header runs"><span>任务</span><span>类型</span><span>状态</span><span>开始</span><span>耗时</span></div>
           {rows.map((run) => {
             const view = statusView(run);
             return (

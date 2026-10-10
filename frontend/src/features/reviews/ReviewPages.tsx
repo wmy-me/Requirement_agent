@@ -49,7 +49,7 @@ export function ReviewsListPage() {
       {tab === "history" && <p className="window-note">已裁决的来源，默认取 approved / rejected / committed；退回修改不是终态，不在其中。</p>}
       {result.isLoading ? <div className="state">正在加载…</div> : result.isError ? <ErrorView error={result.error} /> : (
         <div className="data-table">
-          <div className="table-row reviews"><span>材料</span><span>来源</span><span>建议动作</span><span>状态</span><span>更新时间</span></div>
+          <div className="table-row header reviews"><span>材料</span><span>来源</span><span>建议动作</span><span>状态</span><span>更新时间</span></div>
           {rows.map((row) => (
             <Link className="table-row reviews" key={row.source_id} to={`/reviews/${encodeURIComponent(row.source_id)}`}>
               <span className="name"><FileText size={16} />{titleOf(row)}</span>
