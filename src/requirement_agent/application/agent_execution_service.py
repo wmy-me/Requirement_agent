@@ -35,7 +35,10 @@ class AgentExecutionService:
         return bool(self.repo.append_events_if_owned(run_id, token, events))
 
     def tool_calls(self, run_id: str, token: str, records: list[dict[str, Any]]) -> bool:
-        return bool(self.repo.record_tool_invocations_if_owned(run_id, token, records)) or not records
+        if not records:
+            # Probe ownership: empty is a valid completed tool batch.
+            return self.repo.heartbeat(run_id, token)
+        return self.repo.record_tool_invocations_if_owned(run_id, token, records) == len(records)
 
     def heartbeat(self, run_id: str, token: str) -> bool:
         return self.repo.heartbeat(run_id, token)

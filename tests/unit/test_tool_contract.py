@@ -23,6 +23,7 @@ from requirement_agent.application.requirement_query import RequirementQueryServ
 from requirement_agent.tools import TOOLS, BaseTool, ToolResult, ToolStatus
 from requirement_agent.tools import create, descriptors, for_consumer, llm_schemas, names
 from requirement_agent.tools.registry import FORBIDDEN_NAMES, register
+from requirement_agent.tools.invoker import invoke, tool_call_record
 
 # 本批次登记在册的工具。**刻意与本文件重复**：让「名录与实现对不上」变成一条失败的
 # 测试，而不是一个安静的缺失。
@@ -80,6 +81,18 @@ def test_create_returns_a_fresh_instance() -> None:
 
 def test_create_unknown_returns_none() -> None:
     assert create("no_such_tool") is None
+
+
+def test_extract_adapter_uses_heuristic_without_llm() -> None:
+    result = invoke("extract_requirement", {"text": "新增登录验证码", "source_type": "web"}, consumer="analysis")
+    assert result.status is ToolStatus.SUCCESS
+    assert result.result["extraction_source"] == "heuristic"
+
+
+def test_call_record_recursively_redacts_sensitive_parameters() -> None:
+    record = tool_call_record("x", {"nested": [{"api_key": "secret", "text": "x" * 500}]}, ToolResult.success([]))
+    assert "secret" not in record["params"]["summary"]
+    assert "***" in record["params"]["summary"]
 
 
 # ── 注册时的硬校验（这一版新加的） ────────────────────────────────────────

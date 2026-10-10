@@ -36,9 +36,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from requirement_agent.tools.base import ToolResult, ToolStatus
+from requirement_agent.tools.base import ToolResult, ToolStatus, audit_summary
 from requirement_agent.tools.registry import get_class
-from requirement_agent.tools.base import _digest
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +146,7 @@ def tool_call_record(
         count = len(value)
     return _CallRecord(
         tool=name,
-        params={"summary": _digest(params or {})},
+        params={"summary": audit_summary(params or {})},
         status=result.status.value,
         duration_ms=result.duration_ms,
         count=count,

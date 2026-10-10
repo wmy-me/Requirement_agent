@@ -57,8 +57,10 @@ async def run_agent_pipeline(payload: AgentRunRequest) -> dict[str, object]:
         raise RuntimeError("agent run lost execution ownership")
     if not execution.tool_calls(run_id, token, list(result.get("tool_calls") or [])):
         raise RuntimeError("agent run lost execution ownership")
-    execution.checkpoint(run_id, token, {"version": 2, "remaining_model_turns": None, "remaining_tool_calls": None, "result": result})
-    execution.complete(run_id, token, current_node="review_decision")
+    if not execution.checkpoint(run_id, token, {"version": 2, "remaining_model_turns": None, "remaining_tool_calls": None, "result": result}):
+        raise RuntimeError("agent run lost execution ownership")
+    if not execution.complete(run_id, token, current_node="review_decision"):
+        raise RuntimeError("agent run lost execution ownership")
 
     return {
         "status": "ok",

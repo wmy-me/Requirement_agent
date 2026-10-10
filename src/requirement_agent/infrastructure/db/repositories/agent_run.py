@@ -187,12 +187,18 @@ class AgentRunRepository:
             return self._append_events_in_session(session, run_id, events)
 
     def record_tool_invocations_if_owned(self, run_id: str, token: str, records: list[dict[str, object]]) -> int:
-        # Ownership is checked before delegating to the established serializer.
+        if not records:
+            # Empty output is valid and must not be confused with lost ownership.
+            return 0
         with SessionLocal() as session:
-            owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID)"), {"r": run_id, "t": token}).first()
+            owned = session.execute(text("SELECT 1 FROM agent_run WHERE run_id=CAST(:r AS UUID) AND status='running' AND execution_token=CAST(:t AS UUID) FOR UPDATE"), {"r": run_id, "t": token}).first()
             if not owned:
                 return 0
-        return self.record_tool_invocations(run_id, records)
+            for record in records:
+                session.execute(text("""INSERT INTO tool_invocation (id,run_id,tool_name,arguments_summary,result_summary,status,elapsed_ms,error_message)
+                    VALUES (:id,CAST(:run_id AS UUID),:name,CAST(:args AS JSONB),CAST(:result AS JSONB),:status,:elapsed,:error)"""), {"id": new_id(), "run_id": run_id, "name": str(record.get("tool") or ""), "args": json.dumps(record.get("params") or {}, ensure_ascii=False), "result": json.dumps({"count": record.get("count"), "sample": record.get("sample")}, ensure_ascii=False), "status": str(record.get("status") or "unknown"), "elapsed": int(record.get("duration_ms") or 0), "error": record.get("message")})
+            session.commit()
+        return len(records)
 
     def finish_if_running(self, run_id: str, *, token: str, status: str, error: str | None = None, current_node: str | None = None) -> bool:
         """Write a terminal outcome only while this executor still owns running.

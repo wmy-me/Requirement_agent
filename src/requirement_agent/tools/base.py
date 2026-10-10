@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BaseTool", "ToolInput", "ToolResult", "ToolStatus"]
+__all__ = ["BaseTool", "ToolInput", "ToolResult", "ToolStatus", "audit_summary"]
 
 # 参数摘要里单个字符串值的截断长度。工具参数可能带上千字的需求正文，
 # 原样打进日志既没用又危险（审计日志不该成为第二条数据副本）。
@@ -286,12 +286,12 @@ class BaseTool(ABC):
         if result.is_error:
             logger.warning(
                 "event=tool_call tool=%s args=%s duration_ms=%.1f status=%s error=%s",
-                self.name, _digest(raw), result.duration_ms, result.status.value, result.message,
+                self.name, audit_summary(raw), result.duration_ms, result.status.value, result.message,
             )
         else:
             logger.info(
                 "event=tool_call tool=%s args=%s duration_ms=%.1f status=%s count=%s",
-                self.name, _digest(raw), result.duration_ms, result.status.value, count,
+                self.name, audit_summary(raw), result.duration_ms, result.status.value, count,
             )
 
 
@@ -308,22 +308,21 @@ def _brief_validation(exc: ValidationError) -> str:
     return "；".join(parts)
 
 
-def _digest(raw: dict[str, Any] | None) -> str:
+def audit_summary(raw: dict[str, Any] | None, *, max_depth: int = 3, max_items: int = 8, max_chars: int = 400) -> str:
     """参数摘要 —— 长文本截断。审计日志不该成为第二条数据副本。"""
     if not raw:
         return "{}"
-    parts = []
-    for key, value in list(raw.items())[:8]:
+    def clean(value: object, depth: int, key: str = "") -> object:
         if any(token in key.lower() for token in ("token", "secret", "password", "credential", "api_key")):
-            value = "***"
-        elif isinstance(value, str) and len(value) > _ARG_TEXT_CHARS:
-            value = f"{value[:_ARG_TEXT_CHARS]}…(共{len(value)}字)"
-        elif isinstance(value, (dict, list)):
-            value = _digest_value(value)
-        parts.append(f"{key}={value!r}")
-    return "{" + ", ".join(parts) + "}"
-
-
-def _digest_value(value: object) -> object:
-    text = repr(value)
-    return text[:_ARG_TEXT_CHARS] + ("…" if len(text) > _ARG_TEXT_CHARS else "")
+            return "***"
+        if depth <= 0:
+            return "…"
+        if isinstance(value, dict):
+            return {str(k): clean(v, depth - 1, str(k)) for k, v in list(value.items())[:max_items]}
+        if isinstance(value, list):
+            return [clean(v, depth - 1) for v in value[:max_items]]
+        if isinstance(value, str) and len(value) > _ARG_TEXT_CHARS:
+            return f"{value[:_ARG_TEXT_CHARS]}…(共{len(value)}字)"
+        return value
+    text = repr(clean(raw, max_depth))
+    return text[:max_chars] + ("…" if len(text) > max_chars else "")

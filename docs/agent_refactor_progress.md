@@ -228,3 +228,19 @@
 未完成：
 - 需求查询/检索/预演模块尚未物理迁移至 `tools/requirements`（需要分批移动和兼容转发，未在本轮仓促完成）；external Tavily 未改变，documents/memory 未创建空目录。
 - 任务剩余预算尚未下传至 BaseTool，分析工具的模型/数据库下层超时及有界线程池仍待结合执行器改造。
+
+## 17. 本轮正确性修复（部分完成）
+
+已完成：
+- 删除无意义 `ExtractRequirementOutput` 子类；抽取工具直接返回 `ExtractedRequirement`，无 LLM 时经 invoker 验证为 `success` 且保留 `extraction_source=heuristic`。
+- 工具调用记录的 token 校验、行锁和 INSERT 合并到同一事务；空工具列表通过 heartbeat 单独确认所有权，不再把空结果当作失权。
+- `/agent/run` 现在检查 checkpoint 与 complete 返回值，失去所有权会失败而非返回 `status=ok`。
+- 审计摘要改为公共 `audit_summary`，递归屏蔽敏感键，限制层级、条数及最终长度；invoker 不再导入私有函数。
+
+实际验证：
+- `.venv/bin/python -m pytest -q tests/unit/test_tool_contract.py`：65 passed（含 heuristic 抽取与嵌套 api_key 脱敏）。
+- `py_compile` 与 `git diff --check`：通过。
+
+未验证：
+- 隔离 PostgreSQL 的 A/B 接管、heartbeat、迟到工具 INSERT 和最终状态竞态仍受本地 TCP 数据库认证阻断，未将其报告为通过。
+- 实际周期 heartbeat、任务剩余时间向工具传播、异步后台化与聊天/Worker 迁移尚未完成。

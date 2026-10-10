@@ -19,21 +19,17 @@ class ExtractRequirementInput(ToolInput):
     requester_name: str | None = Field(default=None, max_length=128)
 
 
-class ExtractRequirementOutput(ExtractedRequirement):
-    pass
-
-
 @register
 class ExtractRequirementTool(BaseTool):
     name = "extract_requirement"
     description = "Convert requirement material into a structured, non-persistent extraction."
     input_model = ExtractRequirementInput
-    output_schema: dict[str, Any] = ExtractRequirementOutput.model_json_schema()
+    output_schema: dict[str, Any] = ExtractedRequirement.model_json_schema()
     allowed_consumers = ("analysis",)
     timeout_seconds = 60.0
 
     def execute(self, params: ExtractRequirementInput) -> ToolResult:
-        return ToolResult.success(ExtractRequirementOutput.model_validate(ExtractAgent().extract(params.text, source_type=params.source_type, requester_name=params.requester_name)).model_dump(mode="python"))
+        return ToolResult.success(ExtractAgent().extract(params.text, source_type=params.source_type, requester_name=params.requester_name).model_dump(mode="python"))
 
 
 class AnalyzeRequirementRelationInput(ToolInput):
