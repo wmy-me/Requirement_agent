@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from requirement_agent.agents.analyze_agent import score_label
 from requirement_agent.application.decision_rules import next_action_for as decision_next_action
 from requirement_agent.application.decision_rules import review_required as decision_review_required
+from requirement_agent.application.agent_execution_service import AgentExecutionService
 from requirement_agent.infrastructure.db.repositories.chat import ConversationBusyError
 from requirement_agent.infrastructure.llm.openai_provider import LLMProvider
 from requirement_agent.infrastructure.llm.invocation import bind_run_id
@@ -567,7 +568,7 @@ async def _stream_library_assistant(
         run = chat_repo.create_run(
             conversation_id=session_id,
             client_message_id=client_message_id,
-            status="running",
+            status="queued",
             meta={"task_type": "assistant", "execution_version": "assistant_v1", "intent": intent,
                   "actor_id": actor_id, "web_policy": "on" if allow_external else "off"},
         )
@@ -576,10 +577,38 @@ async def _stream_library_assistant(
         yield _sse("done", {"run_id": ""})
         return
     run_id = str(run["run_id"])
+    execution = AgentExecutionService()
+    claimed = execution.claim(run_id)
+    if claimed is None:
+        yield _sse("error", {"message": CONVERSATION_BUSY_MESSAGE})
+        yield _sse("done", {"run_id": run_id})
+        return
+    token = str(claimed["execution_token"])
+    heartbeat = execution.heartbeat_loop(run_id, token)
+    if not execution.checkpoint(
+        run_id, token, {"version": 1, "intent": intent, "execution_position": "assistant"},
+        events=[{"event_type": "run_started", "node": "assistant", "payload": {"task_type": "assistant"}}],
+    ):
+        heartbeat.stop()
+        yield _sse("done", {"run_id": run_id, "status": "cancelled"})
+        return
+
+    def _tracked_sse(name: str, payload: dict[str, object], *, node: str | None = None) -> str:
+        event_type = _SSE_TO_RUN_EVENT.get(name)
+        seq: int | None = None
+        if event_type:
+            rows = execution.repo.append_events_if_owned(
+                run_id, token, [{"event_type": event_type, "node": node, "payload": payload}]
+            )
+            if rows:
+                seq = int(rows[0]["sequence"])
+        return _sse(name, payload, seq=seq)
     yield _sse("session", {"session_id": session_id, "run_id": run_id, "intent": intent})
-    yield _tracked_sse(run_id, "step", {"step": "assistant", "label": "正在查询需求库…"}, node="assistant")
+    yield _tracked_sse("step", {"step": "assistant", "label": "正在查询需求库…"}, node="assistant")
     try:
         def _stop_status() -> str | None:
+            if heartbeat.lost or not execution.owns(run_id, token):
+                return "cancelled"
             current = chat_repo.get_run(run_id)
             value = str(current.get("status")) if current else "cancelled"
             return value if value in {"paused", "cancelled"} else None
@@ -587,7 +616,8 @@ async def _stream_library_assistant(
         def _persist_event(event: dict[str, object]) -> None:
             # This callback is invoked between tool calls, so event persistence
             # does not wait for the whole ReAct loop to finish.
-            run_tracking.record_one(run_id, event)
+            if not execution.events(run_id, token, [event]):
+                heartbeat.mark_lost()
 
         with bind_run_id(run_id):
             result = await run_in_threadpool(
@@ -595,11 +625,13 @@ async def _stream_library_assistant(
                 history=history, should_stop=_stop_status, on_event=_persist_event,
             )
         # Tool events have already been appended one by one by _persist_event.
-        run_tracking.record_tool_calls(run_id, result.tool_calls)
+        if not execution.tool_calls(run_id, token, result.tool_calls):
+            yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
+            return
         for event in result.events:
             if event["event_type"] == "tool_started":
                 yield _tracked_sse(
-                    run_id, "step",
+                    "step",
                     {"step": "tool", "label": "正在查询资料…", "tool": event["payload"]["tool"]},
                     node="assistant",
                 )
@@ -610,6 +642,9 @@ async def _stream_library_assistant(
             "tool_calls": result.tool_calls,
             "incomplete_reason": result.incomplete_reason,
         }
+        if not execution.owns(run_id, token):
+            yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
+            return
         assistant = chat_repo.append_assistant_message(
             conversation_id=session_id, content=result.content, artifacts=artifacts, run_id=run_id,
         )
@@ -620,31 +655,31 @@ async def _stream_library_assistant(
         # Budget exhaustion is a completed, explicitly incomplete response; it is
         # not a failed query and must remain replayable like any other final answer.
         if result.status in {"paused", "cancelled"}:
-            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": result.status}, node="assistant")
+            yield _tracked_sse("done", {"run_id": run_id, "status": result.status}, node="assistant")
             return
         final_status = "failed" if result.status == "failed" else "completed"
-        finished = chat_repo.complete_run_if_running(
-            run_id=run_id, status=final_status,
-            error=result.incomplete_reason if final_status == "failed" else None,
-            meta={"conversation_id": session_id, "assistant_message_id": assistant["id"], "intent": intent},
-            stage="done",
-            checkpoint={"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources()},
-        )
-        if finished is None:
+        checkpoint = {"version": 1, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources(), "execution_position": "done"}
+        if not execution.checkpoint(run_id, token, checkpoint):
             # A concurrent pause/cancel wins. Do not expose a stale completion.
-            yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
+            yield _tracked_sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
+            return
+        finished = execution.fail(run_id, token, RuntimeError(result.incomplete_reason or result.content), current_node="assistant") if final_status == "failed" else execution.complete(run_id, token, current_node="assistant")
+        if not finished:
+            yield _tracked_sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
             return
         yield _sse("artifacts", {"artifacts": artifacts})
         yield _sse("narrative", {"start": True})
         for index in range(0, len(result.content), 10):
             yield _sse("narrative", {"t": result.content[index:index + 10]})
         if final_status == "failed":
-            yield _tracked_sse(run_id, "error", {"message": result.content}, node="assistant")
-        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": final_status}, node="assistant")
+            yield _tracked_sse("error", {"message": result.content}, node="assistant")
+        yield _tracked_sse("done", {"run_id": run_id, "status": final_status}, node="assistant")
     except (RuntimeError, ValueError) as exc:
-        chat_repo.update_run(run_id=run_id, status="failed", error=str(exc), meta={"conversation_id": session_id}, stage="failed")
-        yield _tracked_sse(run_id, "error", {"message": str(exc)}, node="assistant")
-        yield _tracked_sse(run_id, "done", {"run_id": run_id, "status": "failed"}, node="assistant")
+        execution.fail(run_id, token, exc, current_node="assistant")
+        yield _tracked_sse("error", {"message": str(exc)}, node="assistant")
+        yield _tracked_sse("done", {"run_id": run_id, "status": "failed"}, node="assistant")
+    finally:
+        heartbeat.stop()
 
 
 async def _try_replay(session_id: str, client_message_id: str) -> AsyncIterator[str] | None:

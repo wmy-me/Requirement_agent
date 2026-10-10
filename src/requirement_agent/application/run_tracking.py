@@ -31,6 +31,7 @@ from typing import Any, TypeVar
 
 from requirement_agent.domain.agent_run import RunEvent
 from requirement_agent.infrastructure.db.repositories import AgentRunRepository
+from requirement_agent.application.agent_execution_service import AgentExecutionService, ExecutionHeartbeat
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ class RunTracking:
 
     def __init__(self, repo: AgentRunRepository | None = None) -> None:
         self.repo = repo or AgentRunRepository()
+        self.execution = AgentExecutionService(self.repo)
+        self._tokens: dict[str, str] = {}
+        self._heartbeats: dict[str, ExecutionHeartbeat] = {}
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
@@ -56,18 +60,16 @@ class RunTracking:
         这件事在事件流里是**可见的**（只有 `run_started` 就没了），
         而不是一个空 run 让人猜。
         """
-        created = self._guard(
-            "start_analysis",
-            lambda: self.repo.create_run(run_type="analysis", source_id=source_id, meta=meta),
-        )
+        created = self._guard("start_analysis", lambda: self.execution.start(task_type="analysis", source_id=source_id, meta=meta))
         if not created:
             return None
         run_id = str(created["run_id"])
-        self.record_events(
-            run_id,
-            [RunEvent("run_started", payload={"source_id": source_id})],
-        )
-        self._guard("mark_running", lambda: self.repo.mark_running(run_id))
+        claimed = self._guard("claim", lambda: self.execution.claim(run_id))
+        if not claimed:
+            return None
+        self._tokens[run_id] = str(claimed["execution_token"])
+        self._heartbeats[run_id] = self.execution.heartbeat_loop(run_id, self._tokens[run_id])
+        self.record_events(run_id, [RunEvent("run_started", payload={"source_id": source_id})])
         return run_id
 
     def record_events(self, run_id: str | None, events: list[Any]) -> None:
@@ -78,7 +80,11 @@ class RunTracking:
             event.to_event_dict() if isinstance(event, RunEvent) else dict(event)
             for event in events
         ]
-        self._guard("record_events", lambda: self.repo.append_events(run_id, shaped))
+        token = self._tokens.get(run_id)
+        if token:
+            self._guard("record_events", lambda: self.execution.events(run_id, token, shaped))
+        else:
+            self._guard("record_events_compat", lambda: self.repo.append_events(run_id, shaped))
 
     def record_one(self, run_id: str | None, event: Any) -> int | None:
         """落**一条**事件并返回它拿到的 `sequence`，供 SSE 的 `id:` 行用。
@@ -90,7 +96,8 @@ class RunTracking:
         if not run_id:
             return None
         shaped = event.to_event_dict() if isinstance(event, RunEvent) else dict(event)
-        rows = self._guard("record_one", lambda: self.repo.append_events(run_id, [shaped]))
+        token = self._tokens.get(run_id)
+        rows = self._guard("record_one", lambda: self.repo.append_events_if_owned(run_id, token, [shaped]) if token else self.repo.append_events(run_id, [shaped]))
         if not rows:
             return None
         return int(rows[0]["sequence"])
@@ -99,10 +106,8 @@ class RunTracking:
         """把 `tool_call_record` 的形状落成 `tool_invocation` 行。"""
         if not run_id or not tool_calls:
             return
-        self._guard(
-            "record_tool_calls",
-            lambda: self.repo.record_tool_invocations(run_id, list(tool_calls)),
-        )
+        token = self._tokens.get(run_id)
+        self._guard("record_tool_calls", lambda: self.execution.tool_calls(run_id, token, list(tool_calls)) if token else self.repo.record_tool_invocations(run_id, list(tool_calls)))
 
     def fail(self, run_id: str | None, *, error: BaseException, node: str | None) -> None:
         """收尾成 `failed`。
@@ -112,16 +117,13 @@ class RunTracking:
         """
         if not run_id:
             return
-        self.record_events(
-            run_id,
-            [RunEvent("run_failed", node=node, payload={"error": str(error)})],
-        )
-        self._guard(
-            "fail_run",
-            lambda: self.repo.finish_run(
-                run_id, status="failed", error=str(error), current_node=node
-            ),
-        )
+        token = self._tokens.get(run_id)
+        if token:
+            self._guard("fail_run", lambda: self.execution.fail(run_id, token, error, current_node=node))
+            self._stop_heartbeat(run_id)
+        else:
+            self.record_events(run_id, [RunEvent("run_failed", node=node, payload={"error": str(error)})])
+            self._guard("fail_run_compat", lambda: self.repo.finish_run(run_id, status="failed", error=str(error), current_node=node))
 
     def finish(self, run_id: str | None, *, current_node: str = "decide") -> None:
         """分析跑完、进入待人审 —— 状态是 **`waiting_review` 而不是 `completed`**。
@@ -133,13 +135,18 @@ class RunTracking:
         """
         if not run_id:
             return
-        self.record_events(run_id, [RunEvent("run_completed", node=current_node)])
-        self._guard(
-            "finish_run",
-            lambda: self.repo.finish_run(
-                run_id, status="waiting_review", current_node=current_node
-            ),
-        )
+        token = self._tokens.get(run_id)
+        if token:
+            self._guard("finish_run", lambda: self.execution.finish(run_id, token, status="waiting_review", current_node=current_node))
+            self._stop_heartbeat(run_id)
+        else:
+            self.record_events(run_id, [RunEvent("run_completed", node=current_node)])
+            self._guard("finish_run_compat", lambda: self.repo.finish_run(run_id, status="waiting_review", current_node=current_node))
+
+    def _stop_heartbeat(self, run_id: str) -> None:
+        heartbeat = self._heartbeats.pop(run_id, None)
+        if heartbeat is not None:
+            heartbeat.stop()
 
     # ── 护栏 ──────────────────────────────────────────────────────────────
 

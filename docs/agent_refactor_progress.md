@@ -302,3 +302,18 @@
 - 工具容量准入、排队及 Future 等待现在共享同一个绝对 monotonic deadline；成功准入后重新计算剩余时间，不会重新获得完整工具 timeout。
 - `/agent/run` 容量等待改为 async 协作轮询；请求协程取消不会遗留后台 acquire。分析容量在实际 Future 完成的回调中释放，而不是 HTTP 请求提前结束时释放；submit 失败会立即释放已取得容量。
 - `tests/unit/test_tool_task_budget.py` 的可控阻塞器覆盖队列饱和、准入耗尽同一预算、超时排队任务在容量后来后不执行：本轮 `tests/unit/test_tool_task_budget.py tests/unit/test_execution_boundary.py tests/unit/test_agent_run_nonblocking.py` 为 **6 passed**。
+
+## 21. 入口执行生命周期统一（部分完成）
+
+已完成：
+- `AgentExecutionService.start()` 现在按任务语义选择 `conversation`（assistant/有 conversation_id）或 `analysis` run_type，旧行保持可读。
+- Worker 的既有 `RunTracking` 改为兼容适配层：创建分析 run 后经执行服务 claim，保存 token，启动 heartbeat；事件、工具记录、失败和 `waiting_review` 收尾都使用 token 约束的执行服务写入。Outbox 的重试和 `RequirementService` 的幂等、人工审核/正式落库边界未改变。
+- 问答 ReAct 主路径保留原 Agent 与 SSE 输出方式，但运行行从 queued 原子 claim；heartbeat、工具事件、工具记录、checkpoint 和完成/失败改经执行服务。ChatRepository 仍只处理会话和消息。
+
+实际验证：
+- 独立 PostgreSQL 库运行 `.venv/bin/python -m pytest -q tests/integration/test_agent_run_tracking.py tests/integration/test_analysis_tool_wiring_isolated.py`：**23 passed**。包含真实数据库 token 抢占、迟到写入拒绝、heartbeat、分析追踪和待审核终态。
+- `.venv/bin/python -m pytest -q tests/unit/test_assistant_agent.py`：**5 passed**；`py_compile` 与 `git diff --check` 通过。
+
+未完成：
+- 动态聊天图、resume/clarification 等旧聊天兼容分支尚未逐一迁移到 token 生命周期；本批只迁移问答 ReAct 主路径，不能宣称所有聊天路径已统一。
+- 未进行真实 MCP/LLM 联调；SSE 仍由连接协程发送，不是后续批次的后台执行/断线回放实现。

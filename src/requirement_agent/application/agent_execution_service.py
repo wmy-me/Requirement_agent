@@ -37,6 +37,9 @@ class ExecutionHeartbeat:
     def lost(self) -> bool:
         return self._lost.is_set()
 
+    def mark_lost(self) -> None:
+        self._lost.set()
+
     def start(self) -> "ExecutionHeartbeat":
         if self._thread is None:
             self._thread = threading.Thread(target=self._run, name=f"agent-lease-{self.run_id[:8]}", daemon=True)
@@ -65,7 +68,8 @@ class AgentExecutionService:
 
     def start(self, *, task_type: str, source_id: int | None = None, conversation_id: str | None = None, meta: dict[str, Any] | None = None) -> dict[str, object]:
         values = {"task_type": task_type, "execution_version": "execution_v2", **(meta or {})}
-        return self.repo.create_run(run_type="analysis", source_id=source_id, conversation_id=conversation_id, meta=values)
+        run_type = "conversation" if conversation_id is not None or task_type == "assistant" else "analysis"
+        return self.repo.create_run(run_type=run_type, source_id=source_id, conversation_id=conversation_id, meta=values)
 
     @property
     def lease_seconds(self) -> float:
@@ -108,6 +112,13 @@ class AgentExecutionService:
 
     def complete(self, run_id: str, token: str, *, current_node: str | None = None) -> bool:
         return self.repo.finish_with_event_if_owned(run_id, token, status="completed", current_node=current_node, event={"event_type": "run_completed", "node": current_node, "payload": {}})
+
+    def finish(self, run_id: str, token: str, *, status: str, current_node: str | None = None) -> bool:
+        """Finish an owned run in a valid domain terminal/waiting state."""
+        return self.repo.finish_with_event_if_owned(
+            run_id, token, status=status, current_node=current_node,
+            event={"event_type": "run_completed", "node": current_node, "payload": {"status": status}},
+        )
 
     def fail(self, run_id: str, token: str, error: BaseException, *, current_node: str | None = None) -> bool:
         return self.repo.finish_with_event_if_owned(run_id, token, status="failed", error=str(error), current_node=current_node, event={"event_type": "run_failed", "node": current_node, "payload": {"error": str(error)}})
