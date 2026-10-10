@@ -7,6 +7,8 @@ database; extract/analyze/risk fall back to their deterministic implementations.
 
 from __future__ import annotations
 
+import threading
+
 from requirement_agent.tools.invoker import invoke
 from requirement_agent.tools.registry import names
 from requirement_agent.workflows.agents_nodes import analyze_node, extract_node, risk_node
@@ -77,3 +79,24 @@ def test_expired_lease_reclaims_and_rejects_old_writer() -> None:
     assert service.checkpoint(run_id, first_token, {"old": True}) is False
     assert service.complete(run_id, first_token) is False
     assert service.checkpoint(run_id, second_token, {"turn": 1, "remaining_tool_calls": 11}) is True
+    assert service.events(run_id, first_token, [{"event_type": "late", "payload": {}}]) is False
+    assert service.tool_calls(run_id, first_token, [{"tool": "late", "params": {}, "status": "success", "duration_ms": 1, "count": 0, "message": None, "sample": None}]) is False
+
+
+def test_two_executors_race_on_one_claim_with_barrier() -> None:
+    service = AgentExecutionService()
+    run_id = str(service.start(task_type="claim-race")["run_id"])
+    barrier = threading.Barrier(3)
+    claimed: list[object] = []
+
+    def contender() -> None:
+        barrier.wait()
+        claimed.append(AgentExecutionService().claim(run_id))
+
+    threads = [threading.Thread(target=contender), threading.Thread(target=contender)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+    assert sum(item is not None for item in claimed) == 1

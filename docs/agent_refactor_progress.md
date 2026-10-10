@@ -244,3 +244,17 @@
 未验证：
 - 隔离 PostgreSQL 的 A/B 接管、heartbeat、迟到工具 INSERT 和最终状态竞态仍受本地 TCP 数据库认证阻断，未将其报告为通过。
 - 实际周期 heartbeat、任务剩余时间向工具传播、异步后台化与聊天/Worker 迁移尚未完成。
+
+## 18. 隔离数据库所有权验证（部分完成）
+
+已完成：
+- 建立独立 `requirement_agent_codex_isolated` 测试库及专用非 superuser 测试角色；完整执行 `migrations/*.sql`，扩展/迁移由容器内管理员执行，测试由专用角色执行，未连接业务库。
+- `tests/integration/test_analysis_tool_wiring_isolated.py` 使用线程 Barrier 覆盖两个执行者同时认领；只有一个获得 token。
+- 真实数据库覆盖取消后的迟到 complete 拒绝、租约过期接管后的旧 token checkpoint/event/tool invocation/complete 拒绝，及新 token checkpoint 成功。
+
+实际验证：
+- 专用临时凭据环境下运行 `.venv/bin/python -m pytest -q tests/integration/test_analysis_tool_wiring_isolated.py`：**5 passed**。
+
+未完成：
+- 周期性 heartbeat 尚未接入实际模型/工具循环；当前仅有可调用的 heartbeat 原语。
+- `/agent/run` 仍在 async 路由同步执行 `run_analysis`，取消/暂停不能在长模型调用期间及时生效；任务剩余时间未下传工具层。本轮不将其标记为完成。
