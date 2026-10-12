@@ -121,3 +121,16 @@ Outbox、Worker、版本、关系等由下述集成测试覆盖。
 - 聊天 UI 与 API 默认 `web_policy` 统一改为 `auto`。自动模式只为外部调研意图开放外部只读工具；
   普通需求库问答不会被无条件发送到外部服务。前端回归为 10 passed，类型检查和构建通过；后端
   schema/assistant/narrative 相关回归为 15 passed。
+
+### Tavily MCP 真实复测（2026-10-12，后续配置完成后）
+
+- `.env` 的 `TAVILY_MCP_ENABLED=true` 与凭据均已配置。发现客户端只读 `os.environ`，未读取项目
+  已约定的 `.env`，修复为进程环境优先、`.env` 本地兜底；凭据未写入日志、响应或测试输出。
+- Tavily 当前远端实际工具名为 `tavily_search` / `tavily_extract`，项目旧的连字符映射导致发现结果
+  与白名单无交集。已切换到现行下划线名称，并兼容旧 `.env` 的连字符允许列表。
+- 真实 MCP 验证通过：工具发现得到上述两个只读工具；公开查询 `Python official documentation`
+  返回 2 条结果；对 `https://docs.python.org` 的公开网页提取成功且有正文。
+- 真实 FastAPI + DeepSeek + Tavily 聊天流验证通过：外部研究意图、`web_policy=auto`，SSE 终态
+  `completed`；工具审计为 `web_search` 成功 2 次、`read_web_page` 成功 1 次，artifacts 返回
+  11 条公开来源 URL。该公开合成会话已通过会话删除接口清理。前端会把这些 `sources` 自动渲染为
+  答案下方可点击的“相关资料来源”，并把三次调用渲染为“本轮实际工具调用”。

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol
 
 from requirement_agent.config.mcp import TavilyMCPConfig
@@ -80,7 +81,7 @@ class MCPClientManager:
     def _get_transport(self) -> MCPTransport:
         if not self.config.enabled:
             raise MCPUnavailableError("Tavily MCP is disabled")
-        credential = os.environ.get(self.config.credential_env, "").strip()
+        credential = _credential_from_environment_or_dotenv(self.config.credential_env)
         if not credential:
             raise MCPUnavailableError(
                 f"Tavily MCP credential is missing: set {self.config.credential_env}"
@@ -192,6 +193,26 @@ def _decode_mcp_response(response: Any) -> dict[str, Any]:
 
 def _http_transport(config: TavilyMCPConfig, credential: str) -> MCPTransport:
     return StreamableHTTPMCPTransport(config, credential)
+
+
+def _credential_from_environment_or_dotenv(name: str) -> str:
+    """Read a credential at call time without ever logging or exporting it.
+
+    Production deploys commonly inject environment variables.  Local development
+    uses the repository's documented `.env`; Pydantic reads that file for normal
+    settings but deliberately does not mutate ``os.environ``.  The old client
+    therefore treated a valid local `TAVILY_API_KEY` as absent.  Keep the real
+    process environment authoritative and use `.env` only as a local fallback.
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    try:
+        from dotenv import dotenv_values
+
+        return str(dotenv_values(Path(".env")).get(name) or "").strip()
+    except (OSError, ValueError):
+        return ""
 
 
 __all__ = [

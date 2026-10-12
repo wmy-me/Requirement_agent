@@ -15,7 +15,7 @@ from requirement_agent.tools.external.web import ReadWebPageTool, WebSearchTool
 
 class FakeMCPTransport:
     def __init__(self, tools: list[str] | None = None, result: dict[str, Any] | None = None) -> None:
-        self.tools = tools or ["tavily-search", "tavily-extract"]
+        self.tools = tools or ["tavily_search", "tavily_extract"]
         self.result = result or {"structuredContent": {"results": []}}
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -53,11 +53,25 @@ def test_disabled_tavily_returns_visible_error(monkeypatch: pytest.MonkeyPatch) 
     assert result.message == "Tavily MCP is disabled"
 
 
-def test_missing_credential_returns_visible_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_credential_returns_visible_error(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
     result = WebSearchTool(_adapter(FakeMCPTransport())).run({"query": "roadmap"})
     assert result.status is ToolStatus.ERROR
     assert "credential is missing" in (result.message or "")
+
+
+def test_credential_in_documented_dotenv_file_is_used_without_exporting_it(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local `.env` convention must work even when the shell did not export it."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("TAVILY_API_KEY=local-test-key\n", encoding="utf-8")
+
+    result = WebSearchTool(_adapter(FakeMCPTransport())).run({"query": "roadmap"})
+
+    assert result.status is ToolStatus.EMPTY
 
 
 def test_search_maps_only_to_allowlisted_mcp_tool_and_normalizes(
@@ -65,7 +79,7 @@ def test_search_maps_only_to_allowlisted_mcp_tool_and_normalizes(
 ) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     fake = FakeMCPTransport(
-        tools=["tavily-search", "unrelated-admin-tool"],
+        tools=["tavily_search", "unrelated-admin-tool"],
         result={
             "structuredContent": {
                 "results": [
@@ -79,7 +93,7 @@ def test_search_maps_only_to_allowlisted_mcp_tool_and_normalizes(
     assert result.result == [
         {"title": "Release notes", "url": "https://example.com", "snippet": "Useful", "score": None}
     ]
-    assert fake.calls == [("tavily-search", {"query": "release  notes", "max_results": 2})]
+    assert fake.calls == [("tavily_search", {"query": "release  notes", "max_results": 2})]
 
 
 def test_read_web_page_rejects_private_url_before_mcp_call(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -105,7 +119,12 @@ def test_read_web_page_rejects_unsafe_supplier_redirect(monkeypatch: pytest.Monk
     result = ReadWebPageTool(_adapter(fake)).run({"url": "https://example.com/page"})
     assert result.status is ToolStatus.ERROR
     assert result.message == "Tavily extract returned an unsafe page URL"
-    assert fake.calls == [("tavily-extract", {"urls": ["https://example.com/page"]})]
+    assert fake.calls == [("tavily_extract", {"urls": ["https://example.com/page"]})]
+
+
+def test_legacy_hyphenated_allowlist_is_normalized() -> None:
+    config = TavilyMCPConfig(TAVILY_MCP_ALLOWED_TOOLS="tavily-search,tavily-extract")
+    assert config.allowed_tools == frozenset({"tavily_search", "tavily_extract"})
 
 
 @pytest.mark.parametrize("result", [

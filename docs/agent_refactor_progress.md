@@ -73,7 +73,7 @@
 ## 4. 阶段 3：Tavily MCP 与外部证据
 
 已完成（离线可测，未做真实外部联调）：
-- 新增 Tavily MCP 专用配置与远程 streamable-HTTP 客户端；只接受官方 `https://mcp.tavily.com/mcp/`、`http` transport、`TAVILY_API_KEY` 环境凭据及 `tavily-search`/`tavily-extract` 白名单。
+- 新增 Tavily MCP 专用配置与远程 streamable-HTTP 客户端；只接受官方 `https://mcp.tavily.com/mcp/`、`http` transport、`TAVILY_API_KEY` 环境凭据及 `tavily_search`/`tavily_extract` 白名单（兼容旧连字符配置）。
 - 新增只读 `web_search` 与 `read_web_page` 工具，显式映射上述 MCP 工具；不调用 Tavily REST API，也不公开其他发现的 MCP 工具。
 - 缺少凭据、禁用、不可用或未发现允许工具时返回明确错误。网页 URL 仅接受可解析到公网地址的 HTTP(S) 目标，并校验供应商返回的最终 URL。
 - 增加假 MCP transport 的离线测试，覆盖禁用、缺凭据、工具映射、结果归一化与私网 URL 拒绝；未使用真实 API key 或进行网络联调。

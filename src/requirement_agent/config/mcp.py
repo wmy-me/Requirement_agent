@@ -14,7 +14,11 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 TAVILY_MCP_ENDPOINT = "https://mcp.tavily.com/mcp/"
-TAVILY_MCP_TOOLS = frozenset({"tavily-search", "tavily-extract"})
+# Tavily's official remote MCP currently exposes underscore names.  The first
+# integration used hyphens; accept that legacy spelling in `.env` but normalize
+# before the allowlist reaches the transport boundary.
+TAVILY_MCP_TOOLS = frozenset({"tavily_search", "tavily_extract"})
+_LEGACY_TOOL_NAMES = {"tavily-search": "tavily_search", "tavily-extract": "tavily_extract"}
 
 
 class TavilyMCPConfig(BaseSettings):
@@ -49,6 +53,8 @@ class TavilyMCPConfig(BaseSettings):
                     raise ValueError("TAVILY_MCP_ALLOWED_TOOLS must be JSON or comma-separated") from exc
             else:
                 value = [part.strip() for part in value.split(",") if part.strip()]
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return [_LEGACY_TOOL_NAMES.get(str(part), str(part)) for part in value]
         return value
 
     @field_validator("endpoint")
@@ -80,7 +86,7 @@ class TavilyMCPConfig(BaseSettings):
         if not self.allowed_tools or not self.allowed_tools <= TAVILY_MCP_TOOLS:
             raise ValueError(
                 "TAVILY_MCP_ALLOWED_TOOLS must be a non-empty subset of "
-                "tavily-search,tavily-extract"
+                "tavily_search,tavily_extract"
             )
         return self
 

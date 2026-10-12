@@ -13,7 +13,7 @@ from requirement_agent.infrastructure.mcp.client_manager import (
 from requirement_agent.infrastructure.mcp.url_safety import Resolver, validate_public_web_url
 from requirement_agent.tools.base import ToolResult
 
-_TOOL_MAP = {"web_search": "tavily-search", "read_web_page": "tavily-extract"}
+_TOOL_MAP = {"web_search": "tavily_search", "read_web_page": "tavily_extract"}
 _EXCERPT_CHARS = 1_500
 
 
