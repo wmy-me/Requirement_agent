@@ -114,11 +114,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
 
     case "SUBMIT":
+      // localId 是流式正文归属键。即使调用方的降级 ID 生成器出错，也不能让
+      // assistant 与 user 共用它，否则 NARRATIVE_FLUSH 会把模型输出写进两个气泡。
+      const assistantId = action.assistantId === action.clientMessageId
+        ? `${action.assistantId}:assistant`
+        : action.assistantId;
       return {
         ...state,
         phase: "sending",
         runId: null,
-        pendingAssistantId: action.assistantId,
+        pendingAssistantId: assistantId,
         openAssistantId: null,
         sawErrorFrame: false,
         errorMessage: null,

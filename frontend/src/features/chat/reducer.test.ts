@@ -23,7 +23,9 @@ describe("chat reducer protocol edges", () => {
   });
 
   it("never appends streamed narrative to the user message", () => {
-    let state = chatReducer(initialChatState, { type: "SUBMIT", clientMessageId: "u", assistantId: "a", text: "原始问题", attachments: [] });
+    // 模拟 HTTP 非安全上下文中降级 ID 生成器错误地连续返回同一值；用户文本
+    // 仍必须不受 narrative 影响。
+    let state = chatReducer(initialChatState, { type: "SUBMIT", clientMessageId: "same", assistantId: "same", text: "原始问题", attachments: [] });
     state = chatReducer(state, { type: "NARRATIVE_START" });
     state = chatReducer(state, { type: "NARRATIVE_FLUSH", text: "模型回答" });
     state = chatReducer(state, { type: "DONE", runId: "r", status: "completed" });

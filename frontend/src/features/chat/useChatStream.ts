@@ -13,7 +13,15 @@ import { cancelRun, getChatHistory, getResumable, pauseRun, resumeRun, startChat
 import { StreamAbortedError, StreamTransportError, StreamUnavailableError, type SseFrame } from "../../lib/stream";
 import { chatReducer, initialChatState, type ChatMessage } from "./reducer";
 
-const uid = (): string => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `id-${Date.now()}-${performance.now()}`);
+// `0.0.0.0` 上的 HTTP 页面不是 secure context，部分浏览器没有
+// crypto.randomUUID；两个同步调用若只靠时间戳会撞号，进而让用户和助手气泡共用
+// reducer 的 localId。递增序号让降级路径也保持同一轮内唯一。
+let fallbackIdSequence = 0;
+const uid = (): string => (
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `id-${Date.now()}-${++fallbackIdSequence}`
+);
 
 export interface ChatOptions { mode: ChatMode; webPolicy: WebPolicy; analysisMode: AnalysisMode; sourceType: SourceType; }
 
