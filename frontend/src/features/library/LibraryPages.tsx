@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, ExternalLink, FileText, GitCompareArrows, Loader2, Search, TableProperties, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import type { DocumentAsset, DocumentChunk, ListResponse, Requirement, RequirementDiff, RequirementFeature, RequirementTrace, TraceSource, TraceVersion, UploadResult, Version } from "../../contracts/api";
-import { api, listItems, NotFoundError, uploadDocument } from "../../lib/http";
+import type { DocumentAsset, DocumentChunkPage, DocumentIndexStatus, ListResponse, Requirement, RequirementDiff, RequirementFeature, RequirementTrace, TraceSource, TraceVersion, UploadResult, Version } from "../../contracts/api";
+import { api, listItems, NotFoundError, uploadDocumentWithProgress } from "../../lib/http";
 import { date, excerpt, joined, text } from "../../lib/format";
 
 const status = (value: string | null) => <span className={`status ${(value ?? "").includes("fail") ? "bad" : (value ?? "").includes("pending") || value === "queued" ? "warn" : ""}`}>{text(value, "未知")}</span>;
@@ -27,14 +27,15 @@ function UploadButton() {
   const queryClient = useQueryClient();
   const [result, setResult] = useState<UploadResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ completed: number; total: number; resumed: boolean } | null>(null);
   const upload = useMutation({
-    mutationFn: uploadDocument,
-    onMutate: () => { setResult(null); setFailure(null); },
+    mutationFn: (file: File) => uploadDocumentWithProgress(file, (completed, total, resumed) => setProgress({ completed, total, resumed })),
+    onMutate: () => { setResult(null); setFailure(null); setProgress(null); },
     onSuccess: (data) => { setResult(data); queryClient.invalidateQueries({ queryKey: ["library", "documents"] }); queryClient.invalidateQueries({ queryKey: ["recent-documents"] }); },
     onError: (error) => setFailure((error as { detail?: string }).detail ?? (error instanceof Error ? error.message : "上传失败")),
   });
   const busy = upload.isPending;
-  return <div className="upload-block"><label className={`button primary upload ${busy ? "busy" : ""}`} aria-busy={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}{busy ? "上传中…" : "上传资料"}<input type="file" accept=".md,.txt,.pdf,.doc,.docx" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file && !busy) upload.mutate(file); event.currentTarget.value = ""; }} /></label>{result && <p className={`upload-note ${result.status === "ready" ? "ok" : "warn"}`}>{result.status === "ready" ? <Check size={14} /> : <Loader2 className="spin" size={14} />}已上传「{result.document.file_name}」：{result.status === "ready" ? "已入库，索引就绪。" : "已接收排队（queued），索引尚未就绪，稍后刷新查看状态。"}</p>}{failure && <p className="upload-note bad"><AlertCircle size={14} />上传失败：{failure}</p>}</div>;
+  return <div className="upload-block"><label className={`button primary upload ${busy ? "busy" : ""}`} aria-busy={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}{busy ? "上传中…" : "上传资料"}<input type="file" accept=".md,.txt,.pdf,.doc,.docx" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file && !busy) upload.mutate(file); event.currentTarget.value = ""; }} /></label>{progress && <p className="upload-note warn"><Loader2 className="spin" size={14} />{progress.resumed ? "已续传" : "分段上传"}：{progress.completed}/{progress.total}</p>}{result && <p className={`upload-note ${result.status === "ready" ? "ok" : "warn"}`}>{result.status === "ready" ? <Check size={14} /> : <Loader2 className="spin" size={14} />}已上传「{result.document.file_name}」：{result.status === "ready" ? "已入库，索引就绪。" : "已接收排队（queued），索引尚未就绪，稍后在文档详情查看真实索引状态。"}</p>}{failure && <p className="upload-note bad"><AlertCircle size={14} />上传失败：{failure}</p>}</div>;
 }
 
 function Documents({ list }: { list: DocumentAsset[] }) { return <div className="data-table"><div className="table-row header"><span>名称</span><span>类型 / 来源</span><span>状态</span><span>更新时间</span></div>{list.map((doc) => <Link className="table-row" key={doc.id} to={`/library/documents/${encodeURIComponent(doc.id)}`}><span className="name"><FileText size={17} />{doc.file_name}</span><span>{doc.content_type} / {doc.source_type}</span><span>{status(doc.status)}</span><time>{date(doc.created_at)}</time></Link>)}{!list.length && <div className="state">没有匹配的文档。</div>}</div>; }
@@ -46,16 +47,33 @@ function Requirements({ list }: { list: Requirement[] }) { return <div className
 
 export function DocumentDetail() {
   const { documentId = "" } = useParams();
+  const chunkLimit = 10;
+  const [chunkOffset, setChunkOffset] = useState(0);
   const doc = useQuery({ queryKey: ["document", documentId], queryFn: () => api<DocumentAsset>(`/api/v1/documents/${encodeURIComponent(documentId)}`) });
-  const chunks = useQuery({ queryKey: ["document-chunks", documentId], queryFn: () => api<ListResponse<DocumentChunk>>(`/api/v1/documents/${encodeURIComponent(documentId)}/chunks?limit=50`) });
+  const chunks = useQuery({ queryKey: ["document-chunks", documentId, chunkOffset], queryFn: () => api<DocumentChunkPage>(`/api/v1/documents/${encodeURIComponent(documentId)}/chunks?limit=${chunkLimit}&offset=${chunkOffset}`) });
+  const indexStatus = useQuery({ queryKey: ["document-index-status", documentId], queryFn: () => api<DocumentIndexStatus>(`/api/v1/documents/${encodeURIComponent(documentId)}/index-status`) });
   // The version stream is optional: seeded documents have none and the endpoint
   // answers 404. That is a valid state, not an error to crash on.
   const versions = useQuery({ queryKey: ["document-versions", documentId], queryFn: () => api<ListResponse<Version>>(`/api/v1/documents/${encodeURIComponent(documentId)}/versions`), retry: false });
+  useEffect(() => { setChunkOffset(0); }, [documentId]);
   if (doc.isLoading) return <Loading />;
   if (doc.isError || !doc.data) return <ErrorView error={doc.error} />;
   const data = doc.data;
   const noVersionStream = versions.isError && versions.error instanceof NotFoundError;
-  return <section className="page detail"><Link className="back" to="/library?tab=documents">← 返回资料库</Link><header className="detail-heading"><FileText size={28} /><div><h1>{data.file_name}</h1><p>{data.content_type} · {status(data.status)}</p></div></header><div className="detail-grid"><article className="panel"><h2>文档信息</h2><dl><dt>来源</dt><dd>{data.source_type}</dd><dt>版本</dt><dd>{data.version_no == null ? "未提供" : `v${data.version_no}`}</dd><dt>更新时间</dt><dd>{date(data.created_at)}</dd><dt>大小</dt><dd>{data.size_bytes} B</dd></dl><a className="button primary" href={`/app/?document_id=${encodeURIComponent(documentId)}`}>基于此资料提问（旧版）</a><p className="hint">当前后端未提供资料范围检索契约，不能保证只查询本资料。</p></article><article className="panel content"><h2>内容预览</h2><p>{data.extracted_text ?? data.original_text ?? "该文档未提供可预览正文。"}</p><h3>解析片段</h3>{chunks.isLoading ? <Loading /> : chunks.isError ? <ErrorView error={chunks.error} /> : <ol className="chunks">{listItems(chunks.data).map((chunk) => <li key={chunk.id}>{chunk.chunk_text}</li>)}{!listItems(chunks.data).length && <li>没有可用片段。</li>}</ol>}<h3>版本流</h3>{versions.isSuccess ? (listItems(versions.data).length ? <ol className="versions">{listItems(versions.data).map((v) => <li key={v.id}><strong>v{v.version_no}</strong><span>{date(v.created_at)}</span></li>)}</ol> : <p className="hint">该文档没有版本记录。</p>) : noVersionStream ? <p className="hint">该文档没有版本流（接口返回 404），无法展示历史版本。</p> : versions.isError ? <ErrorView error={versions.error} /> : <Loading />}</article></div></section>;
+  const page = chunks.data;
+  const chunkRows = page?.items ?? [];
+  return <section className="page detail"><Link className="back" to="/library?tab=documents">← 返回资料库</Link><header className="detail-heading"><FileText size={28} /><div><h1>{data.file_name}</h1><p>{data.content_type} · {status(data.status)}</p></div></header><div className="detail-grid"><article className="panel"><h2>文档信息</h2><dl><dt>来源</dt><dd>{data.source_type}</dd><dt>版本</dt><dd>{data.version_no == null ? "未提供" : `v${data.version_no}`}</dd><dt>更新时间</dt><dd>{date(data.created_at)}</dd><dt>大小</dt><dd>{data.size_bytes} B</dd></dl><DocumentIndexPanel query={indexStatus} /><a className="button primary" href={`/app/?document_id=${encodeURIComponent(documentId)}`}>基于此资料提问（旧版）</a><p className="hint">当前后端未提供资料范围检索契约，不能保证只查询本资料。</p></article><article className="panel content"><h2>内容预览</h2><p>{data.extracted_text ?? data.original_text ?? "该文档未提供可预览正文。"}</p><h3>数据库原始解析片段{page ? `（${page.total}）` : ""}</h3><p className="hint">以下正文逐字来自 document_chunk.chunk_text；未经过 AI 编辑、摘要或 Markdown 重排。</p>{chunks.isLoading ? <Loading /> : chunks.isError ? <ErrorView error={chunks.error} /> : <><ol className="chunks">{chunkRows.map((chunk) => <RawChunk key={chunk.id} chunk={chunk} />)}{!chunkRows.length && <li>该文档尚无已持久化分片。</li>}</ol>{page && page.total > chunkLimit && <div className="chunk-pagination"><button className="button" disabled={chunkOffset === 0} onClick={() => setChunkOffset((current) => Math.max(0, current - chunkLimit))}>上一页</button><span>{chunkOffset + 1}–{Math.min(chunkOffset + chunkRows.length, page.total)} / {page.total}</span><button className="button" disabled={chunkOffset + chunkLimit >= page.total} onClick={() => setChunkOffset((current) => current + chunkLimit)}>下一页</button></div>}</>}<h3>版本流</h3>{versions.isSuccess ? (listItems(versions.data).length ? <ol className="versions">{listItems(versions.data).map((v) => <li key={v.id}><strong>v{v.version_no}</strong><span>{date(v.created_at)}</span></li>)}</ol> : <p className="hint">该文档没有版本记录。</p>) : noVersionStream ? <p className="hint">该文档没有版本流（接口返回 404），无法展示历史版本。</p> : versions.isError ? <ErrorView error={versions.error} /> : <Loading />}</article></div></section>;
+}
+
+function RawChunk({ chunk }: { chunk: DocumentChunkPage["items"][number] }) {
+  return <li className="raw-chunk"><div className="raw-chunk-head"><strong>Chunk {chunk.chunk_index}</strong><span>{chunk.char_count} 字符</span><span>{chunk.embedding_model ?? "embedding 未标记"}{chunk.embedding_dimension ? ` · ${chunk.embedding_dimension} 维` : ""}</span></div><pre>{chunk.chunk_text}</pre><div className="raw-chunk-foot"><span className="mono">{chunk.content_hash ? `sha256 ${chunk.content_hash.slice(0, 12)}…` : "hash 未提供"}</span><time>{date(chunk.created_at)}</time></div></li>;
+}
+
+function DocumentIndexPanel({ query }: { query: ReturnType<typeof useQuery<DocumentIndexStatus>> }) {
+  if (query.isLoading) return <p className="hint">正在读取实际索引状态…</p>;
+  if (query.isError || !query.data) return <p className="hint bad">索引状态暂时不可读取。</p>;
+  const value = query.data;
+  return <section className="document-index"><h3>索引状态</h3><p><span className={`status ${value.index_status === "failed" ? "bad" : value.index_status === "pending" || value.index_status === "processing" || value.index_status === "partial" ? "warn" : ""}`}>{value.index_status}</span></p><dl><dt>已持久化分片</dt><dd>{value.total_chunks}</dd><dt>已有向量</dt><dd>{value.embedded_chunks}</dd><dt>Embedding</dt><dd>{value.embedding_models.join("、") || "未标记"}{value.embedding_dimensions.length ? ` · ${value.embedding_dimensions.join("/")} 维` : ""}</dd><dt>切分参数</dt><dd>{value.chunking.chunk_size ? `${value.chunking.source} · ${value.chunking.chunk_size} / 重叠 ${value.chunking.overlap ?? "未提供"}` : "历史事件未记录"}</dd></dl>{value.outbox?.last_error && <p className="hint bad">最近索引错误：{value.outbox.last_error}</p>}<button className="button index-refresh" onClick={() => { void query.refetch(); }}>刷新索引状态</button></section>;
 }
 
 export function RequirementDetail() {

@@ -3,7 +3,10 @@
 export type Id = string;
 export interface ListResponse<T> { items: T[]; }
 export interface DocumentAsset { id: Id; file_name: string; content_type: string; storage_uri: string; checksum: string; size_bytes: number; source_type: string; source_id: Id | null; original_text: string | null; extracted_text: string | null; metadata: Record<string, string | number | boolean | null>; stream_id: Id | null; version_no: number | null; status: string | null; superseded_by_version_no: number | null; created_at: string; }
-export interface DocumentChunk { id: Id; document_id: Id; chunk_index: number; chunk_text: string; created_at: string; }
+/** 已落库的原始 RAG 分片。`chunk_text` 就是数据库正文，前端不得用 AI 改写。 */
+export interface DocumentChunk { id: Id; document_id: Id; chunk_index: number; chunk_text: string; char_count: number; content_hash: string | null; embedding_model: string | null; embedding_dimension: number | null; created_at: string; }
+export interface DocumentChunkPage extends ListResponse<DocumentChunk> { document_id: Id; total: number; limit: number; offset: number; }
+export interface DocumentIndexStatus { document_id: Id; index_status: "ready" | "pending" | "processing" | "partial" | "failed" | "not_indexed"; total_chunks: number; embedded_chunks: number; embedding_models: string[]; embedding_dimensions: number[]; chunking: { source: string; chunk_size: number | null; overlap: number | null }; outbox: { event_id: Id; status: string; retry_count: number; last_error: string | null; created_at: string; updated_at: string } | null; }
 
 /** GET /api/v1/requirements items.
  * `module_names` is the real 所属模块 field: distinct active
@@ -31,6 +34,7 @@ export interface Conversation { id: Id; title: string; summary: string | null; s
 /** POST /api/v1/documents/upload -> 202. `status` is "queued" or "ready":
  * success means the file was accepted, NOT that the index is ready. */
 export interface UploadResult { document: DocumentAsset; status: "queued" | "ready"; result: { id?: string } | null; }
+export interface UploadSession { upload_id: string; file_name: string; content_type: string; total_size: number; total_chunks: number; checksum: string; status: "open" | "completed" | string; document_id: Id | null; received_chunks: number[]; }
 export interface ApiError extends Error { status?: number; requestId?: string; detail?: string; }
 
 /* ── 对话（F3）─────────────────────────────────────────────────────────

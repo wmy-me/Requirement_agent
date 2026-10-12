@@ -124,9 +124,20 @@ async def get_document(document_id: int) -> dict[str, object]:
 async def get_document_chunks(
     document_id: int,
     limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
-    """文档分块列表：按 id 返回分块数组 {"document_id", "items": [...]}。"""
-    return {"document_id": document_id, "items": document_repo.get_chunks(document_id, limit=limit)}
+    """分页返回数据库已持久化的原始分块，正文绝不经 AI 改写。"""
+    page = document_repo.get_chunk_page(document_id, limit=limit, offset=offset)
+    return {"document_id": str(document_id), **page}
+
+
+@router.get("/api/v1/documents/{document_id}/index-status")
+async def get_document_index_status(document_id: int) -> dict[str, object]:
+    """文档分片/向量索引状态：由 chunks 和最近一次 outbox 事件真实聚合。"""
+    status_info = document_repo.get_index_status(document_id)
+    if status_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return status_info
 
 
 @router.get("/api/v1/documents/{document_id}/versions")

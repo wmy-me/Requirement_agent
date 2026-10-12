@@ -200,3 +200,6 @@
   .table-row.reviews time,.table-row.runs time{font-size:12px;color:var(--ra-muted)}
 }
 @media(max-width:680px){.table-row.header.reviews,.table-row.header.runs{display:none}}
+
+/* 文档详情：逐字展示 document_chunk.chunk_text；这里不使用 Markdown 或任何 AI 后处理。 */
+.document-index{border-top:1px solid var(--ra-line-soft);margin:0 0 18px;padding-top:16px}.document-index h3{margin:0 0 10px}.document-index dl{grid-template-columns:90px 1fr;margin:11px 0}.index-refresh{padding:6px 9px;font-size:12px}.raw-chunk{padding:16px 0!important}.raw-chunk-head,.raw-chunk-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--ra-muted)}.raw-chunk-head strong{color:var(--ra-ink);font-size:13px}.raw-chunk pre{max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;padding:12px;background:var(--ra-surface);border-radius:var(--ra-radius-ctl);color:var(--ra-ink-2);font:13px/1.65 ui-monospace,SFMono-Regular,monospace}.raw-chunk-foot time{margin-left:auto;color:var(--ra-faint)}.chunk-pagination{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;font-size:12px;color:var(--ra-muted)}.chunk-pagination .button{padding:7px 10px}.chunk-pagination .button:disabled{opacity:.45;cursor:not-allowed}

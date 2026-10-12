@@ -359,22 +359,84 @@ class DocumentAssetRepository:
             ).mappings().all()
         return [self._normalize_chunk_search_row(row) for row in rows]
 
-    def get_chunks(self, document_id: int, limit: int = 20) -> list[dict[str, object]]:
-        """按文档 id 列出全部分块（chunk_index 升序），返回规范化行列表。"""
+    def get_chunk_page(self, document_id: int, *, limit: int = 20, offset: int = 0) -> dict[str, object]:
+        """分页读取**已经落库**的原始分片，不做摘要、改写或二次切分。"""
         with SessionLocal() as session:
+            total = int(session.execute(
+                text("SELECT count(*) FROM document_chunk WHERE document_id = :document_id"),
+                {"document_id": document_id},
+            ).scalar() or 0)
             rows = session.execute(
                 text(
                     """
-                    SELECT id, document_id, chunk_index, chunk_text, metadata, created_at
+                    SELECT id, document_id, chunk_index, chunk_text, metadata, content_hash,
+                           embedding_model, embedding_dimension, created_at
                     FROM document_chunk
                     WHERE document_id = :document_id
                     ORDER BY chunk_index ASC
-                    LIMIT :limit
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"document_id": document_id, "limit": limit},
+                {"document_id": document_id, "limit": limit, "offset": offset},
             ).mappings().all()
-        return [self._normalize_chunk_row(row) for row in rows]
+        return {"items": [self._normalize_chunk_row(row) for row in rows], "total": total, "limit": limit, "offset": offset}
+
+    def get_chunks(self, document_id: int, limit: int = 20) -> list[dict[str, object]]:
+        """兼容旧调用方的首屏分片列表。新 API 请使用 ``get_chunk_page``。"""
+        return list(self.get_chunk_page(document_id, limit=limit)["items"])
+
+    def get_index_status(self, document_id: int) -> dict[str, object] | None:
+        """从真实分片与 document_chunk_sync outbox 得出索引状态。
+
+        ``document_asset.status`` 表示文档版本（例如 current），不能冒充索引状态。
+        这里故意不写任何表；失败原因只来自最近一次该文档的实际 outbox 事件。
+        """
+        with SessionLocal() as session:
+            exists = session.execute(text("SELECT 1 FROM document_asset WHERE id = :id"), {"id": document_id}).first()
+            if exists is None:
+                return None
+            aggregate = str(document_id)
+            summary = session.execute(text("""
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE embedding IS NOT NULL) AS embedded,
+                       array_remove(array_agg(DISTINCT embedding_model), NULL) AS models,
+                       array_remove(array_agg(DISTINCT embedding_dimension), NULL) AS dimensions
+                FROM document_chunk WHERE document_id = :id
+            """), {"id": document_id}).mappings().one()
+            event = session.execute(text("""
+                SELECT id, status, retry_count, last_error, payload, created_at, updated_at
+                FROM outbox_event
+                WHERE aggregate_type = 'document_asset'
+                  AND aggregate_id = :aggregate_id
+                  AND event_type = 'document_chunk_sync'
+                ORDER BY created_at DESC LIMIT 1
+            """), {"aggregate_id": aggregate}).mappings().first()
+        total = int(summary["total"] or 0)
+        embedded = int(summary["embedded"] or 0)
+        event_status = str(event["status"]) if event else None
+        if event_status == "dead_letter":
+            index_status = "failed"
+        elif event_status in {"pending", "processing"}:
+            index_status = event_status
+        elif total and embedded == total:
+            index_status = "ready"
+        elif total:
+            index_status = "partial"
+        else:
+            index_status = "not_indexed"
+        payload = dict(event["payload"] or {}) if event else {}
+        return {
+            "document_id": to_sid(document_id), "index_status": index_status,
+            "total_chunks": total, "embedded_chunks": embedded,
+            "embedding_models": list(summary["models"] or []),
+            "embedding_dimensions": [int(value) for value in (summary["dimensions"] or [])],
+            "chunking": {"source": "fixed-slice", "chunk_size": payload.get("chunk_size"), "overlap": payload.get("overlap")},
+            "outbox": None if event is None else {
+                "event_id": to_sid(event["id"]), "status": event_status,
+                "retry_count": int(event["retry_count"] or 0), "last_error": event["last_error"],
+                "created_at": as_display_iso(event["created_at"]), "updated_at": as_display_iso(event["updated_at"]),
+            },
+        }
 
     def _normalize_asset_row(self, row: dict[str, object] | None) -> dict[str, object] | None:
         if row is None:
@@ -415,6 +477,13 @@ class DocumentAssetRepository:
             "chunk_index": int(row["chunk_index"]),
             "chunk_text": row["chunk_text"],
             "metadata": dict(row["metadata"] or {}),
+            "char_count": len(str(row["chunk_text"] or "")),
+            "content_hash": row.get("content_hash"),
+            "embedding_model": row.get("embedding_model"),
+            "embedding_dimension": (
+                int(row["embedding_dimension"])
+                if row.get("embedding_dimension") is not None else None
+            ),
             "created_at": as_display_iso(row["created_at"]),
         }
 
