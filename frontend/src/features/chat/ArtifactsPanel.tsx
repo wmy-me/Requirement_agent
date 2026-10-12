@@ -32,28 +32,32 @@ function RiskBadges({ risk }: { risk: Record<string, unknown> }) {
 function EvidenceCards({ items }: { items: Array<Record<string, unknown>> }) {
   if (!items.length) return null;
   return (
-    <div className="evidence">
-      <p className="evidence-title">相关资料来源（{items.length}）</p>
+    <details className="evidence">
+      <summary><span>相关资料来源（{items.length}）</span><span className="evidence-disclosure">展开来源</span></summary>
       <ul className="source-list">
         {items.map((item, index) => {
           const ref = typeof item.source_ref === "string" ? item.source_ref : "";
           const external = /^https?:/i.test(ref);
+          const title = typeof item.title === "string" && item.title ? item.title : external ? sourceHost(ref) : "未命名来源";
           return (
-            <li key={String(item.evidence_id ?? index)} className="source-row">
-              <div className="source-meta">
-                <span className="source-type">{String(item.source_type ?? "来源")}</span>
-                {typeof item.title === "string" && item.title && <span>{item.title}</span>}
-              </div>
-              {typeof item.excerpt === "string" && item.excerpt && <p className="source-excerpt">{item.excerpt}</p>}
-              {ref && (external
-                ? <a className="source-link" href={ref} target="_blank" rel="noopener noreferrer nofollow">打开来源<ExternalLink size={13} /></a>
-                : <span className="source-link static"><Link2 size={13} />{ref}</span>)}
+            <li key={String(item.evidence_id ?? index)}>
+              <details className="source-row">
+                <summary><span className="source-type">{String(item.source_type ?? "来源")}</span><span className="evidence-source-title">{title}</span>{external && <span className="evidence-host">{sourceHost(ref)}</span>}</summary>
+                {typeof item.excerpt === "string" && item.excerpt && <p className="source-excerpt">{item.excerpt}</p>}
+                {ref && (external
+                  ? <a className="source-link" href={ref} target="_blank" rel="noopener noreferrer nofollow">打开来源<ExternalLink size={13} /></a>
+                  : <span className="source-link static"><Link2 size={13} />{ref}</span>)}
+              </details>
             </li>
           );
         })}
       </ul>
-    </div>
+    </details>
   );
+}
+
+function sourceHost(ref: string): string {
+  try { return new URL(ref).hostname.replace(/^www\./i, ""); } catch { return ref; }
 }
 
 export function ArtifactsPanel({ artifacts }: { artifacts: ChatArtifacts | null }) {
