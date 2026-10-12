@@ -99,6 +99,9 @@
 - 运行事件、状态和补充信息的 invalidation 逻辑已在测试中被覆盖。
 - 新 assistant run 同样保存 execution version、意图、联网策略、工具调用和 evidence；预算耗尽会返回
   明确的 `incomplete` 结果，不伪装成成功完成。
+- 对话 API 的 `web_policy` 默认值与前端统一为 `auto`：只有外部调研意图才允许 `web_search` /
+  `read_web_page`，显式 `on` 仍可强制开放；Tavily 未启用或缺凭据时，工具调用保持 error 记录，
+  不把外部失败伪装成无搜索结果。
 
 ## 7. 阶段 6：需求提案与最终审批
 

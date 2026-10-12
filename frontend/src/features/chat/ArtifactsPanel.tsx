@@ -112,7 +112,7 @@ export function ArtifactsPanel({ artifacts }: { artifacts: ChatArtifacts | null 
 
       {toolCalls.length > 0 && (
         <div className="artifact-block">
-          <h4>工具调用（{toolCalls.length}）</h4>
+          <h4>本轮实际工具调用（{toolCalls.length}）</h4>
           <ul className="tool-list">
             {toolCalls.map((call, index) => <li key={index}><span className="mono">{String(call.tool ?? call.name ?? "tool")}</span><em>{String(call.status ?? "")}</em></li>)}
           </ul>

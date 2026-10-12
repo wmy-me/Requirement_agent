@@ -32,7 +32,9 @@ export function ChatPage() {
   const navigate = useNavigate();
   const chat = useChatStream();
   const { state } = chat;
-  const [options, setOptions] = useState<ComposerValue>({ mode: "auto", webPolicy: "off", analysisMode: "strict", sourceType: "web" });
+  // 联网默认是「自动」：只有意图识别为外部调研时才开放只读 Web 工具；用户仍可
+  // 明确切换为关闭或开启。这样不会把每一次需求库查询都发往外部服务。
+  const [options, setOptions] = useState<ComposerValue>({ mode: "auto", webPolicy: "auto", analysisMode: "strict", sourceType: "web" });
 
   // 深链接 /chat/:sessionId 加载历史；失败就留在空态并说明，不假装有内容。
   useEffect(() => {

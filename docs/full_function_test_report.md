@@ -108,3 +108,16 @@ Outbox、Worker、版本、关系等由下述集成测试覆盖。
 `/app-next`。它们不等同于八个页面的完整有数据交互验收；当前空库的多项历史集成测试仍硬编码
 开发种子（`REQ-000015`、能力词表、来源/关系/版本时间轴），共导致上述 27 个失败。应将这些
 测试逐项迁为自建/清理 fixture，才能完成真实 API 八页面、有数据导航和每一接口的错误矩阵验收。
+
+### 后续本机外部研究复测（2026-10-12）
+
+- DeepSeek 配置修正后，以公开合成问题走真实 `/api/v1/agent/chat/stream`：意图为
+  `external_research`，`web_policy=auto`，run 最终为 `completed`。测试会话已在验证后删除。
+  这一次使用的是开发服务库，**不是**隔离验收库，故仅证明外部模型与协议链路，不能替代隔离库验收。
+- 模型真实发出了 `web_search`，工具审计返回 `error: Tavily MCP is disabled`，来源数为零；
+  页面会显示本轮实际工具调用，且不会虚构网站来源。当前仍需在本机环境设置
+  `TAVILY_MCP_ENABLED=true` 和 `TAVILY_API_KEY` 后，才能复测真实 tools/list、搜索、网页提取
+  以及可点击来源卡片。
+- 聊天 UI 与 API 默认 `web_policy` 统一改为 `auto`。自动模式只为外部调研意图开放外部只读工具；
+  普通需求库问答不会被无条件发送到外部服务。前端回归为 10 passed，类型检查和构建通过；后端
+  schema/assistant/narrative 相关回归为 15 passed。

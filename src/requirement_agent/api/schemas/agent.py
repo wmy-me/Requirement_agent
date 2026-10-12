@@ -55,7 +55,9 @@ class AgentChatRequest(BaseModel):
     actor_id: str | None = Field(default=None, max_length=120)
     analysis_mode: Literal["strict", "balanced", "broad"] = "strict"
     mode: Literal["auto", "ask_library", "draft_requirement", "research"] = "auto"
-    web_policy: Literal["off", "auto", "on"] = "off"
+    # 与 React 对话框的默认值一致：auto 仅在意图为 external_research 时允许
+    # 只读外部工具，不能把普通库内问答隐式升级为联网请求。
+    web_policy: Literal["off", "auto", "on"] = "auto"
 
     @field_validator("message", "session_id", "client_message_id", "requirement_text", "requester_name", "actor_id", mode="before")
     @classmethod

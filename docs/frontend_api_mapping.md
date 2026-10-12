@@ -20,7 +20,7 @@
 
 | # | 页面 | 路由 | 主要接口 | 关键字段 | 权限 | 状态 |
 |---|---|---|---|---|---|---|
-| 1 | 对话 | `/app-next` `/app-next/chat/:sessionId` | `POST /api/v1/agent/chat/stream`（JSON）、`POST .../stream-with-files`（multipart）、`GET /api/v1/agent/chat/{session_id}`、`GET .../resumable`、`POST /api/v1/agent/runs/{id}/cancel\|pause\|resume` | SSE 事件 `session/step/narrative/artifacts/done/error`；`mode`(auto/ask_library/draft_requirement/research)、`web_policy`、`client_message_id` | ANALYZE / READ | 完成 |
+| 1 | 对话 | `/app-next` `/app-next/chat/:sessionId` | `POST /api/v1/agent/chat/stream`（JSON）、`POST .../stream-with-files`（multipart）、`GET /api/v1/agent/chat/{session_id}`、`GET .../resumable`、`POST /api/v1/agent/runs/{id}/cancel\|pause\|resume` | SSE 事件 `session/step/narrative/artifacts/done/error`；`mode`(auto/ask_library/draft_requirement/research)、`web_policy`（默认 `auto`）、`client_message_id` | ANALYZE / READ | 完成 |
 | 2 | 资料库 | `/app-next/library?tab=documents\|requirements` | `GET /api/v1/documents?limit=`（≤50）、`GET /api/v1/requirements?limit=`（≤500）、`POST /api/v1/documents/upload` | 文档 `file_name/content_type/status/created_at`；需求 `requirement_key/requirement_name/module_names/current_version/latest_source_submitted_at` | READ / ANALYZE | 完成 |
 | 3 | 文档详情 | `/app-next/library/documents/:documentId` | `GET /api/v1/documents/{id}`、`/{id}/chunks`、`/{id}/versions` | `extracted_text/original_text/version_no/size_bytes` | READ | 完成 |
 | 4 | 需求详情 | `/app-next/library/requirements/:requirementKey` | `GET .../versions`、`.../features?at_version=`、`.../diff?to_version=`、`.../trace` | 功能含 `module_key/module_name`；trace = `{requirement, versions[].sources[]}` | READ | 完成 |
@@ -36,17 +36,21 @@
 2. **新执行流的 `done` 一律带 `status`**（`completed` / `failed` / `incomplete` /
    `paused` / `cancelled` / `waiting_clarification`）；前端仍以「是否见过 `error` 帧」兜底
    兼容历史 run 或代理截断，不能把缺 status 当作新的正常协议。
-3. **`artifacts` 是自由 dict，形状随路径变**。按存在的键判别：含 `extracted|candidates|analysis|risk`
+3. **联网默认 `auto`，不是无条件联网**。只有消息被识别为外部调研（例如“联网查询”
+   “搜索网页”），或用户把联网切到“联网开启”时，才会向 Tavily MCP 开放只读工具。
+   成功结果在回答下方以可点击的“相关资料来源”展示；“本轮实际工具调用”只列真实调用，
+   不会把未调用或配置失败说成已联网。
+4. **`artifacts` 是自由 dict，形状随路径变**。按存在的键判别：含 `extracted|candidates|analysis|risk`
    → 分析管线；含 `sources|tool_calls|incomplete_reason` → 助手；`{intent,answer_mode}` → 闲聊。
    旧版 `static/app/js/pages/chat.js` 用 `Array.isArray` 判它，恒为假 —— 结构化结果从未渲染过。
-4. **`failed` + `meta.outcome=incomplete` = 未完成（预算/超时）**，不是普通失败，也不是成功。
-5. **`source_id` 在所有端点（含 `POST /reviews/submit` 请求体）都是字符串**。前端不做
+5. **`failed` + `meta.outcome=incomplete` = 未完成（预算/超时）**，不是普通失败，也不是成功。
+6. **`source_id` 在所有端点（含 `POST /reviews/submit` 请求体）都是字符串**。前端不做
    `Number()` / `parseInt()`；后端 schema 强制 JSON string，仅在进入 Python 领域服务时精确转
    为整数，避免超过 `Number.MAX_SAFE_INTEGER` 的 snowflake 改写成另一条来源。
-6. **任何 409 都不自动重试**。`merge-preview` 与 `submit` 的 409 含义不同（前者是「来源不在待审」，
+7. **任何 409 都不自动重试**。`merge-preview` 与 `submit` 的 409 含义不同（前者是「来源不在待审」，
    后者是乐观锁冲突「该需求已被他人修改」），都必须重新加载。对话的 409 是**对象** detail
    （带 `active_run`），与 pause/cancel 的字符串 detail 不同。
-7. **终态事件只能写一次**。`complete_chat_message` / `fail` 在持有 token 的同一事务内先写
+8. **终态事件只能写一次**。`complete_chat_message` / `fail` 在持有 token 的同一事务内先写
    最终事件和 run 状态；随后 SSE `done` 只是通知，不得再经 `status='running'` 追加接口写入，
    否则正常完成会被误判为失权。
 
