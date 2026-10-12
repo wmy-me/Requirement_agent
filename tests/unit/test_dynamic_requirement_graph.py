@@ -12,11 +12,22 @@ def _extract() -> ExtractedRequirement:
 
 
 def _patch_pipeline(monkeypatch, *, candidates=None, analysis=None):
-    monkeypatch.setattr("requirement_agent.agents.extract_agent.ExtractAgent.extract", lambda *a, **k: _extract())
     from requirement_agent.tools.base import ToolResult
-    monkeypatch.setattr("requirement_agent.workflows.agents_nodes.invoke", lambda *a, **k: ToolResult.empty("no candidates") if candidates is None else ToolResult.success(candidates))
-    monkeypatch.setattr("requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze", lambda *a, **k: analysis or AnalysisResult(independent=True))
-    monkeypatch.setattr("requirement_agent.agents.risk_agent.RiskAgent.assess", lambda *a, **k: RiskAssessment())
+
+    # 工作流已经通过注册表调用四个工具；补丁必须保留每个工具的真实输出契约，
+    # 不能把所有调用一律伪装成检索空结果，否则 extract 会拿不到必填字段。
+    def invoke(name, *args, **kwargs):
+        if name == "extract_requirement":
+            return ToolResult.success(_extract().model_dump(mode="python"))
+        if name == "search_requirements":
+            return ToolResult.empty("no candidates") if candidates is None else ToolResult.success(candidates)
+        if name == "analyze_requirement_relation":
+            return ToolResult.success((analysis or AnalysisResult(independent=True)).model_dump(mode="python"))
+        if name == "assess_requirement_risk":
+            return ToolResult.success(RiskAssessment().model_dump(mode="python"))
+        raise AssertionError(f"unexpected tool: {name}")
+
+    monkeypatch.setattr("requirement_agent.workflows.agents_nodes.invoke", invoke)
 
 
 def test_general_question_ends_without_requirement_artifacts() -> None:

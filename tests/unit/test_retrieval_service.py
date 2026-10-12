@@ -8,21 +8,55 @@
 3. 融合从「向量分高于关键词分就覆盖」改为 RRF —— 不再拿两个不同量纲的数比大小。
 """
 
+import uuid
+
+from sqlalchemy import text
+
 from requirement_agent.application.retrieval_service import RetrievalService
+from requirement_agent.infrastructure.db.session import SessionLocal
+from requirement_agent.infrastructure.vector.pgvector_repository import RequirementVectorRepository
 
 
 def test_retrieval_service_returns_candidates() -> None:
-    """打真实库的冒烟测试：能召回，且**余弦真的透出来了**。
+    """打隔离真实库的冒烟测试：能召回，且**余弦真的透出来了**。
 
     这里刻意不再断言 `score >= 0.5` —— `score` 现在是名次分。要看「像不像」请读
     `vector_similarity`。
     """
-    service = RetrievalService()
-    results = service.search("用户登录 验证码", limit=5)
-    assert len(results) >= 1
-    assert results[0]["requirement_key"] == "REQ-000001"
-    cosine = results[0]["vector_similarity"]
-    assert cosine is not None and 0.0 <= cosine <= 1.0
+    tag = uuid.uuid4().hex[:12]
+    requirement_id = uuid.uuid4().int % 9_000_000_000_000_000 + 1_000_000_000_000_000
+    requirement_key = f"REQ-RETRIEVAL-{tag}"
+
+    class _Embedding:
+        def embed(self, _text: str) -> list[float]:
+            return [0.1] * 4096
+
+        def is_configured(self) -> bool:
+            return True
+
+    try:
+        with SessionLocal() as session:
+            session.execute(
+                text(
+                    "INSERT INTO requirement_master "
+                    "(id, requirement_key, requirement_name, final_requirement, current_version, status, lock_version) "
+                    "VALUES (:id, :key, :name, :body, 1, 'active', 1)"
+                ),
+                {"id": requirement_id, "key": requirement_key, "name": "验证码登录", "body": "用户登录验证码"},
+            )
+            session.commit()
+        RequirementVectorRepository().upsert(requirement_id, [0.1] * 4096, source_text="用户登录 验证码")
+
+        results = RetrievalService(embedding_service=_Embedding()).search("用户登录 验证码", limit=5)
+        assert results
+        match = next(item for item in results if item["requirement_key"] == requirement_key)
+        cosine = match["vector_similarity"]
+        assert cosine is not None and 0.0 <= cosine <= 1.0
+    finally:
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM requirement_embedding WHERE requirement_id = :id"), {"id": requirement_id})
+            session.execute(text("DELETE FROM requirement_master WHERE id = :id"), {"id": requirement_id})
+            session.commit()
 
 
 class FakeMasterRepo:

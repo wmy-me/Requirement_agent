@@ -2,6 +2,14 @@
 
 版本：1.0｜日期：2026-10-09
 
+## 隔离外部依赖复测（2026-10-12）
+
+- 专用 PostgreSQL 验收库已覆盖 API、pgvector 与模型调用观测的运行时配置。真实 Embedding
+  使用合成文本返回 `Doubao-embedding` 4096 维有限向量，写入/查询/来源记录均通过并清理。
+- DeepSeek 最小真实调用仍返回 401；Tavily MCP 保持禁用且未提供凭据，二者准确标为配置阻塞，
+  未替换模型、未绕过 MCP 或把本地假服务当真实通过。完整命令和未完成矩阵见
+  `docs/full_function_test_report.md`。
+
 ## 交付完整性修复（基线 `5bca42a`）
 
 - 验收发现：`5bca42a` 已引用动态路由、助手、MCP、checkpoint 等新增模块，但这些实现及其测试仍停留在工作区，造成全新 checkout 的导入闭包不完整。

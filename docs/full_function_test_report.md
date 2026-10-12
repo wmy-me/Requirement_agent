@@ -42,3 +42,69 @@ cd frontend && npm run test && npm run typecheck && npm run build
 截图：`docs/design/screenshots/2026-10-12-workbench-desktop.png` 与
 `docs/design/screenshots/2026-10-12-workbench-narrow-390.png`。它们验证现有黑白灰工作台壳层；
 真实 API 全页面浏览器流仍需在自包含业务夹具完成后复拍。
+
+## 隔离验收复测（2026-10-12，HEAD `d649c68` 后）
+
+### 环境与写入边界
+
+- 新建专用库 `requirement_agent_audit_20261012`，迁移按 `migrations/*.sql` 顺序执行；
+  `vector` 扩展由数据库管理员在**该库**创建，运行期使用非超级用户
+  `audit_runner_20261012`。运行时探针确认 `current_database()` 为该库、角色为该用户，
+  pgvector 已启用。
+- API 以同一组隔离 `POSTGRES_*` 配置启动，`OUTBOX_CONSUMER_ENABLED=false`；模型调用
+  recorder 在真实 embedding 探针前显式关闭。没有读取、清空或写入 `requirement_agent`
+  业务库，也没有关闭鉴权或 TLS 校验。
+- 合成资料仅为 “synthetic embedding acceptance material” 及测试生成的随机标识；写入的
+  requirement/vector 在 `finally` 中删除。
+
+### 实际接口清单与覆盖
+
+本地 FastAPI 的 `/openapi.json` 实测为 **80 path / 87 method+path operation**（GET、POST、PUT、
+DELETE；清单生成于 `/tmp/requirement_agent_audit_api_inventory.txt`）。本轮用真实 HTTP 验证
+`/health`、OpenAPI、旧 `/app`、新 `/app-next`、新前端深链接、需求/审核列表以及未授权请求：
+前者均为 200，两个未带 token 的读取请求均为 401。鉴权、审核、聊天、运行控制、上传、文档、
+Outbox、Worker、版本、关系等由下述集成测试覆盖。
+
+未逐条手工构造 87 个操作的正常/非法/不存在/权限/回滚组合，不能将接口清单视为 87/87 手工
+验收完成；尚未覆盖的 multipart 边界、CSV/HTML 静态资源细节及每个错误码组合保留为未完成项。
+
+### 回归结果
+
+| 组别 | 结果 | 说明 |
+|---|---:|---|
+| `tests/unit` | 391 passed, 2 skipped | 修复后全绿；skip 未新增 |
+| 核心集成（鉴权、审核、聊天、Outbox、Worker、上传） | 79 passed | 隔离库真实运行 |
+| 其余集成 | 270 passed, 27 failed, 18 skipped | 失败均见下方，未用 skip 掩盖 |
+| 前端 | 9 passed；typecheck/build 通过 | `npm run test && npm run typecheck && npm run build` |
+
+集成合计为 **349 passed, 27 failed, 18 skipped**；全仓按已执行分组累计为
+**740 passed, 27 failed, 20 skipped**。完整 `pytest -q` 曾在执行环境的 30 秒托管窗口中被中断，
+因此该累计来自覆盖全部 37 个集成文件与 unit 目录的分组执行，不能伪称为一次单进程完整命令的
+最终汇总。
+
+### 本轮修复
+
+1. `test_dynamic_requirement_graph.py` 的假调用此前把所有注册表工具都伪装成检索结果，导致
+   extract 缺少必填字段；改为按 `extract_requirement`、`search_requirements`、分析、风险四种
+   工具返回对应真实契约。
+2. `test_requirement_graph.py` 已经过注册表边界调用，但旧替身仍按旧 Agent 签名提供；补齐
+   `analysis_mode` 并接线到四个受注册表保护的确定性替身。
+3. `test_retrieval_service.py` 不再依赖业务库 `REQ-000001`：测试自行创建 requirement、写入
+   4096 维 pgvector、检索、断言余弦并清理。
+
+### 外部服务
+
+| 能力 | 真实结果 | 证据/限制 |
+|---|---|---|
+| DeepSeek chat | blocked / HTTP 401 | 已配置 endpoint 的最小合成 prompt 被服务端拒绝；需要检查 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，未替换模型或把重试当成功 |
+| Embedding | **通过** | `Doubao-embedding`，endpoint host `oneapi.pateo.com.cn`；真实合成文本返回 4096 个有限数值，写入隔离 `requirement_embedding` 后可由 pgvector 查回，模型/维度来源正确 |
+| Tavily MCP | blocked / not_configured | `TAVILY_MCP_ENABLED=false` 且无 `TAVILY_API_KEY`；按现有 MCP 适配器不发请求，不改走 REST。启用后需该两项配置才可测发现/search/extract |
+
+### 浏览器证据与待完成项
+
+隔离 API 的真实截图：
+`docs/design/screenshots/2026-10-12-audit-app-next-desktop.png` 与
+`docs/design/screenshots/2026-10-12-audit-app-next-390.png`。两张分别是 1440px 与 390px 的
+`/app-next`。它们不等同于八个页面的完整有数据交互验收；当前空库的多项历史集成测试仍硬编码
+开发种子（`REQ-000015`、能力词表、来源/关系/版本时间轴），共导致上述 27 个失败。应将这些
+测试逐项迁为自建/清理 fixture，才能完成真实 API 八页面、有数据导航和每一接口的错误矩阵验收。

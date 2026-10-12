@@ -3,6 +3,11 @@
 > 2026-10-12 全功能验收：新隔离库已按 migrations 完整迁移；全量 pytest 暴露多处历史测试
 > 对开发库种子的依赖，未以 skip 掩盖。详情见 `docs/full_function_test_report.md`。
 
+> 2026-10-12 隔离复测：`/app`、`/app-next` 和 `/app-next` 深链接均由本地隔离 FastAPI 返回
+> 200，未授权 API 返回 401；Vitest 9 passed、typecheck/build 通过。桌面/390px 截图见
+> `docs/design/screenshots/2026-10-12-audit-app-next-*.png`。这不是八页面有数据全流程通过：
+> 真实数据夹具仍待自包含化，详见全功能报告。
+
 ## 业务流程正确性修复（2026-10-12）
 
 - 审核 `source_id` 已从路由、前端请求体到后端 schema 保持**字符串**；删除

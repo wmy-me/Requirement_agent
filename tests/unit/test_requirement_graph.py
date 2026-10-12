@@ -4,6 +4,41 @@ from requirement_agent.agents.risk_agent import RiskAssessment
 from requirement_agent.workflows import run_analysis
 
 
+def _wire_registered_tools(monkeypatch) -> None:
+    """让图测试经过真实注册表边界，同时保留各 Agent 的确定性替身。"""
+    from requirement_agent.agents.analyze_agent import AnalyzeAgent
+    from requirement_agent.agents.extract_agent import ExtractAgent
+    from requirement_agent.agents.retrieval_agent import RetrievalAgent
+    from requirement_agent.agents.risk_agent import RiskAgent
+    from requirement_agent.tools.base import ToolResult
+
+    def invoke(name, params, **_kwargs):
+        if name == "extract_requirement":
+            return ToolResult.success(
+                ExtractAgent().extract(
+                    params["text"], source_type=params.get("source_type", "web"),
+                    requester_name=params.get("requester_name"),
+                ).model_dump(mode="python")
+            )
+        if name == "search_requirements":
+            return ToolResult.success(RetrievalAgent().retrieve(params["query"], limit=params["limit"]))
+        if name == "analyze_requirement_relation":
+            extracted = ExtractedRequirement.model_validate(params["extracted"])
+            return ToolResult.success(
+                AnalyzeAgent().analyze(
+                    extracted, params.get("historical_requirements"),
+                    analysis_mode=params.get("analysis_mode", "strict"),
+                ).model_dump(mode="python")
+            )
+        if name == "assess_requirement_risk":
+            return ToolResult.success(
+                RiskAgent().assess(ExtractedRequirement.model_validate(params["extracted"])).model_dump(mode="python")
+            )
+        raise AssertionError(f"unexpected tool: {name}")
+
+    monkeypatch.setattr("requirement_agent.workflows.agents_nodes.invoke", invoke)
+
+
 def _extracted(**overrides):
     base = dict(
         requirement_title="登录增强",
@@ -21,6 +56,7 @@ def _extracted(**overrides):
 
 
 def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch) -> None:
+    _wire_registered_tools(monkeypatch)
     monkeypatch.setattr(
         "requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
@@ -31,7 +67,7 @@ def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch
     )
     monkeypatch.setattr(
         "requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
-        lambda self, extracted, historical=None: AnalysisResult(independent=True),
+        lambda self, extracted, historical=None, analysis_mode="strict": AnalysisResult(independent=True),
     )
     monkeypatch.setattr(
         "requirement_agent.agents.risk_agent.RiskAgent.assess",
@@ -54,6 +90,7 @@ def test_analysis_graph_independent_can_commit_and_keeps_full_fields(monkeypatch
 
 
 def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) -> None:
+    _wire_registered_tools(monkeypatch)
     monkeypatch.setattr(
         "requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
@@ -64,7 +101,7 @@ def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) ->
     )
     monkeypatch.setattr(
         "requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
-        lambda self, extracted, historical=None: AnalysisResult(
+        lambda self, extracted, historical=None, analysis_mode="strict": AnalysisResult(
             duplicate=True,
             related=True,
             conflict=False,
@@ -87,6 +124,7 @@ def test_analysis_graph_duplicate_forces_manual_review_with_risk(monkeypatch) ->
 
 
 def test_analysis_graph_high_risk_triggers_manual_review(monkeypatch) -> None:
+    _wire_registered_tools(monkeypatch)
     monkeypatch.setattr(
         "requirement_agent.agents.extract_agent.ExtractAgent.extract",
         lambda self, raw_text, **kw: _extracted(),
@@ -97,7 +135,7 @@ def test_analysis_graph_high_risk_triggers_manual_review(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "requirement_agent.agents.analyze_agent.AnalyzeAgent.analyze",
-        lambda self, extracted, historical=None: AnalysisResult(independent=True),
+        lambda self, extracted, historical=None, analysis_mode="strict": AnalysisResult(independent=True),
     )
     monkeypatch.setattr(
         "requirement_agent.agents.risk_agent.RiskAgent.assess",
