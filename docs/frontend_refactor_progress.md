@@ -160,7 +160,7 @@ PostgreSQL TCP 要求未提供的密码，测试在首个连接前失败、没�
 
 - `frontend/src/contracts/api.ts` 全面对齐真实端点：`DocumentAsset`/`Version`/`RequirementFeature`（含 `module_key`/`module_name`）/`RequirementDiff`/`TraceSource`；`Id` 全程字符串（雪花 ID 不转 number）。
 - `frontend/src/lib/http.ts`：错误对象带上服务端 `detail` 与 `request_id`；`NotFoundError` 单独类型；`listItems` 接受 `undefined`。
-- 文档详情新增真实「版本流」区：`/api/v1/documents/{id}/versions` 返回 404 时显示「该文档没有版本流（接口返回 404）」，不崩溃。
+- 文档详情新增真实「版本流」区：`/api/v1/documents/{id}/versions` 返回 404 时显示「该文档没有版本流（接口返回 404）」，不崩溃。版本项按 `DocumentAsset` 解析（不是需求 `Version`）；历史版本使用资产字符串 ID 跳转到只读详情。仅有 v1 时明确提示：这表示尚未上传同名同格式的变更内容，并非版本链丢失。
 - Diff 面板在无变更时显示「两个版本之间没有功能变更」，不伪造增删。
 
 ### 5. 真实联调证据（FastAPI :8124 + 隔离库 `req_agent_iso`）
@@ -191,7 +191,7 @@ PostgreSQL TCP 要求未提供的密码，测试在首个连接前失败、没�
 
 - F3 对话、F4 审核、F5 任务记录、F6 全量视觉验收仍未开始（本轮范围只有 F0–F2；是否进入 F3 待 F0–F2 验收结论）。
 - 旧审核抽屉渲染缺陷已在 §7 修复并验证，不再是阻塞项。
-- 参考图中的「…」行内更多操作列仍未实现（无真实接口，不放假按钮）；文档版本链只有在该文档存在 `stream_id` 时才有，种子文档没有，界面如实显示 404 态。
+- 参考图中的「…」行内更多操作列仍未实现（无真实接口，不放假按钮）。
 - 上传的成功/失败 UI 均用 CDP 真实驱动：空文件触发后端 400 `uploaded file is empty`，界面显示「上传失败：uploaded file is empty」（bad 态），非通用兜底文案。
 
 ## F0–F2（2026-10-10）
