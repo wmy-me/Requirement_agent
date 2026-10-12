@@ -706,10 +706,19 @@ async def _stream_library_assistant(
         if final_status == "failed":
             yield _tracked_sse("error", {"message": result.content}, node="assistant")
         yield _tracked_sse("done", {"run_id": run_id, "status": final_status}, node="assistant")
-    except (RuntimeError, ValueError) as exc:
-        execution.fail(run_id, token, exc, current_node="assistant")
-        yield _tracked_sse("error", {"message": str(exc)}, node="assistant")
-        yield _tracked_sse("done", {"run_id": run_id, "status": "failed"}, node="assistant")
+    except asyncio.CancelledError:
+        # 连接协程被 ASGI 取消（例如客户端断连）不等同于审核人调用 cancel。
+        # 不吞掉取消异常，也不伪造一个 cancelled SSE；后者只能由 run 控制接口写入。
+        raise
+    except Exception as exc:  # noqa: BLE001 - provider/network/auth failures also need a durable terminal state
+        # httpx 鉴权、网络和超时异常以前穿透这里，SSE 无 error/done 且 run 留在
+        # running。先以 token 栅栏持久化失败，再向仍连接的客户端给明确终态。
+        finished = execution.fail(run_id, token, exc, current_node="assistant")
+        if finished:
+            yield _tracked_sse("error", {"message": f"执行失败：{exc}"}, node="assistant")
+            yield _tracked_sse("done", {"run_id": run_id, "status": "failed"}, node="assistant")
+        else:
+            yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
     finally:
         heartbeat.stop()
 
@@ -1185,13 +1194,19 @@ async def _stream_chat_pipeline(
         if assistant is None:
             raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
         history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-        yield tracked("done", {"run_id": run_id}, node="narrating")
+        yield tracked("done", {"run_id": run_id, "status": "completed"}, node="narrating")
     except RunStopped as stopped:
         yield _sse("done", {"run_id": run_id, "status": stopped.status})
+    except asyncio.CancelledError:
+        # 断连不是用户取消；保留取消异常给 ASGI，不把它吞成普通 failed。
+        raise
     except Exception as exc:
-        execution.fail(run_id, token, exc, current_node="chat")
-        yield _sse("error", {"message": str(exc)})
-        yield _sse("done", {"run_id": run_id})
+        finished = execution.fail(run_id, token, exc, current_node="chat")
+        if finished:
+            yield _sse("error", {"message": f"执行失败：{exc}"})
+            yield _sse("done", {"run_id": run_id, "status": "failed"})
+        else:
+            yield _sse("done", {"run_id": run_id, "status": str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled")})
     finally:
         heartbeat.stop()
 

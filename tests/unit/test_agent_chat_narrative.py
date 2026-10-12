@@ -10,6 +10,10 @@
 """
 
 import asyncio
+import json
+
+import httpx
+import pytest
 
 from requirement_agent.api.routes import agent_chat
 from requirement_agent.infrastructure.llm.invocation import current_run_id, record_invocation, set_recorder
@@ -117,3 +121,87 @@ def test_casual_chat_is_not_requirement_intent() -> None:
 def test_requirement_like_text_still_goes_to_pipeline() -> None:
     assert not agent_chat._looks_like_casual_chat("新增审批导出功能，支持按部门筛选")
     assert not agent_chat._looks_like_casual_chat("你好，帮我整理这条需求")
+
+
+class _AssistantRunRepo:
+    def append_events_if_owned(self, *_args, **_kwargs):
+        return [{"sequence": 1}]
+
+
+class _AssistantExecution:
+    """只替换运行跟踪边界，验证外部 provider 异常的终态协议。"""
+
+    failed: list[BaseException] = []
+
+    def __init__(self) -> None:
+        self.repo = _AssistantRunRepo()
+
+    def claim(self, _run_id: str):
+        return {"execution_token": "token", "meta": {"deadline_at_epoch": 4_102_444_800}}
+
+    def heartbeat_loop(self, *_args):
+        return type("Heartbeat", (), {"lost": False, "stop": lambda self: None, "mark_lost": lambda self: None})()
+
+    def checkpoint(self, *_args, **_kwargs): return True
+    def owns(self, *_args): return True
+    def events(self, *_args): return True
+    def tool_calls(self, *_args): return True
+
+    def fail(self, _run_id: str, _token: str, error: BaseException, **_kwargs):
+        self.failed.append(error)
+        return True
+
+
+class _AssistantChatRepo:
+    def upsert_user_message(self, **_kwargs): return {"id": "user"}
+    def create_run(self, **_kwargs): return {"run_id": "run-provider-failure"}
+
+
+def _decode_sse(raw: str) -> tuple[str, dict[str, object]]:
+    lines = dict(line.split(": ", 1) for line in raw.splitlines() if ": " in line)
+    return lines["event"], json.loads(lines["data"])
+
+
+def test_assistant_provider_network_error_is_persisted_and_has_explicit_terminal_frames(monkeypatch) -> None:
+    """鉴权/网络/超时等 Exception 不能再让 SSE 静默截断。"""
+    _AssistantExecution.failed = []
+    monkeypatch.setattr(agent_chat, "AgentExecutionService", _AssistantExecution)
+    monkeypatch.setattr(agent_chat, "chat_repo", _AssistantChatRepo())
+
+    async def broken(*_args, **_kwargs):
+        raise httpx.ConnectError("provider unavailable")
+
+    monkeypatch.setattr(agent_chat, "run_in_threadpool", broken)
+
+    async def run():
+        return [frame async for frame in agent_chat._stream_library_assistant(
+            session_id="session", actor_id="actor", client_message_id="message",
+            message="查询需求", history=[], allow_external=False, intent="ask_library",
+        )]
+
+    frames = [_decode_sse(frame) for frame in asyncio.run(run())]
+    assert _AssistantExecution.failed and isinstance(_AssistantExecution.failed[0], httpx.ConnectError)
+    assert frames[-2] == ("error", {"message": "执行失败：provider unavailable"})
+    assert frames[-1] == ("done", {"run_id": "run-provider-failure", "status": "failed"})
+
+
+def test_assistant_disconnect_cancellation_is_not_swallowed(monkeypatch) -> None:
+    _AssistantExecution.failed = []
+    monkeypatch.setattr(agent_chat, "AgentExecutionService", _AssistantExecution)
+    monkeypatch.setattr(agent_chat, "chat_repo", _AssistantChatRepo())
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(agent_chat, "run_in_threadpool", cancelled)
+
+    async def run():
+        async for _frame in agent_chat._stream_library_assistant(
+            session_id="session", actor_id="actor", client_message_id="message",
+            message="查询需求", history=[], allow_external=False, intent="ask_library",
+        ):
+            pass
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run())
+    assert not _AssistantExecution.failed

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 
 class ReviewSubmitRequest(BaseModel):
@@ -20,7 +20,9 @@ class ReviewSubmitRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_id: int = Field(gt=0)
+    # 外部 JSON 契约必须保持雪花 ID 为字符串；Pydantic 若先解析成 int，前端的
+    # 9007199254740993 会在 JavaScript 侧已经丢精度，服务端再正确也救不回来。
+    source_id: StrictStr = Field(min_length=1, max_length=30, pattern=r"^[1-9][0-9]*$")
     decision: Literal["approved", "rejected", "returned"]
     target_requirement_key: str | None = Field(default=None, max_length=80)
     merge_mode: Literal["union", "replace"] = "union"

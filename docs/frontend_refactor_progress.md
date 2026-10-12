@@ -1,5 +1,28 @@
 # 前端重构实施记录
 
+## 业务流程正确性修复（2026-10-12）
+
+- 审核 `source_id` 已从路由、前端请求体到后端 schema 保持**字符串**；删除
+  `ReviewPages.tsx` 中的 `Number(sourceId)`，schema 拒绝 JSON number，只在 Python 领域层转换。
+  回归样本为 `9007199254740993123`，大于 `Number.MAX_SAFE_INTEGER`，请求 JSON 逐字保留。
+- 409 现在是显式的裁决锁：批准、拒绝、退回全部禁用；必须点击「重新获取」并完成详情（有目标
+  时还包括预演）后才解锁。查询失效/后台刷新不会静默清除确认。非 `pending_review` 历史来源只读，
+  不渲染裁决区。
+- assistant SSE 对可处理 provider 异常统一持久化 `failed`，并发明确 `error` +
+  `done.status=failed`；完成流也发 `done.status=completed`。预算耗尽维持持久状态
+  `failed + meta.outcome=incomplete` 与流 `incomplete`，暂停、取消、澄清分别保留
+  `paused`、`cancelled`、`waiting_clarification`。协程 `CancelledError` 不再被吞掉。
+- 新增 Vitest 最小配置与 9 个前端协议/审核规则测试：分块、CRLF、多行 data、尾部截断、
+  artifacts 先于 narrative、incomplete、精度、409 锁、重复提交与历史只读。新增 Python
+  回归覆盖 schema/路由精度、provider 网络异常终态与协程取消。
+
+本轮验证：`npm run test`（9 passed）、`npm run typecheck`、`npm run build`；
+`.venv/bin/python -m pytest -q tests/unit/test_review_request_contract.py tests/unit/test_agent_chat_narrative.py`
+（12 passed）。尝试在隔离库 `req_agent_iso` 跑聊天生命周期、澄清与审核提交集成组时，宿主
+PostgreSQL TCP 要求未提供的密码，测试在首个连接前失败、没有写入任何数据；此项待提供该隔离库
+凭据或容器内测试入口后重跑。真实 LLM/Tavily 未联调（未使用或输出任何密钥），以上聊天测试均为
+确定性假服务。
+
 ## F3–F6 与 F1 遗留项（2026-10-10，第二次修正轮）
 
 对照方案 §8，本轮补齐了 **F1 实际空缺的两项**，并完成 **F3 / F4 / F5**，F6 见文末。

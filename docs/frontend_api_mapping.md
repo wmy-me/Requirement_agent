@@ -39,7 +39,9 @@
    → 分析管线；含 `sources|tool_calls|incomplete_reason` → 助手；`{intent,answer_mode}` → 闲聊。
    旧版 `static/app/js/pages/chat.js` 用 `Array.isArray` 判它，恒为假 —— 结构化结果从未渲染过。
 4. **`failed` + `meta.outcome=incomplete` = 未完成（预算/超时）**，不是普通失败，也不是成功。
-5. **`source_id` 在所有端点都是字符串**；提交裁决时 `Number()` 回去。
+5. **`source_id` 在所有端点（含 `POST /reviews/submit` 请求体）都是字符串**。前端不做
+   `Number()` / `parseInt()`；后端 schema 强制 JSON string，仅在进入 Python 领域服务时精确转
+   为整数，避免超过 `Number.MAX_SAFE_INTEGER` 的 snowflake 改写成另一条来源。
 6. **任何 409 都不自动重试**。`merge-preview` 与 `submit` 的 409 含义不同（前者是「来源不在待审」，
    后者是乐观锁冲突「该需求已被他人修改」），都必须重新加载。对话的 409 是**对象** detail
    （带 `active_run`），与 pause/cancel 的字符串 detail 不同。
@@ -58,8 +60,7 @@
 
 ## 本次发现的后端缺陷（未在本批修复）
 
-`src/requirement_agent/api/routes/agent_chat.py:711` 的 assistant 流只捕获
-`(RuntimeError, ValueError)`，而 LLM provider 抛的是 `httpx.HTTPStatusError`（本机
-`.env` 里的 DeepSeek key 实测返回 **401**）。结果是**流不发 `error`/`done` 就关闭**，
-run 也留在 `running` 直到租约过期。前端已按「未正常结束」处理并在界面上说明；
-后端应把该 except 放宽到 `Exception`（或至少包含 httpx 异常）后再补终态帧。
+本轮已修复：assistant 流对 provider 鉴权、网络、超时等可处理异常，先以 execution token
+持久化 `failed`，再发 `error` 和显式 `done.status="failed"`。`CancelledError` 单独继续抛出，
+断连不伪装为用户取消；用户暂停/取消仍由控制接口决定终态。前端仍保留无终态帧的截断兜底，
+以兼容旧 run 或代理截断，而不再依赖成功流缺 status 的推断。

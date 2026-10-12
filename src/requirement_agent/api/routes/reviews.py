@@ -74,7 +74,8 @@ async def submit_review_decision(payload: ReviewSubmitRequest) -> dict[str, obje
     """提交评审结论：记录决策并生成/更新需求与特性；冲突时返回 409。"""
     try:
         return review_service.submit_decision(
-            source_id=payload.source_id,
+            # 边界保留字符串，只有进入 Python 的领域服务时才精确转换为任意精度 int。
+            source_id=int(payload.source_id),
             decision=payload.decision,
             reviewer_id=settings.api_actor_id,
             target_requirement_key=payload.target_requirement_key,

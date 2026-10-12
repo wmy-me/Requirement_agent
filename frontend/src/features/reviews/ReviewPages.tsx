@@ -15,6 +15,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import type { ApiError, ListResponse, MergePreview, Requirement, ReviewDecision, ReviewDetail, ReviewSourceRow } from "../../contracts/api";
 import { api } from "../../lib/http";
 import { date, text } from "../../lib/format";
+import { buildReviewDecisionPayload, canSubmitReview } from "./reviewDecision";
 
 const meta = (row: { metadata?: Record<string, unknown> }): Record<string, unknown> => (row.metadata ?? {}) as Record<string, unknown>;
 const titleOf = (row: ReviewSourceRow): string => {
@@ -77,6 +78,9 @@ export function ReviewDetailPage() {
   const [reviewer, setReviewer] = useState("");
   const [comment, setComment] = useState("");
   const [conflict, setConflict] = useState<string | null>(null);
+  // 409 表示「本页所见版本」已经失效。它不是普通查询错误：后台 refetch 不能
+  // 悄悄解除这个锁，必须由审核人明确重新取详情和预演后才可以再次裁决。
+  const [conflictLocked, setConflictLocked] = useState(false);
 
   const detail = useQuery({ queryKey: ["review", sourceId], queryFn: () => api<ReviewDetail>(`/api/v1/reviews/${encodeURIComponent(sourceId)}/detail`) });
   const requirements = useQuery({ queryKey: ["reviews-targets"], queryFn: () => api<ListResponse<Requirement>>("/api/v1/requirements?limit=200") });
@@ -92,14 +96,7 @@ export function ReviewDetailPage() {
     mutationFn: (decision: ReviewDecision) => api<{ requirement_key?: string }>("/api/v1/reviews/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source_id: Number(sourceId), decision,
-        target_requirement_key: targetKey || null,
-        merge_mode: mergeMode,
-        reviewer_name: reviewer || null,
-        comment: comment || null,
-        feature_overrides: decision === "approved" && preview.data ? preview.data.overrides : [],
-      }),
+      body: JSON.stringify(buildReviewDecisionPayload({ sourceId, decision, targetKey, mergeMode, reviewer, comment, preview: preview.data })),
     }),
     onSuccess: (result, decision) => {
       queryClient.invalidateQueries({ queryKey: ["reviews"] });
@@ -110,7 +107,7 @@ export function ReviewDetailPage() {
       // 不自动重试：冲突意味着数据已变，必须重新加载。
       const e = error as ApiError;
       setConflict(e.status === 409 ? (typeof e.detail === "string" ? e.detail : "该条已被处理或目标需求已变更，请重新加载。") : null);
-      if (e.status === 409) { queryClient.invalidateQueries({ queryKey: ["review", sourceId] }); queryClient.invalidateQueries({ queryKey: ["merge-preview"] }); }
+      if (e.status === 409) setConflictLocked(true);
     },
   });
 
@@ -123,16 +120,27 @@ export function ReviewDetailPage() {
   const risk = (m.risk ?? {}) as Record<string, unknown>;
   const degradation = (m.degradation ?? null) as Record<string, unknown> | null;
   const previewFailed = Boolean(targetKey) && preview.isError;
-  const canApprove = Boolean(targetKey) ? preview.isSuccess : true;
+  const isPending = row.processing_status === "pending_review";
+  const canApprove = canSubmitReview({ isPending, conflictLocked, isSubmitting: submit.isPending, decision: "approved", hasTarget: Boolean(targetKey), previewReady: preview.isSuccess });
+  const canDecide = (decision: "returned" | "rejected") => canSubmitReview({ isPending, conflictLocked, isSubmitting: submit.isPending, decision, hasTarget: Boolean(targetKey), previewReady: preview.isSuccess });
+  const refreshAfterConflict = async () => {
+    // 确保裁决者实际看过新的详情；有目标需求时，也必须重新取得对应预演。
+    const results = await Promise.all([detail.refetch(), ...(targetKey ? [preview.refetch()] : [])]);
+    if (results.every((result) => !result.isError)) {
+      setConflict(null);
+      setConflictLocked(false);
+    }
+  };
 
   return (
     <section className="page">
       <Link className="back" to="/reviews"><ArrowLeft size={14} /> 返回审核</Link>
       <header className="page-heading">
-        <div><span className="eyebrow">{text(row.source_type, "来源")} · 待审核</span><h1>{titleOf(row)}</h1><p>来源 {row.source_id} · 提交人 {text(row.requester_name, "未提供")} · {date(row.submitted_at)}</p></div>
+        <div><span className="eyebrow">{text(row.source_type, "来源")} · {isPending ? "待审核" : "已处理（只读）"}</span><h1>{titleOf(row)}</h1><p>来源 {row.source_id} · 提交人 {text(row.requester_name, "未提供")} · {date(row.submitted_at)}</p></div>
       </header>
 
-      {conflict && <div className="chat-banner bad"><AlertTriangle size={15} /><div><strong>这条审核已经不能按当前页面提交</strong><p>{conflict}</p></div><button className="button" onClick={() => { setConflict(null); navigate(0); }}>重新加载</button></div>}
+      {conflict && <div className="chat-banner bad"><AlertTriangle size={15} /><div><strong>这条审核已经不能按当前页面提交</strong><p>{conflict}。请重新获取详情{targetKey ? "和合并预演" : ""}后再决定。</p></div><button className="button" disabled={detail.isFetching || preview.isFetching} onClick={() => void refreshAfterConflict()}>重新获取</button></div>}
+      {!isPending && <div className="chat-banner"><CheckCircle2 size={15} /><div><strong>这条来源已处理，不能再次裁决</strong><p>当前状态为 {text(row.processing_status, "未知")}；这里只保留历史材料和结果供查看。</p></div></div>}
       {degradation && <div className="chat-banner warn"><AlertTriangle size={15} /><div><strong>分析链路降级</strong><p>{String(degradation.reason ?? "模型链路降级，审核时请谨慎确认。")}</p></div></div>}
 
       <div className="review-grid">
@@ -173,31 +181,31 @@ export function ReviewDetailPage() {
         </article>
       </div>
 
-      <section className="review-decide">
+      {isPending ? <section className="review-decide">
         <h2>人工裁决</h2>
         <div className="review-fields">
           <label>合并进目标需求
-            <select value={targetKey} onChange={(e) => setTargetKey(e.target.value)}>
+          <select value={targetKey} disabled={conflictLocked} onChange={(e) => setTargetKey(e.target.value)}>
               <option value="">（新建独立需求）</option>
               {(requirements.data?.items ?? []).map((r) => <option key={r.requirement_key} value={r.requirement_key}>{r.requirement_key} · {r.requirement_name}</option>)}
             </select>
           </label>
           <label>合并模式
-            <select value={mergeMode} onChange={(e) => setMergeMode(e.target.value as "union" | "replace")} disabled={!targetKey}>
+          <select value={mergeMode} onChange={(e) => setMergeMode(e.target.value as "union" | "replace")} disabled={!targetKey || conflictLocked}>
               <option value="union">并集：保留目标既有功能</option>
               <option value="replace">替换：可能删除目标既有功能</option>
             </select>
           </label>
-          <label>审核人<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="可选" /></label>
-          <label className="wide">审核意见<textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="可选" /></label>
+          <label>审核人<input value={reviewer} disabled={conflictLocked} onChange={(e) => setReviewer(e.target.value)} placeholder="可选" /></label>
+          <label className="wide">审核意见<textarea rows={2} disabled={conflictLocked} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="可选" /></label>
         </div>
         {submit.isError && !conflict && <p className="hint bad">提交失败。{(submit.error as ApiError)?.detail ?? ""}</p>}
         <div className="review-actions">
-          <button className="button" disabled={submit.isPending} onClick={() => submit.mutate("returned")}><RotateCcw size={14} />退回修改</button>
-          <button className="button" disabled={submit.isPending} onClick={() => submit.mutate("rejected")}><XCircle size={14} />拒绝</button>
-          <button className="button primary" disabled={submit.isPending || !canApprove} title={!canApprove ? "预演未成功，不能据此批准" : undefined} onClick={() => submit.mutate("approved")}><CheckCircle2 size={14} />批准</button>
+          <button className="button" disabled={!canDecide("returned")} onClick={() => submit.mutate("returned")}><RotateCcw size={14} />退回修改</button>
+          <button className="button" disabled={!canDecide("rejected")} onClick={() => submit.mutate("rejected")}><XCircle size={14} />拒绝</button>
+          <button className="button primary" disabled={!canApprove || submit.isPending} title={!canApprove ? (conflictLocked ? "冲突后必须重新获取详情和预演" : "预演未成功，不能据此批准") : undefined} onClick={() => submit.mutate("approved")}><CheckCircle2 size={14} />批准</button>
         </div>
-      </section>
+      </section> : null}
     </section>
   );
 }
