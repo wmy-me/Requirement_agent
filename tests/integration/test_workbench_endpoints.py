@@ -26,6 +26,21 @@ from requirement_agent.infrastructure.db.session import SessionLocal
 
 
 @pytest.fixture
+def committed_review_source():
+    """工作台来源/历史断言不能依赖开发库种子，真实提交后再清理。"""
+    from tests.integration.test_review_commit_path import _CommitFixture
+
+    fixture = _CommitFixture()
+    try:
+        fixture.seed_target()
+        fixture.seed_source()
+        fixture.submit(target=fixture.key)
+        yield fixture
+    finally:
+        fixture.cleanup()
+
+
+@pytest.fixture
 def client() -> TestClient:
     from requirement_agent.api.app import app
 
@@ -120,7 +135,7 @@ def test_sources_list_filters_by_status(client: TestClient) -> None:
     assert all(x["processing_status"] == "committed" for x in r.json()["items"])
 
 
-def test_sources_list_resolves_the_linked_requirement(client: TestClient) -> None:
+def test_sources_list_resolves_the_linked_requirement(client: TestClient, committed_review_source) -> None:
     """`linked_requirement_key` 表示**这条来源最终变成了哪条需求**。
 
     它由 `requirement_version_source` 左连接取到；没入库的来源是 `null`
@@ -138,7 +153,7 @@ def test_sources_list_resolves_the_linked_requirement(client: TestClient) -> Non
 # ── ③ /reviews/history ────────────────────────────────────────────────────
 
 
-def test_history_defaults_to_terminal_statuses_only(client: TestClient) -> None:
+def test_history_defaults_to_terminal_statuses_only(client: TestClient, committed_review_source) -> None:
     """默认口径是三种**终态**，**不含 `returned`**。
 
     退回修改不是终态 —— 来源会重新进入分析流程。把它列进「历史」会让人以为

@@ -1,5 +1,8 @@
 # 前端重构实施记录
 
+> 2026-10-12 全功能验收：新隔离库已按 migrations 完整迁移；全量 pytest 暴露多处历史测试
+> 对开发库种子的依赖，未以 skip 掩盖。详情见 `docs/full_function_test_report.md`。
+
 ## 业务流程正确性修复（2026-10-12）
 
 - 审核 `source_id` 已从路由、前端请求体到后端 schema 保持**字符串**；删除
