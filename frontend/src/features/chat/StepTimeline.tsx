@@ -12,6 +12,9 @@ export function StepTimeline({ steps, live }: { steps: ToolStep[]; live: boolean
   // `step.label` 是事件到达时的进行时文案；终态继续显示“正在查询”会让已完成的
   // 回答看起来仍在跑。只在 live 时保留原始进行时，收尾后给出明确完成态。
   const summary = toolCount > 0 ? `已查询 ${toolCount} 个工具` : live ? steps[steps.length - 1].label : "已完成本轮查询";
+  const labelForDisplay = (label: string) => !live && label.startsWith("正在")
+    ? `已完成${label.slice(2)}`
+    : label;
   return (
     <div className="steps">
       <button className="steps-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -24,7 +27,7 @@ export function StepTimeline({ steps, live }: { steps: ToolStep[]; live: boolean
           {steps.map((s, i) => (
             <li key={`${s.label}-${i}`}>
               {s.tool ? <Wrench size={13} /> : null}
-              <span>{s.label}</span>
+              <span>{labelForDisplay(s.label)}</span>
               {s.reason && <em>{s.reason}</em>}
             </li>
           ))}
