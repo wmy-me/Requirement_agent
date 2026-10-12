@@ -5,7 +5,8 @@
 
 > 2026-10-12 隔离复测：`/app`、`/app-next` 和 `/app-next` 深链接均由本地隔离 FastAPI 返回
 > 200，未授权 API 返回 401；Vitest 9 passed、typecheck/build 通过。桌面/390px 截图见
-> `docs/design/screenshots/2026-10-12-audit-app-next-*.png`。这不是八页面有数据全流程通过：
+> `docs/design/screenshots/2026-10-12-workbench-desktop.png` 与
+> `docs/design/screenshots/2026-10-12-workbench-narrow-390.png`。这不是八页面有数据全流程通过：
 > 真实数据夹具仍待自包含化，详见全功能报告。
 
 ## 业务流程正确性修复（2026-10-12）

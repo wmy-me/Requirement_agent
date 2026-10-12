@@ -103,8 +103,8 @@ Outbox、Worker、版本、关系等由下述集成测试覆盖。
 ### 浏览器证据与待完成项
 
 隔离 API 的真实截图：
-`docs/design/screenshots/2026-10-12-audit-app-next-desktop.png` 与
-`docs/design/screenshots/2026-10-12-audit-app-next-390.png`。两张分别是 1440px 与 390px 的
+`docs/design/screenshots/2026-10-12-workbench-desktop.png` 与
+`docs/design/screenshots/2026-10-12-workbench-narrow-390.png`。两张分别是 1440px 与 390px 的
 `/app-next`。它们不等同于八个页面的完整有数据交互验收；当前空库的多项历史集成测试仍硬编码
 开发种子（`REQ-000015`、能力词表、来源/关系/版本时间轴），共导致上述 27 个失败。应将这些
 测试逐项迁为自建/清理 fixture，才能完成真实 API 八页面、有数据导航和每一接口的错误矩阵验收。
