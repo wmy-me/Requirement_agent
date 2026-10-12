@@ -21,4 +21,14 @@ describe("chat reducer protocol edges", () => {
     state = chatReducer(state, { type: "STREAM_ENDED_WITHOUT_TERMINAL" });
     expect(state.phase).toBe("error");
   });
+
+  it("never appends streamed narrative to the user message", () => {
+    let state = chatReducer(initialChatState, { type: "SUBMIT", clientMessageId: "u", assistantId: "a", text: "原始问题", attachments: [] });
+    state = chatReducer(state, { type: "NARRATIVE_START" });
+    state = chatReducer(state, { type: "NARRATIVE_FLUSH", text: "模型回答" });
+    state = chatReducer(state, { type: "DONE", runId: "r", status: "completed" });
+    expect(state.messages.find((message) => message.role === "user")?.content).toBe("原始问题");
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe("模型回答");
+    expect(state.phase).toBe("done");
+  });
 });

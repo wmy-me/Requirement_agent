@@ -43,6 +43,17 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeSession]);
 
+  // 点击已激活的「新对话」不会触发路由变化；用明确事件清空本地流状态，避免把上一轮
+  // 的临时 assistant 气泡、步骤和输入状态带进新会话。
+  useEffect(() => {
+    const reset = () => {
+      chat.newConversation();
+      if (routeSession) navigate("/");
+    };
+    window.addEventListener("ra:new-conversation", reset);
+    return () => window.removeEventListener("ra:new-conversation", reset);
+  }, [chat.newConversation, navigate, routeSession]);
+
   const submit = (text: string, files: File[]) => {
     chat.submit(text, files, options);
     // 新会话拿到 session_id 后把 URL 补上，刷新/分享才有意义。
