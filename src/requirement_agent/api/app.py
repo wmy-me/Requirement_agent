@@ -1,6 +1,6 @@
 """requirement_agent.api.app —— 统一 FastAPI 应用入口（目标命名空间）。
 
-当前行为与根 `main.py` 保持一致（应用名/版本/描述/路由 /health /app /static、安全响应头、
+当前行为与根 `main.py` 保持一致（应用名/版本/描述/路由 /health /app-next、安全响应头、
 lifespan outbox 消费循环）。根 `main.py` 为薄包装转发到 `app = create_app()`，**不产生第二个 FastAPI app、不重复注册路由**；
 后台 Worker 入口在 `requirement_agent.workers.tasks:app`。
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from requirement_agent.config.settings import settings
@@ -30,20 +30,13 @@ logger = logging.getLogger(__name__)
 
 # 项目根目录：本文件位于 <root>/src/requirement_agent/api/app.py
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-STATIC_DIR = PROJECT_ROOT / "static"
 FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 
 # 不记请求日志的路径：静态资源、前端页面与探活。
 # 前端每 30 秒轮询两个 health 端点（`app.js` 的 loadStatus），不跳过会把日志刷满，
 # 真正出问题时反而淹没在噪声里。
-_LOG_SKIP_PREFIXES = ("/static", "/api/v1/health", "/favicon.ico")
-_LOG_SKIP_PATHS = {"/", "/app", "/health", "/docs", "/redoc", "/openapi.json"}
-
-#: 新工作台的页面白名单（`static/app/<name>.html`）。**不从 URL 拼路径** ——
-#: 见 `workbench_page` 的说明。
-_WORKBENCH_PAGES = frozenset(
-    {"index", "requirements", "reviews", "versions", "analysis", "knowledge", "intake", "ops"}
-)
+_LOG_SKIP_PREFIXES = ("/api/v1/health", "/favicon.ico")
+_LOG_SKIP_PATHS = {"/", "/app-next", "/health", "/docs", "/redoc", "/openapi.json"}
 
 
 @asynccontextmanager
@@ -92,10 +85,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    # The React workbench is built separately from legacy /app.  Mount only its
-    # hashed assets; the catch-all below serves index.html for deep links and
-    # injects the runtime API credential in the same way as the legacy UI.
+    # Mount only React's hashed assets; the catch-all below serves index.html
+    # for deep links and injects the runtime API credential.
     if FRONTEND_DIST_DIR.is_dir():
         app.mount("/app-next/assets", StaticFiles(directory=str(FRONTEND_DIST_DIR / "assets")), name="app-next-assets")
 
@@ -160,9 +151,9 @@ def create_app() -> FastAPI:
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'",
         )
-        # 前端资源不缓存重验证，避免浏览器沿用旧版 JS
+        # 前端资源不缓存重验证，避免浏览器沿用旧构建产物。
         path = request.url.path
-        if path == "/app" or path.startswith("/app/") or path.endswith(".js") or path.endswith(".css"):
+        if path == "/app-next" or path.startswith("/app-next/"):
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
@@ -220,10 +211,7 @@ def create_app() -> FastAPI:
         那多了一次请求，也就多了一个会失败的地方（漏加载 / 404 / 顺序不对 →
         前端拿不到 token）。注入进 HTML 是**一次响应里同时拿到页面和 token**。
 
-        ## 每个页面都要注入
-
-        新工作台是**多个独立 HTML**（`static/app/*.html`），每个都是完整文档、
-        各自发请求 —— 所以注入必须逐页做。漏掉一页，那一页就全是 401。
+        React 工作台只保留一个入口 HTML；客户端路由共享同一份运行时 token。
         """
         html = path.read_text(encoding="utf-8")
         # CSP 明确禁止内联脚本，因此不能把 token 写成 `window.RA_UI_TOKEN = ...`。
@@ -244,6 +232,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="app-next frontend is not built")
         return _render_page(index)
 
+    @app.get("/", include_in_schema=False)
+    async def root_page() -> RedirectResponse:
+        """唯一前端入口：根路径直接进入 React 工作台。"""
+        return RedirectResponse(url="/app-next", status_code=307)
+
     @app.get("/app-next", include_in_schema=False)
     @app.get("/app-next/{path:path}", include_in_schema=False)
     async def app_next_page(path: str = "") -> HTMLResponse:
@@ -251,36 +244,11 @@ def create_app() -> FastAPI:
         # client-side routes and must survive direct refreshes.
         return _render_app_next()
 
-    @app.get("/app", include_in_schema=False)
-    @app.get("/app/{page}", include_in_schema=False)
-    async def workbench_page(page: str = "index") -> HTMLResponse:
-        """新工作台的一个页面（`static/app/<page>.html`）。
-
-        ⚠️ **页名走白名单**，不做路径拼接 —— `page` 直接来自 URL，拼进路径就是
-        目录穿越（`../../.env`）。白名单同时让「有哪些页面」这件事在代码里可见。
-        """
-        if page not in _WORKBENCH_PAGES:
-            raise HTTPException(status_code=404, detail=f"未知页面：{page}")
-        return _render_page(STATIC_DIR / "app" / f"{page}.html")
-
-    @app.get("/app/reviews/detail", include_in_schema=False)
-    async def review_detail_page() -> HTMLResponse:
-        """审核详情复用审核中心页面；具体来源由前端 URL 状态读取。"""
-        return _render_page(STATIC_DIR / "app" / "reviews.html")
-
-    @app.get("/app/requirements/{requirement_key}", include_in_schema=False)
-    async def requirement_detail_page(requirement_key: str) -> HTMLResponse:
-        """需求档案页。路径参数不参与文件路径拼接，避免目录穿越。"""
-        if not requirement_key or "/" in requirement_key:
-            raise HTTPException(status_code=404, detail="未知需求页面")
-        return _render_page(STATIC_DIR / "app" / "requirements.html")
-
-    @app.get("/app/analysis/runs/{run_id}", include_in_schema=False)
-    async def analysis_run_detail_page(run_id: str) -> HTMLResponse:
-        """分析 Run 详情页。run_id 只供前端读取，服务端不据此访问文件。"""
-        if not run_id or "/" in run_id:
-            raise HTTPException(status_code=404, detail="未知分析页面")
-        return _render_page(STATIC_DIR / "app" / "analysis.html")
+    @app.api_route("/app", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/app/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def retired_legacy_frontend(path: str = "") -> None:
+        """旧静态工作台已移除，保留明确迁移状态而非回退或伪装为新版。"""
+        raise HTTPException(status_code=410, detail="旧版前端已下线，请使用 /app-next")
 
     return app
 

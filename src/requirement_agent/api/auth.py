@@ -89,8 +89,7 @@ EXEMPT_PATTERNS: Final = (
     re.compile(r"^/api/v1/channels/feishu/webhook$"),
 )
 EXEMPT_PREFIXES: Final = (
-    "/static",
-    "/app/",  # 工作台页面本身要能打开（数据请求仍要 token）
+    "/app/",  # 已下线旧路径：仅为让其明确返回 410，不提供任何页面或 API
     "/app-next/",  # React 工作台页面和构建资产；API 请求仍附运行时 token
     "/api/v1/health",  # 探活：前端每 30 秒轮询，鉴权会让它变成噪声
 )

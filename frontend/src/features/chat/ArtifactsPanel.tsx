@@ -3,7 +3,7 @@
  * 为什么**按存在的键**判别而不是按声明类型：后端的 `artifacts` 是一个自由 dict，
  * 形状随路径变（助手路径 / 分析管线 / 闲聊 / 被拦截）。旧版 `static/app/js/pages/
  * chat.js` 的 `renderArtifacts` 用 `Array.isArray(artifacts)` 判断，而后端发的是
- * **对象** —— 那个判断永远为假，所以结构化结果**从来没有渲染过**。这里按真实形状来。
+ * **对象**；React 工作台按真实形状渲染，不依赖已移除的静态实现。
  * 真实字段：evidence = {evidence_id, source_type, source_ref, title, excerpt, content_hash}。
  */
 import { AlertCircle, AlertTriangle, ExternalLink, FileText, Link2 } from "lucide-react";

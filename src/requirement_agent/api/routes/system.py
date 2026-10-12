@@ -11,12 +11,6 @@ from fastapi import APIRouter
 router = APIRouter()
 
 
-@router.get("/")
-async def root() -> dict[str, str]:
-    """服务入口：返回 API 名称与运行状态。"""
-    return {"message": "Requirement Agent API", "status": "ok"}
-
-
 @router.get("/health")
 async def healthcheck() -> dict[str, str]:
     """基础存活探活：固定返回 {"status": "ok"}。"""

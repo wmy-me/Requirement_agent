@@ -4,6 +4,8 @@
 `docs/refactoring/frontend-api-mapping.md` 是 **2026-09-23** 的历史盘点，不能当现状用；
 本文件是**新工作台**（`frontend/` → `/app-next`）的当前映射，逐条对过代码与运行中的服务。
 
+> 2026-10-12：旧静态前端 `static/app/` 已删除，`/` 307 跳转 `/app-next`；旧 `/app` 及子路径固定返回 410。所有前端入口、来源详情和提问入口均只使用本表的 React 路由。
+
 验证环境：隔离库 `req_agent_iso`（3 文档 / 3 需求 / 4 版本 / 5 个带模块的功能 +
 1 条 `pending_review` 来源）+ 本地 FastAPI（`POSTGRES_DB=req_agent_iso`）。
 **业务库 `requirement_agent` 全程未被执行任何写操作。**
@@ -42,7 +44,7 @@
    不会把未调用或配置失败说成已联网。
 4. **`artifacts` 是自由 dict，形状随路径变**。按存在的键判别：含 `extracted|candidates|analysis|risk`
    → 分析管线；含 `sources|tool_calls|incomplete_reason` → 助手；`{intent,answer_mode}` → 闲聊。
-   旧版 `static/app/js/pages/chat.js` 用 `Array.isArray` 判它，恒为假 —— 结构化结果从未渲染过。
+   React 工作台按对象字段渲染；已删除的旧静态前端曾用 `Array.isArray` 误判对象，不能再作为实现依据。
 5. **`failed` + `meta.outcome=incomplete` = 未完成（预算/超时）**，不是普通失败，也不是成功。
 6. **`source_id` 在所有端点（含 `POST /reviews/submit` 请求体）都是字符串**。前端不做
    `Number()` / `parseInt()`；后端 schema 强制 JSON string，仅在进入 Python 领域服务时精确转

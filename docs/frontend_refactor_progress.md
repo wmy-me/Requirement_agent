@@ -1,5 +1,7 @@
 # 前端重构实施记录
 
+> 2026-10-12：旧静态前端 `static/app/` 已删除。唯一页面入口为 `/app-next`（`/` → 307 `/app-next`）；旧 `/app` 与全部子路径固定返回 410。新版中原有的旧版跳转均已改为站内 React 路由。
+
 > 2026-10-12 全功能验收：新隔离库已按 migrations 完整迁移；全量 pytest 暴露多处历史测试
 > 对开发库种子的依赖，未以 skip 掩盖。详情见 `docs/full_function_test_report.md`。
 
