@@ -50,8 +50,11 @@ export function DocumentDetail() {
   const chunkLimit = 10;
   const [chunkOffset, setChunkOffset] = useState(0);
   const doc = useQuery({ queryKey: ["document", documentId], queryFn: () => api<DocumentAsset>(`/api/v1/documents/${encodeURIComponent(documentId)}`) });
-  const chunks = useQuery({ queryKey: ["document-chunks", documentId, chunkOffset], queryFn: () => api<DocumentChunkPage>(`/api/v1/documents/${encodeURIComponent(documentId)}/chunks?limit=${chunkLimit}&offset=${chunkOffset}`) });
-  const indexStatus = useQuery({ queryKey: ["document-index-status", documentId], queryFn: () => api<DocumentIndexStatus>(`/api/v1/documents/${encodeURIComponent(documentId)}/index-status`) });
+  const indexStatus = useQuery({ queryKey: ["document-index-status", documentId], queryFn: () => api<DocumentIndexStatus>(`/api/v1/documents/${encodeURIComponent(documentId)}/index-status`), refetchInterval: (query) => ["pending", "processing"].includes(query.state.data?.index_status ?? "") ? 2_000 : false });
+  const indexing = ["pending", "processing"].includes(indexStatus.data?.index_status ?? "");
+  // 上传后的 document_chunk_sync 是异步任务。只在任务未完成时轮询，避免把
+  // 「刚上传仍显示 0 分片」留到用户手动刷新，也不对已完成文档持续发请求。
+  const chunks = useQuery({ queryKey: ["document-chunks", documentId, chunkOffset], queryFn: () => api<DocumentChunkPage>(`/api/v1/documents/${encodeURIComponent(documentId)}/chunks?limit=${chunkLimit}&offset=${chunkOffset}`), refetchInterval: indexing ? 2_000 : false });
   // A document stream may contain only v1.  That is still a valid version
   // chain; old versions use their own document IDs and can be opened below.
   const versions = useQuery({ queryKey: ["document-versions", documentId], queryFn: () => api<ListResponse<DocumentAsset>>(`/api/v1/documents/${encodeURIComponent(documentId)}/versions`), retry: false });
@@ -80,7 +83,8 @@ function DocumentIndexPanel({ query }: { query: ReturnType<typeof useQuery<Docum
   if (query.isLoading) return <p className="hint">正在读取实际索引状态…</p>;
   if (query.isError || !query.data) return <p className="hint bad">索引状态暂时不可读取。</p>;
   const value = query.data;
-  return <section className="document-index"><h3>索引状态</h3><p><span className={`status ${value.index_status === "failed" ? "bad" : value.index_status === "pending" || value.index_status === "processing" || value.index_status === "partial" ? "warn" : ""}`}>{value.index_status}</span></p><dl><dt>已持久化分片</dt><dd>{value.total_chunks}</dd><dt>已有向量</dt><dd>{value.embedded_chunks}</dd><dt>Embedding</dt><dd>{value.embedding_models.join("、") || "未标记"}{value.embedding_dimensions.length ? ` · ${value.embedding_dimensions.join("/")} 维` : ""}</dd><dt>切分参数</dt><dd>{value.chunking.chunk_size ? `${value.chunking.source} · ${value.chunking.chunk_size} / 重叠 ${value.chunking.overlap ?? "未提供"}` : "历史事件未记录"}</dd></dl>{value.outbox?.last_error && <p className="hint bad">最近索引错误：{value.outbox.last_error}</p>}<button className="button index-refresh" onClick={() => { void query.refetch(); }}>刷新索引状态</button></section>;
+  const running = value.index_status === "pending" || value.index_status === "processing";
+  return <section className="document-index"><h3>索引状态</h3><p><span className={`status ${value.index_status === "failed" ? "bad" : running || value.index_status === "partial" ? "warn" : ""}`}>{value.index_status}</span></p>{running && <p className="hint">正在解析与索引，分片和状态会自动刷新。</p>}<dl><dt>已持久化分片</dt><dd>{value.total_chunks}</dd><dt>已有向量</dt><dd>{value.embedded_chunks}</dd><dt>Embedding</dt><dd>{value.embedding_models.join("、") || "未标记"}{value.embedding_dimensions.length ? ` · ${value.embedding_dimensions.join("/")} 维` : ""}</dd><dt>切分参数</dt><dd>{value.chunking.chunk_size ? `${value.chunking.source} · ${value.chunking.chunk_size} / 重叠 ${value.chunking.overlap ?? "未提供"}` : "历史事件未记录"}</dd></dl>{value.outbox?.last_error && <p className="hint bad">最近索引错误：{value.outbox.last_error}</p>}<button className="button index-refresh" onClick={() => { void query.refetch(); }}>刷新索引状态</button></section>;
 }
 
 export function RequirementDetail() {
