@@ -23,6 +23,22 @@ PostgreSQL TCP 要求未提供的密码，测试在首个连接前失败、没�
 凭据或容器内测试入口后重跑。真实 LLM/Tavily 未联调（未使用或输出任何密钥），以上聊天测试均为
 确定性假服务。
 
+## 隔离库端到端复验与终态事件修复（2026-10-12）
+
+- 修复动态聊天收尾顺序：`complete_chat_message` 已原子落库最终事件、状态和 assistant 消息后，
+  不能再经 `append_events_if_owned(... status='running')` 发送 `done`；现将终态 SSE 改为只通知
+  明确状态。澄清、成功、失败、暂停、取消和预算耗尽均保持一致。
+- 确认隔离库 `requirement_agent_codex_isolated` 与专用非超级用户测试入口；临时认证仅用于本轮，
+  验证后已撤销。未连接 `requirement_agent` 业务库，也未输出业务或第三方凭据。
+- 隔离库聊天预算/暂停/澄清、审核提交、合并预演及动态 checkpoint 组：**21 passed**。覆盖确定性
+  fake 模型的问答成功、预算耗尽、暂停、澄清补充、预演、批准和版本；测试数据均由用例清理。
+- 终态修复后扩大回归至聊天生命周期、动态 checkpoint、run tracking、resume、审核提交、预演和
+  工作台端点：**55 passed、1 skipped、2 failed**。两个失败来自
+  `test_workbench_endpoints.py` 假设空隔离库已有 `committed` 来源；它们不是认证或业务回归，
+  但测试应改为自行建/清理该数据，尚未将其掩盖为通过。
+- `POST /reviews/submit` 全部调用方复查完毕：React、旧版页面和集成测试均传字符串；历史 curl 示例
+  也改为带引号的字符串。大 ID 精度测试保留。
+
 ## F3–F6 与 F1 遗留项（2026-10-10，第二次修正轮）
 
 对照方案 §8，本轮补齐了 **F1 实际空缺的两项**，并完成 **F3 / F4 / F5**，F6 见文末。

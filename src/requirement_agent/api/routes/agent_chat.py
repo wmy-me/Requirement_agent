@@ -669,7 +669,9 @@ async def _stream_library_assistant(
         # Budget exhaustion is a completed, explicitly incomplete response; it is
         # not a failed query and must remain replayable like any other final answer.
         if result.status in {"paused", "cancelled"}:
-            yield _tracked_sse("done", {"run_id": run_id, "status": result.status}, node="assistant")
+            # pause/cancel 已由控制端落库；终态 SSE 是传输通知，不能再按
+            # status='running' 追加事件，否则会把正确终态误判为失权。
+            yield _sse("done", {"run_id": run_id, "status": result.status})
             return
         final_status = "failed" if result.status == "failed" else "completed"
         checkpoint = {"version": 2, "intent": intent, "tool_calls": result.tool_calls, "sources": result.sources(), "execution_position": "done",
@@ -697,7 +699,7 @@ async def _stream_library_assistant(
             finished = execution.fail(run_id, token, RuntimeError(result.incomplete_reason or result.content), current_node="assistant")
         if not finished:
             # A concurrent pause/cancel wins. Do not expose a stale completion.
-            yield _tracked_sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"}, node="assistant")
+            yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
             return
         yield _sse("artifacts", {"artifacts": artifacts})
         yield _sse("narrative", {"start": True})
@@ -705,7 +707,9 @@ async def _stream_library_assistant(
             yield _sse("narrative", {"t": result.content[index:index + 10]})
         if final_status == "failed":
             yield _tracked_sse("error", {"message": result.content}, node="assistant")
-        yield _tracked_sse("done", {"run_id": run_id, "status": final_status}, node="assistant")
+        # complete_chat_message / fail 已在同一 token 事务内写最终事件；这里不能
+        # 再通过 running 谓词追加 done，否则正常完成会被错误当成失权。
+        yield _sse("done", {"run_id": run_id, "status": final_status})
     except asyncio.CancelledError:
         # 连接协程被 ASGI 取消（例如客户端断连）不等同于审核人调用 cancel。
         # 不吞掉取消异常，也不伪造一个 cancelled SSE；后者只能由 run 控制接口写入。
@@ -715,8 +719,8 @@ async def _stream_library_assistant(
         # running。先以 token 栅栏持久化失败，再向仍连接的客户端给明确终态。
         finished = execution.fail(run_id, token, exc, current_node="assistant")
         if finished:
-            yield _tracked_sse("error", {"message": f"执行失败：{exc}"}, node="assistant")
-            yield _tracked_sse("done", {"run_id": run_id, "status": "failed"}, node="assistant")
+            yield _sse("error", {"message": f"执行失败：{exc}"})
+            yield _sse("done", {"run_id": run_id, "status": "failed"})
         else:
             yield _sse("done", {"run_id": run_id, "status": _stop_status() or "cancelled"})
     finally:
@@ -1173,7 +1177,8 @@ async def _stream_chat_pipeline(
             yield _sse("artifacts", {"artifacts": pipeline})
             yield _sse("narrative", {"start": True})
             for i in range(0, len(content), 10): yield _sse("narrative", {"t": content[i:i + 10]})
-            yield tracked("done", {"run_id": run_id, "status": "waiting_clarification"}, node="clarify")
+            # 原子收尾已经写入 run_completed；不要在终态后按 running 追加事件。
+            yield _sse("done", {"run_id": run_id, "status": "waiting_clarification"})
             return
         if state.get("answer"):
             content = ""
@@ -1194,7 +1199,8 @@ async def _stream_chat_pipeline(
         if assistant is None:
             raise RunStopped(str((chat_repo.get_run(run_id) or {}).get("status") or "cancelled"))
         history.append({"role": "assistant", "content": content, "artifacts": pipeline})
-        yield tracked("done", {"run_id": run_id, "status": "completed"}, node="narrating")
+        # final event 与 assistant message 在 complete_chat_message 同一事务完成。
+        yield _sse("done", {"run_id": run_id, "status": "completed"})
     except RunStopped as stopped:
         yield _sse("done", {"run_id": run_id, "status": stopped.status})
     except asyncio.CancelledError:

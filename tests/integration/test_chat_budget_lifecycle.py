@@ -118,6 +118,11 @@ def test_assistant_react_loop_runs_under_the_run_deadline(monkeypatch, conversat
     assert seen and seen[0] is not None, "ReAct 循环没有绑定 run deadline，模型调用拿不到剩余预算"
     assert 0 < seen[0] <= settings.agent_assistant_budget_seconds
     assert '"status": "completed"' in "\n".join(frames)
+    run = chat_repo.get_run_by_client(conversation, "deadline-bound")
+    assert run is not None
+    events = AgentRunRepository().list_events(str(run["run_id"]))
+    assert [event["event_type"] for event in events].count("run_completed") == 1
+    assert '"status": "completed"' in frames[-1], "终态事件落库后 SSE 仍须明确 completed"
 
 
 def test_pause_landing_inside_a_node_keeps_the_run_paused(monkeypatch, conversation) -> None:
@@ -273,5 +278,6 @@ def test_clarification_is_persisted_with_a_claimed_token(monkeypatch, conversati
     assert "请补充验收标准" in pending["checkpoint"]["state"]["clarification_question"]
     assert agent_chat.unpack_checkpoint(dict(run["checkpoint"]))[0] is not None
     kinds = [event["event_type"] for event in AgentRunRepository().list_events(str(pending["run_id"]))]
-    assert kinds[-1] == "run_completed"
+    assert kinds[-1] == "run_completed" and kinds.count("run_completed") == 1
     assert "waiting_clarification" in "\n".join(frames)
+    assert '"status": "waiting_clarification"' in frames[-1]

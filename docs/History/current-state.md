@@ -377,7 +377,7 @@ curl "localhost:8888/api/v1/reviews/<source_id>/merge-preview?target_requirement
 #    merge_mode=replace 会列出删除清单并给出 warnings
 # 2) 带目标合并提交
 curl -X POST localhost:8888/api/v1/reviews/submit -H 'Content-Type: application/json' \
-  -d '{"source_id":<source_id>,"decision":"approved","target_requirement_key":"REQ-000015","merge_mode":"union"}'
+  -d '{"source_id":"<source_id>","decision":"approved","target_requirement_key":"REQ-000015","merge_mode":"union"}'
 # 3) 验库：目标 REQ 版本 +1、功能只增不减、目标**没有被改名**
 SELECT m.current_version, m.requirement_name,
        (SELECT count(*) FROM requirement_feature f WHERE f.requirement_id=m.id AND f.status='active')

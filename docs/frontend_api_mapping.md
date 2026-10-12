@@ -33,8 +33,9 @@
 
 1. **雪花 ID 一律字符串**。`Id = string` 贯穿契约与 URL；`/api/v1/documents/{id}` 是例外 ——
    路径参数是 **int**，前端保持字符串再 `encodeURIComponent`。
-2. **`done` 事件经常不带 `status`**（成功路径只发 `{run_id}`）。用「是否见过 `error` 帧」
-   区分「成功但无 status」与「失败但无 status」。
+2. **新执行流的 `done` 一律带 `status`**（`completed` / `failed` / `incomplete` /
+   `paused` / `cancelled` / `waiting_clarification`）；前端仍以「是否见过 `error` 帧」兜底
+   兼容历史 run 或代理截断，不能把缺 status 当作新的正常协议。
 3. **`artifacts` 是自由 dict，形状随路径变**。按存在的键判别：含 `extracted|candidates|analysis|risk`
    → 分析管线；含 `sources|tool_calls|incomplete_reason` → 助手；`{intent,answer_mode}` → 闲聊。
    旧版 `static/app/js/pages/chat.js` 用 `Array.isArray` 判它，恒为假 —— 结构化结果从未渲染过。
@@ -45,6 +46,9 @@
 6. **任何 409 都不自动重试**。`merge-preview` 与 `submit` 的 409 含义不同（前者是「来源不在待审」，
    后者是乐观锁冲突「该需求已被他人修改」），都必须重新加载。对话的 409 是**对象** detail
    （带 `active_run`），与 pause/cancel 的字符串 detail 不同。
+7. **终态事件只能写一次**。`complete_chat_message` / `fail` 在持有 token 的同一事务内先写
+   最终事件和 run 状态；随后 SSE `done` 只是通知，不得再经 `status='running'` 追加接口写入，
+   否则正常完成会被误判为失权。
 
 ## 诚实记录的能力缺口（界面已如实说明，未伪装）
 
