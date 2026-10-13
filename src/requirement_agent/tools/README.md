@@ -9,7 +9,7 @@
 - `requirements/analysis/`：抽取、关系分析、风险评估。
 - `requirements/previews/`：合并影响预演。
 - `external/web.py`：Tavily MCP 的联网只读工具。
-- `agents/toolsets.py`：显式 Agent 工具集和唯一加载入口。
+- `agents/toolsets.py`：显式模块加载入口；Agent 工具集从工具的 `allowed_consumers` 自动派生。
 - `base.py`、`registry.py`、`invoker.py`：契约、注册和调用边界。
 
 目录只表达组织方式；真正的消费权限仍由工具类的 `allowed_consumers` 和 `invoker` 强制执行。

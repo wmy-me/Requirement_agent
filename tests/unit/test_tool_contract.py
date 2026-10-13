@@ -85,6 +85,13 @@ def test_tool_implementations_are_partitioned_by_owner() -> None:
     assert "web_search" in {cls.name for cls in for_consumer("assistant")}
 
 
+def test_agent_toolsets_are_derived_from_allowed_consumers() -> None:
+    from requirement_agent.tools.agents.toolsets import TOOLSETS
+
+    for consumer, tool_names in TOOLSETS.items():
+        assert set(tool_names) == {cls.name for cls in for_consumer(consumer)}
+
+
 def test_no_forbidden_names_registered() -> None:
     """裁决类 / 万能类名字一个都不能出现。"""
     assert not (set(names()) & FORBIDDEN_NAMES)

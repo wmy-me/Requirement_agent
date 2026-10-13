@@ -32,51 +32,16 @@ from requirement_agent.tools.requirements.versions import (
     get_requirement_versions,
 )  # noqa: F401
 
+from requirement_agent.tools.registry import TOOLS
 
-ASSISTANT_TOOLS: tuple[str, ...] = (
-    "compare_requirement_versions",
-    "get_requirement_detail",
-    "get_requirement_features",
-    "get_requirement_risks",
-    "get_requirement_versions",
-    "list_requirement_relations",
-    "list_requirement_sources",
-    "list_requirements",
-    "list_requirements_by_module",
-    "match_capabilities",
-    "preview_merge_impact",
-    "read_web_page",
-    "search_by_capability",
-    "search_by_constraint",
-    "search_features",
-    "search_requirements",
-    "trace_requirement_sources",
-    "web_search",
-)
 
-ANALYSIS_TOOLS: tuple[str, ...] = (
-    "analyze_requirement_relation",
-    "assess_requirement_risk",
-    "compare_requirement_versions",
-    "extract_requirement",
-    "get_requirement_detail",
-    "get_requirement_features",
-    "get_requirement_risks",
-    "get_requirement_versions",
-    "list_requirement_relations",
-    "list_requirement_sources",
-    "list_requirements",
-    "match_capabilities",
-    "preview_merge_impact",
-    "search_by_capability",
-    "search_by_constraint",
-    "search_features",
-    "search_requirements",
-    "trace_requirement_sources",
-)
+def _for_consumer(consumer: str) -> tuple[str, ...]:
+    """Derive an Agent toolset from the tool's single permission declaration."""
+    return tuple(sorted(name for name, cls in TOOLS.items() if consumer in cls.allowed_consumers))
 
+
+# The module imports above are explicit; the names below are deliberately not.
+# Adding a tool's ``allowed_consumers`` is enough to expose it here.
 TOOLSETS: dict[str, tuple[str, ...]] = {
-    "assistant": ASSISTANT_TOOLS,
-    "analysis": ANALYSIS_TOOLS,
+    consumer: _for_consumer(consumer) for consumer in ("assistant", "analysis")
 }
-

@@ -386,6 +386,7 @@
 - 修复 `a74cffe` 的提交完整性：恢复被删除但未进入提交的 21 个工具实现，提交为 `b8c4922`。
 - 工具按业务能力归档到 `requirements/queries`、`retrieval`、`versions`、`sources`、`analysis`、`previews`，联网工具归档到 `external/web.py`。
 - 新增 `agents/toolsets.py` 作为显式加载入口和 assistant/analysis 工具集清单；注册表不再递归导入辅助模块。
+- Agent 工具名不再在 toolset 中重复维护，改由各工具唯一的 `allowed_consumers` 声明自动派生；权限仍由 `invoker` 强制。
 - 重新生成 `docs/agent_tool_catalog.md`，工具名称、参数、结果、预算、审计和人工审核边界保持不变。
 
 实际验证：
