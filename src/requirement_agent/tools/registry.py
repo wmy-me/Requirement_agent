@@ -74,26 +74,8 @@ def _ensure_loaded() -> None:
     if _LOADED:
         return
     import importlib
-    from pathlib import Path
-
-    import requirement_agent.tools as package
-
-    # 工具按职责归档在 common/ 与 agents/ 下。递归扫描保持注册表是唯一事实源，
-    # 同时不再把根目录的兼容导出模块当成实现模块扫描。
-    roots = []
-    for name in ("requirement_agent.tools.common", "requirement_agent.tools.agents"):
-        roots.append((name, importlib.import_module(name)))
-    for prefix, root in roots:
-        # Leaf directories intentionally have no marker-only __init__.py. Walk
-        # source files directly instead of relying on pkgutil recursion, which
-        # stops at namespace-package leaves on some Python versions.
-        root_path = Path(next(iter(root.__path__)))
-        for path in sorted(root_path.rglob("*.py")):
-            if path.name == "__init__.py":
-                continue
-            relative = path.relative_to(root_path).with_suffix("")
-            module = ".".join((prefix, *relative.parts))
-            importlib.import_module(module)
+    # 工具实现只通过显式 manifest 加载，不递归导入包内辅助模块。
+    importlib.import_module("requirement_agent.tools.agents.toolsets")
     # Only mark complete after every module imported.  Otherwise an optional
     # adapter import failure would permanently hide its tools for this process.
     _LOADED = True

@@ -73,13 +73,13 @@ def test_tool_implementations_are_partitioned_by_owner() -> None:
     from pathlib import Path
 
     root = Path(__file__).parents[2] / "src" / "requirement_agent" / "tools"
-    assert (root / "common" / "requirement_library" / "search_requirements.py").exists()
-    assert (root / "common" / "requirement_library" / "preview_merge_impact.py").exists()
-    assert (root / "agents" / "requirement_analysis" / "analysis.py").exists()
-    assert (root / "agents" / "assistant" / "web.py").exists()
+    assert (root / "requirements" / "retrieval" / "search_requirements.py").exists()
+    assert (root / "requirements" / "previews" / "preview_merge_impact.py").exists()
+    assert (root / "requirements" / "analysis" / "analysis.py").exists()
+    assert (root / "external" / "web.py").exists()
 
-    from requirement_agent.tools.common.requirement_library.search_requirements import SearchRequirementsTool
-    from requirement_agent.tools.agents.requirement_analysis.analysis import ExtractRequirementTool
+    from requirement_agent.tools.requirements.retrieval.search_requirements import SearchRequirementsTool
+    from requirement_agent.tools.requirements.analysis.analysis import ExtractRequirementTool
 
     assert ExtractRequirementTool.allowed_consumers == ("analysis",)
     assert "web_search" in {cls.name for cls in for_consumer("assistant")}

@@ -10,7 +10,7 @@ from requirement_agent.config.mcp import TavilyMCPConfig
 from requirement_agent.infrastructure.mcp.client_manager import MCPClientManager
 from requirement_agent.infrastructure.mcp.tool_adapter import TavilyToolAdapter
 from requirement_agent.tools import ToolStatus
-from requirement_agent.tools.agents.assistant.web import ReadWebPageTool, WebSearchTool
+from requirement_agent.tools.external.web import ReadWebPageTool, WebSearchTool
 
 
 class FakeMCPTransport:
