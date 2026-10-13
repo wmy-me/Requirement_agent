@@ -379,3 +379,16 @@
 - 澄清补充走的是**新 user 消息 + 新 run**，因此仍会获得一份新预算；这是有意保留的（新回合新预算），未按父 run 剩余预算扣减。
 - Worker 发布失败（非失权，例如发布事务自身报错）时 run 会停在 `running` 等租约过期，尚未在该分支主动写 `failed`；由上层 outbox 任务收尾。
 - 旧四阶段兼容管线本身仍是 ChatRepository 无 token 写入（只服务历史断点），未逐段 token 化；SSE 仍由连接协程发送。
+
+## 24. 工具实现恢复与业务能力归档
+
+已完成：
+- 修复 `a74cffe` 的提交完整性：恢复被删除但未进入提交的 21 个工具实现，提交为 `b8c4922`。
+- 工具按业务能力归档到 `requirements/queries`、`retrieval`、`versions`、`sources`、`analysis`、`previews`，联网工具归档到 `external/web.py`。
+- 新增 `agents/toolsets.py` 作为显式加载入口和 assistant/analysis 工具集清单；注册表不再递归导入辅助模块。
+- 重新生成 `docs/agent_tool_catalog.md`，工具名称、参数、结果、预算、审计和人工审核边界保持不变。
+
+实际验证：
+- 工作区定向工具契约、工具执行、分析接线、助手和 Tavily 离线测试：`85 passed`。
+- 从干净 worktree `b8c4922` 构建并安装 wheel 后，注册表发现全部 `21` 个工具；同一组离线测试：`85 passed`。
+- 干净 worktree 的数据库集成测试未通过，原因是测试环境 PostgreSQL 连接已失效（`psycopg OperationalError: connection is bad`），另有既有 `tool_call_record` 断言失败；本次目录重组未改变业务工具协议。
