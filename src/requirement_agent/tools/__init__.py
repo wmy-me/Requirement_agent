@@ -7,6 +7,8 @@ L1 Repository           数据访问（本包**不直接碰**）
 L2 Application Service  编排、事务、正式写入
    └ requirement_query.py  ← 只读查询内核（多数工具封装它）
 L3 tools/               本包：薄封装 + 入参校验 + 三态结果 + 超时 + 审计
+   common/             多 Agent 共用的只读工具
+   agents/             按 Agent 所有者归档的专属工具
 L4 模型 Adapter         ⬜ 未建（需要时才做）
 ```
 
@@ -26,7 +28,8 @@ L4 模型 Adapter         ⬜ 未建（需要时才做）
 拉进来 —— 而 `workflows` 此时正处在**半初始化**状态，循环导入当场炸
 （实测踩到：13 个测试文件收集失败）。
 
-所以注册改成**按需加载**（`registry._ensure_loaded`）：第一次问「有哪些工具」时才 import。
+所以注册改成**按需加载**（`registry._ensure_loaded`）：第一次问「有哪些工具」时才递归扫描
+`common/` 与 `agents/`；工具实现不放在根目录，避免重复入口。
 本文件只导出契约与注册表。
 """
 

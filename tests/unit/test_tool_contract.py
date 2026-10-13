@@ -68,6 +68,23 @@ def test_registry_matches_expected_roster() -> None:
     )
 
 
+def test_tool_implementations_are_partitioned_by_owner() -> None:
+    """实现归档不能悄悄退回 tools 根目录。"""
+    from pathlib import Path
+
+    root = Path(__file__).parents[2] / "src" / "requirement_agent" / "tools"
+    assert (root / "common" / "requirement_library" / "search_requirements.py").exists()
+    assert (root / "common" / "requirement_library" / "preview_merge_impact.py").exists()
+    assert (root / "agents" / "requirement_analysis" / "analysis.py").exists()
+    assert (root / "agents" / "assistant" / "web.py").exists()
+
+    from requirement_agent.tools.common.requirement_library.search_requirements import SearchRequirementsTool
+    from requirement_agent.tools.agents.requirement_analysis.analysis import ExtractRequirementTool
+
+    assert ExtractRequirementTool.allowed_consumers == ("analysis",)
+    assert "web_search" in {cls.name for cls in for_consumer("assistant")}
+
+
 def test_no_forbidden_names_registered() -> None:
     """裁决类 / 万能类名字一个都不能出现。"""
     assert not (set(names()) & FORBIDDEN_NAMES)

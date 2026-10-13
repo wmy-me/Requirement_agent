@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from requirement_agent.tools.list_requirements_by_module import ListRequirementsByModuleTool
+from requirement_agent.tools.common.requirement_library.list_requirements_by_module import ListRequirementsByModuleTool
 
 
 class _Query:
